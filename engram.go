@@ -33,6 +33,17 @@ const (
 	Procedural MemoryType = "procedural"
 )
 
+// Valid reports whether t is one of the known memory types. The remember handler uses
+// it to reject unknown types from untrusted input.
+func (t MemoryType) Valid() bool {
+	switch t {
+	case Episodic, Semantic, Procedural:
+		return true
+	default:
+		return false
+	}
+}
+
 // MemoryID is the unique identifier of a stored memory. The named type stops call
 // sites from mixing it up with content, a namespace, or an entity id.
 type MemoryID string
@@ -63,6 +74,14 @@ type Memory struct {
 	LastAccessed time.Time
 	Source       string
 	Superseded   bool
+}
+
+// RecallResult is a memory returned by a recall, paired with its similarity Score
+// (higher is more relevant). The MCP layer projects the response provenance from the
+// embedded Memory's own fields.
+type RecallResult struct {
+	Memory
+	Score float64
 }
 
 // Entity is a cross-namespace bridge node reached from memories via MENTIONS. It is
