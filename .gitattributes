@@ -1,2 +1,22 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Normalize all text to LF in the repository AND the working tree. Go tooling,
+# shell scripts, and the Linux CI runners all expect LF; eol=lf stops CRLF from
+# creeping in on Windows checkouts.
+* text=auto eol=lf
+
+# Explicit source/config — always LF text.
+*.go   text eol=lf
+*.mod  text eol=lf
+*.sum  text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.sh   text eol=lf
+
+# Binaries — never line-end-convert these.
+*.png  binary
+*.jpg  binary
+*.gif  binary
+*.gguf binary
+*.onnx binary

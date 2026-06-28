@@ -1,0 +1,17 @@
+# gitleaks configuration for Engram.
+# Extends the bundled default ruleset; add narrowly-scoped allowlist entries here
+# only for verified false positives. gitleaks runs in two places: pre-commit (staged
+# content, via lefthook) and CI (full history, via the gitleaks GitHub Action).
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Engram allowlist — verified false positives only"
+paths = [
+  '''(^|/)go\.sum$''',
+  '''(^|/)\.env\.example$''',
+]
+# Note: docs/ is intentionally NOT allowlisted — secrets pasted into design docs must
+# still be caught. Add a narrow regexes entry below only for a confirmed false positive.
+# regexes = []

@@ -1,0 +1,2 @@
+# Placeholder so git tracks internal/. Holds packages that must not be imported by
+# consumers of the module. Remove once real internal packages land.

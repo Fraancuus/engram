@@ -1,0 +1,47 @@
+# golangci-lint v2 configuration — https://golangci-lint.run
+#
+# The deterministic half of "gates vs. agents": formatting, unused vars, unhandled
+# errors, and — via depguard — the architecture dependency rule are enforced here as
+# build failures. The four subagents in .claude/agents/ own the judgment half; they
+# do NOT re-flag anything this file already catches.
+version: "2"
+
+linters:
+  # The default "standard" set already enables errcheck, govet, ineffassign,
+  # staticcheck, and unused. We add the security + boundary + style linters on top.
+  enable:
+    - depguard # architecture boundary: the dependency rule as a build failure
+    - gosec # SAST: Go security issues
+    - revive # configurable idiomatic-Go checks
+    - gocritic # opinionated correctness/style/perf diagnostics
+    - misspell # commonly misspelled English in comments and strings
+  settings:
+    depguard:
+      rules:
+        domain:
+          # The domain core (root `engram` package) must not import infrastructure
+          # adapters. Ports live in the domain; neo4j/inference/mcp implement them.
+          # This is "architecture as lint" — a violation fails the build.
+          # Match both bare (relative) and prefixed (absolute) path forms so the
+          # rule applies regardless of how golangci-lint reports the file path.
+          files:
+            - "engram.go"
+            - "memory.go"
+            - "decay.go"
+            - "**/engram.go"
+            - "**/memory.go"
+            - "**/decay.go"
+          deny:
+            - pkg: "github.com/Fraancuus/engram/neo4j"
+              desc: "domain must not import infrastructure (dependency rule)"
+            - pkg: "github.com/Fraancuus/engram/inference"
+              desc: "domain must not import infrastructure (dependency rule)"
+            - pkg: "github.com/Fraancuus/engram/mcp"
+              desc: "domain must not import adapters (dependency rule)"
+
+# In v2 the formatters are configured separately from linters. `golangci-lint fmt`
+# applies them; `golangci-lint run` reports any file that still needs formatting.
+formatters:
+  enable:
+    - gofmt
+    - goimports
