@@ -4,7 +4,7 @@
 > service over a graph + vector store, with **type-aware forgetting**, namespaced
 > "universes", and a rigorous eval proving the forgetting actually helps.
 
-**Status:** v1 in progress — **M0 skeleton landed** (embed a string end-to-end over Neo4j + TEI). Next: M1 core remember/recall.
+**Status:** v1 in progress — **M1 core loop landed** (remember + recall over MCP: vector recall, dedup, entities written). Next: M2 graph + entity bridges.
 **Module:** `github.com/Fraancuus/engram` · **Go:** 1.26
 
 Most "agent memory" projects are a vector store with `save()` and `search()`. They
@@ -82,22 +82,27 @@ Ensure your Go bin dir (`go env GOPATH`/bin) is on `PATH` so the git hook resolv
 the tools. See [CONTRIBUTING.md](CONTRIBUTING.md) for the gates-vs-agents workflow and
 [docs/engram-go-rules.md](docs/engram-go-rules.md) for Go conventions.
 
-## Run the M0 skeleton
+## Run Engram
 
-M0 proves the wiring end-to-end: embed a string via the TEI sidecar, persist it as a
-`:Memory` node in Neo4j, and read it back.
+Bring up the stack, apply the schema, and serve the MCP tools over stdio:
 
 ```bash
 docker compose up -d --wait                                        # Neo4j + TEI (first run pulls images + model)
 docker compose exec -T neo4j cypher-shell < schema/001_init.cypher # apply schema (idempotent)
-go run ./cmd/engramd                                               # → "engramd: M0 OK — stored m0-smoke, 384-dim embedding round-tripped"
+go run ./cmd/engramd                                               # serves the MCP tools over stdio
 ```
+
+`engramd` speaks the Model Context Protocol over stdio, so point any MCP client at the
+command (`go run ./cmd/engramd`, or a built binary). It exposes two tools:
+
+- **`remember`** — `{content, type, namespace, importance?, source?, entities?}` → `{memory_id, deduped}`. Embeds the content, deduplicates within the namespace (reinforcing a near-identical memory instead of inserting), and writes `:Entity` nodes + `[:MENTIONS]` edges.
+- **`recall`** — `{query, namespaces?, k?}` → ranked `[{id, content, score, type, namespace, provenance}]` via vector search over the requested namespace(s).
 
 Service-backed tests are tagged `integration` and excluded from the default unit run:
 
 ```bash
 go test ./...                      # unit tests — no services needed
-go test -tags integration ./...    # round-trip + end-to-end — needs the stack up
+go test -tags integration ./...    # store + end-to-end — needs the stack up
 ```
 
 Config (env vars, with defaults): `NEO4J_URI` (`neo4j://localhost:7687`), `NEO4J_USER`
@@ -105,9 +110,7 @@ Config (env vars, with defaults): `NEO4J_URI` (`neo4j://localhost:7687`), `NEO4J
 (`http://localhost:8080`). The local stack runs Neo4j with `NEO4J_AUTH=none` bound to
 loopback — auth is out of v1 scope.
 
-> The MCP server registers **zero tools** at M0 (handlers land at M1), so `engramd` does
-> not serve over stdio yet — expected, not a broken server. A compose-backed CI job to
-> run the `integration` tests is a TODO for M1.
+> A compose-backed CI job to run the `integration` tests is still a TODO.
 
 ## Milestones
 
