@@ -111,6 +111,66 @@ func (s *Store) Get(ctx context.Context, id engram.MemoryID) (engram.Memory, err
 	return m, nil
 }
 
+// Search returns up to k memories most similar to vec, ranked by cosine similarity
+// (descending). If namespaces is non-empty, results are restricted to those universes.
+// It over-fetches from the vector index before applying the namespace filter so the
+// filter does not starve the result set.
+func (s *Store) Search(ctx context.Context, namespaces []engram.Namespace, vec engram.Vector, k int) ([]engram.RecallResult, error) {
+	if k < 1 {
+		k = 1
+	}
+	fetch := k * 5
+	if fetch < 50 {
+		fetch = 50
+	}
+	ns := make([]string, len(namespaces))
+	for i, n := range namespaces {
+		ns[i] = string(n)
+	}
+	const q = `
+CALL db.index.vector.queryNodes('memory_embedding', $fetch, $vec)
+YIELD node, score
+WHERE size($namespaces) = 0 OR node.namespace IN $namespaces
+RETURN node, score
+ORDER BY score DESC
+LIMIT $k`
+	params := map[string]any{
+		"fetch":      fetch,
+		"vec":        toFloat64(vec),
+		"namespaces": ns,
+		"k":          k,
+	}
+	res, err := neo4jdriver.ExecuteQuery(ctx, s.driver, q, params, neo4jdriver.EagerResultTransformer)
+	if err != nil {
+		return nil, fmt.Errorf("search: %w", err)
+	}
+	out := make([]engram.RecallResult, 0, len(res.Records))
+	for _, rec := range res.Records {
+		raw, ok := rec.Get("node")
+		if !ok {
+			return nil, fmt.Errorf("search: record missing node")
+		}
+		node, ok := raw.(neo4jdriver.Node)
+		if !ok {
+			return nil, fmt.Errorf("search: node is %T, want node", raw)
+		}
+		m, err := nodeToMemory(node)
+		if err != nil {
+			return nil, fmt.Errorf("search: %w", err)
+		}
+		scoreVal, ok := rec.Get("score")
+		if !ok {
+			return nil, fmt.Errorf("search: record missing score")
+		}
+		score, ok := scoreVal.(float64)
+		if !ok {
+			return nil, fmt.Errorf("search: score is %T, want float64", scoreVal)
+		}
+		out = append(out, engram.RecallResult{Memory: m, Score: score})
+	}
+	return out, nil
+}
+
 // toFloat64 widens an embedding for storage; Neo4j list/vector properties are float64.
 func toFloat64(v engram.Vector) []float64 {
 	out := make([]float64, len(v))
