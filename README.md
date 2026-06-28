@@ -4,7 +4,7 @@
 > service over a graph + vector store, with **type-aware forgetting**, namespaced
 > "universes", and a rigorous eval proving the forgetting actually helps.
 
-**Status:** v1 in progress — repo scaffolding stage (M0 not yet landed).
+**Status:** v1 in progress — **M0 skeleton landed** (embed a string end-to-end over Neo4j + TEI). Next: M1 core remember/recall.
 **Module:** `github.com/Fraancuus/engram` · **Go:** 1.26
 
 Most "agent memory" projects are a vector store with `save()` and `search()`. They
@@ -81,6 +81,33 @@ golangci-lint run ./...
 Ensure your Go bin dir (`go env GOPATH`/bin) is on `PATH` so the git hook resolves
 the tools. See [CONTRIBUTING.md](CONTRIBUTING.md) for the gates-vs-agents workflow and
 [docs/engram-go-rules.md](docs/engram-go-rules.md) for Go conventions.
+
+## Run the M0 skeleton
+
+M0 proves the wiring end-to-end: embed a string via the TEI sidecar, persist it as a
+`:Memory` node in Neo4j, and read it back.
+
+```bash
+docker compose up -d --wait                                        # Neo4j + TEI (first run pulls images + model)
+docker compose exec -T neo4j cypher-shell < schema/001_init.cypher # apply schema (idempotent)
+go run ./cmd/engramd                                               # → "engramd: M0 OK — stored m0-smoke, 384-dim embedding round-tripped"
+```
+
+Service-backed tests are tagged `integration` and excluded from the default unit run:
+
+```bash
+go test ./...                      # unit tests — no services needed
+go test -tags integration ./...    # round-trip + end-to-end — needs the stack up
+```
+
+Config (env vars, with defaults): `NEO4J_URI` (`neo4j://localhost:7687`), `NEO4J_USER`
+(`neo4j`), `NEO4J_PASSWORD` (empty → the no-auth dev stack), `TEI_URL`
+(`http://localhost:8080`). The local stack runs Neo4j with `NEO4J_AUTH=none` bound to
+loopback — auth is out of v1 scope.
+
+> The MCP server registers **zero tools** at M0 (handlers land at M1), so `engramd` does
+> not serve over stdio yet — expected, not a broken server. A compose-backed CI job to
+> run the `integration` tests is a TODO for M1.
 
 ## Milestones
 

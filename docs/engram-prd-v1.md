@@ -53,7 +53,7 @@ Engram's thesis: *forgetting is a feature* — but **what** and **how fast** you
 | Store | **Neo4j** (native vector index + graph) | Embeddings + relationships in one store. |
 | Neo4j driver | **neo4j-go-driver/v5** (official) | First-class and maintained — *removes* the driver-maturity risk Rust had. |
 | Inference | **Sidecar** (HF Text Embeddings Inference *or* llama.cpp server) | Serves embeddings + cross-encoder rerank over HTTP/gRPC, CPU. See DR-3. |
-| MCP | official **`modelcontextprotocol/go-sdk`** (or `mark3labs/mcp-go`) | stdio transport for v1. |
+| MCP | official **`github.com/modelcontextprotocol/go-sdk`** v1.x (Anthropic, with Google) — DR-4 | Typed `mcpsdk.AddTool` infers + validates each tool's JSON Schema from its Go input struct. stdio transport for v1. Imported under the `mcpsdk` alias — the SDK's own package is also named `mcp`. |
 | Eval | Go `testing` + a small harness binary | Runs in CI. |
 
 ### Idiomatic-Go guardrail
@@ -66,6 +66,8 @@ Wire dependencies by hand in `main()` (no DI container), define interfaces where
 **DR-2 — CPU-only inference in v1.** Small embedding + reranker models are single-digit-to-low-tens of ms on CPU. iGPU (ROCm) / NPU is deferred to keep v1 shippable and turn the hard part into content, not a blocker.
 
 **DR-3 — Sidecar inference (the Go trade).** Go has no in-process equivalent of Rust's fastembed-rs. So embeddings/reranking run as a **local sidecar process** (TEI or llama.cpp's `/embedding` + rerank endpoint), and the Go service calls it behind `Embedder` / `Reranker` interfaces. Alternative: `onnxruntime_go` (CGo) for no separate process. Sidecar is the ship-fast default; the interface makes it swappable. Accepted cost: one more process to run locally.
+
+**DR-4 — MCP framework: official `modelcontextprotocol/go-sdk`.** We commit to the official Go SDK (maintained by Anthropic in collaboration with Google) over `mark3labs/mcp-go`. It is GA: v1.0.0 froze the public API with a no-breaking-changes guarantee, and v1.x is current (v1.6.1 at time of writing). Its generic `mcpsdk.AddTool[In, Out]` infers each tool's JSON Schema from typed Go structs (via `google/jsonschema-go`) and validates incoming arguments against it — which lines up cleanly with our *MCP inputs are untrusted* invariant: the inferred schema is the **type** gate, while our handlers remain the **policy** gate (`k` within limits, `namespace` against the known set, well-formed ids). The MCP surface is a thin adapter sitting behind our own handlers, so the framework stays cheap to swap if it ever stops fitting. **Gotcha:** the SDK's package is named `mcp`, colliding with our `mcp/` package — import it aliased as `mcpsdk` (the same move the neo4j driver needs).
 
 ---
 
@@ -200,6 +202,8 @@ Counts by type × namespace, retrievability histogram, store size, sweep stats (
 | `memory_stats` | `namespace?` | counts by type×namespace, retrievability histogram, sweep stats |
 
 Transport: stdio (v1). A real agent using Engram end-to-end over MCP is the v1 acceptance demo.
+
+Tools are registered with the official SDK's generic `mcpsdk.AddTool`, which derives each tool's input/output JSON Schema from its Go struct (`jsonschema` struct tags carry the field descriptions) and validates incoming arguments against it. That schema check is the **type** gate; the handler still enforces **policy** bounds (`k` limits, `namespace` whitelist, id shape) and returns agent-legible errors that never leak internals. Framework rationale and the package-name alias gotcha: DR-4.
 
 ---
 

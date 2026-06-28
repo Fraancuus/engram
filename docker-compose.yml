@@ -1,0 +1,54 @@
+# Engram local dev stack (M0): Neo4j (graph + native vector index) and the HF Text
+# Embeddings Inference (TEI) embedding sidecar. Single-user, local-only.
+#
+# Auth is out of v1 scope (PRD §2), so Neo4j runs with NEO4J_AUTH=none and both
+# services bind to loopback only — no credentials live in this repo. For a non-local
+# deployment, set NEO4J_AUTH and pass a password to the store (it uses BasicAuth when
+# one is provided, NoAuth otherwise).
+#
+# Usage:
+#   docker compose up -d --wait neo4j     # Neo4j only — enough for store round-trip tests
+#   docker compose up -d --wait           # full stack — for the end-to-end embed flow
+#   docker compose exec -T neo4j cypher-shell < schema/001_init.cypher   # apply schema
+
+services:
+  neo4j:
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: none
+    ports:
+      # Bolt is the only port the Go driver needs. The HTTP/browser port (7474) is left
+      # unpublished by default: with NEO4J_AUTH=none a malicious web page could reach it
+      # via DNS-rebinding to localhost and read/write the whole graph. Uncomment it only
+      # for ad-hoc graph browsing.
+      # - "127.0.0.1:7474:7474" # HTTP / browser (debug only)
+      - "127.0.0.1:7687:7687" # Bolt
+    volumes:
+      - neo4j-data:/data
+    healthcheck:
+      # cypher-shell ships in the image; with auth disabled it needs no credentials.
+      test: ["CMD-SHELL", "cypher-shell 'RETURN 1' || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 18
+      start_period: 30s
+
+  tei:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.6
+    command: ["--model-id", "BAAI/bge-small-en-v1.5"]
+    ports:
+      - "127.0.0.1:8080:80" # TEI HTTP (container listens on :80)
+    volumes:
+      - tei-cache:/data # cache the downloaded model across restarts
+    healthcheck:
+      # TEI exposes /health; this command is validated when the sidecar is first
+      # brought up at Step 7.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:80/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+volumes:
+  neo4j-data:
+  tei-cache:
