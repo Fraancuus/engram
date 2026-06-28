@@ -171,6 +171,45 @@ LIMIT $k`
 	return out, nil
 }
 
+// Reinforce records an access: it increments access_count and sets last_accessed to now.
+// It returns engram.ErrNotFound if no memory has the given id.
+func (s *Store) Reinforce(ctx context.Context, id engram.MemoryID, now time.Time) error {
+	const q = `
+MATCH (m:Memory {id: $id})
+SET m.access_count = m.access_count + 1, m.last_accessed = $now
+RETURN count(m) AS c`
+	res, err := neo4jdriver.ExecuteQuery(ctx, s.driver, q,
+		map[string]any{"id": string(id), "now": now.UTC()}, neo4jdriver.EagerResultTransformer)
+	if err != nil {
+		return fmt.Errorf("reinforce %q: %w", id, err)
+	}
+	c, _ := res.Records[0].Get("c")
+	if n, _ := c.(int64); n == 0 {
+		return fmt.Errorf("reinforce %q: %w", id, engram.ErrNotFound)
+	}
+	return nil
+}
+
+// LinkEntities attaches the memory to the named entities, creating :Entity nodes and
+// [:MENTIONS] edges as needed. It is idempotent (MERGE) and a no-op for an empty list.
+// The entity id is the name itself at M1 (no normalization/aliasing yet).
+func (s *Store) LinkEntities(ctx context.Context, id engram.MemoryID, names []string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	const q = `
+MATCH (m:Memory {id: $id})
+UNWIND $names AS name
+MERGE (e:Entity {id: name})
+SET e.name = name
+MERGE (m)-[:MENTIONS]->(e)`
+	if _, err := neo4jdriver.ExecuteQuery(ctx, s.driver, q,
+		map[string]any{"id": string(id), "names": names}, neo4jdriver.EagerResultTransformer); err != nil {
+		return fmt.Errorf("link entities %q: %w", id, err)
+	}
+	return nil
+}
+
 // toFloat64 widens an embedding for storage; Neo4j list/vector properties are float64.
 func toFloat64(v engram.Vector) []float64 {
 	out := make([]float64, len(v))
