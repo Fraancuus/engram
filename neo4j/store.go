@@ -183,6 +183,9 @@ RETURN count(m) AS c`
 	if err != nil {
 		return fmt.Errorf("reinforce %q: %w", id, err)
 	}
+	if len(res.Records) == 0 {
+		return fmt.Errorf("reinforce %q: %w", id, engram.ErrNotFound)
+	}
 	c, _ := res.Records[0].Get("c")
 	if n, _ := c.(int64); n == 0 {
 		return fmt.Errorf("reinforce %q: %w", id, engram.ErrNotFound)
@@ -202,10 +205,19 @@ MATCH (m:Memory {id: $id})
 UNWIND $names AS name
 MERGE (e:Entity {id: name})
 SET e.name = name
-MERGE (m)-[:MENTIONS]->(e)`
-	if _, err := neo4jdriver.ExecuteQuery(ctx, s.driver, q,
-		map[string]any{"id": string(id), "names": names}, neo4jdriver.EagerResultTransformer); err != nil {
+MERGE (m)-[:MENTIONS]->(e)
+RETURN count(m) AS c`
+	res, err := neo4jdriver.ExecuteQuery(ctx, s.driver, q,
+		map[string]any{"id": string(id), "names": names}, neo4jdriver.EagerResultTransformer)
+	if err != nil {
 		return fmt.Errorf("link entities %q: %w", id, err)
+	}
+	if len(res.Records) == 0 {
+		return fmt.Errorf("link entities %q: %w", id, engram.ErrNotFound)
+	}
+	c, _ := res.Records[0].Get("c")
+	if n, _ := c.(int64); n == 0 {
+		return fmt.Errorf("link entities %q: %w", id, engram.ErrNotFound)
 	}
 	return nil
 }

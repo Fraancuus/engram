@@ -45,7 +45,14 @@ type recallOutput struct {
 // doRecall validates the query, embeds it, runs a namespace-filtered vector search, and
 // maps the results to the response DTO (provenance is projected from each memory's own
 // fields). Internal failures are logged and returned sanitized.
-func (h *handlers) doRecall(ctx context.Context, in recallInput) (recallOutput, error) {
+func (h *handlers) doRecall(ctx context.Context, in recallInput) (out recallOutput, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			h.log.Error("recall: recovered panic", "panic", r)
+			out, err = recallOutput{}, errors.New("recall: internal error")
+		}
+	}()
+
 	if in.Query == "" || len(in.Query) > maxContentBytes {
 		return recallOutput{}, fmt.Errorf("query must be 1..%d bytes", maxContentBytes)
 	}
@@ -81,7 +88,7 @@ func (h *handlers) doRecall(ctx context.Context, in recallInput) (recallOutput, 
 		return recallOutput{}, errors.New("recall: store unavailable")
 	}
 
-	out := recallOutput{Results: make([]recallResultDTO, len(results))}
+	out = recallOutput{Results: make([]recallResultDTO, len(results))}
 	for i, r := range results {
 		out.Results[i] = recallResultDTO{
 			ID:        string(r.ID),

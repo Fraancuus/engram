@@ -98,3 +98,11 @@ func TestStoreLinkEntities(t *testing.T) {
 		t.Errorf("MENTIONS edges after re-link = %d, want 2 (idempotent)", n)
 	}
 }
+
+func TestStoreLinkEntitiesNotFound(t *testing.T) {
+	s := testStore(t)
+	err := s.LinkEntities(context.Background(), uniqueID("missing-for-link"), []string{"X"})
+	if !errors.Is(err, engram.ErrNotFound) {
+		t.Fatalf("LinkEntities(missing): want engram.ErrNotFound, got %v", err)
+	}
+}

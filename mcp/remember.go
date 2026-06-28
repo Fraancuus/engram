@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
+	"strings"
 	"time"
 
 	"github.com/Fraancuus/engram"
@@ -60,7 +62,14 @@ type rememberOutput struct {
 // existing near-identical memory instead of inserting), and otherwise stores a new
 // memory with its entity links. Internal failures are logged and returned as a generic
 // error so nothing internal leaks to the caller.
-func (h *handlers) doRemember(ctx context.Context, in rememberInput) (rememberOutput, error) {
+func (h *handlers) doRemember(ctx context.Context, in rememberInput) (out rememberOutput, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			h.log.Error("remember: recovered panic", "panic", r)
+			out, err = rememberOutput{}, errors.New("remember: internal error")
+		}
+	}()
+
 	mt := engram.MemoryType(in.Type)
 	if !mt.Valid() {
 		return rememberOutput{}, fmt.Errorf("invalid type %q: want episodic, semantic, or procedural", in.Type)
@@ -68,14 +77,14 @@ func (h *handlers) doRemember(ctx context.Context, in rememberInput) (rememberOu
 	if in.Content == "" || len(in.Content) > maxContentBytes {
 		return rememberOutput{}, fmt.Errorf("content must be 1..%d bytes", maxContentBytes)
 	}
-	if in.Namespace == "" || len(in.Namespace) > maxNamespaceBytes {
-		return rememberOutput{}, fmt.Errorf("namespace must be 1..%d bytes", maxNamespaceBytes)
+	if strings.TrimSpace(in.Namespace) == "" || len(in.Namespace) > maxNamespaceBytes {
+		return rememberOutput{}, fmt.Errorf("namespace must be 1..%d bytes and not blank", maxNamespaceBytes)
 	}
 	importance := defaultImportance
 	if in.Importance != nil {
 		importance = *in.Importance
-		if importance < 0 || importance > 1 {
-			return rememberOutput{}, errors.New("importance must be between 0 and 1")
+		if math.IsNaN(importance) || math.IsInf(importance, 0) || importance < 0 || importance > 1 {
+			return rememberOutput{}, errors.New("importance must be a number between 0 and 1")
 		}
 	}
 	if len(in.Entities) > maxEntities {
@@ -104,6 +113,14 @@ func (h *handlers) doRemember(ctx context.Context, in rememberInput) (rememberOu
 		if err := h.store.Reinforce(ctx, hits[0].ID, h.clock.Now()); err != nil {
 			h.log.Error("remember: reinforce failed", "err", err)
 			return rememberOutput{}, errors.New("remember: store unavailable")
+		}
+		// Merge any supplied entities onto the existing memory so a retry after a prior
+		// LinkEntities failure (or genuinely new mentions) still records them.
+		if len(in.Entities) > 0 {
+			if err := h.store.LinkEntities(ctx, hits[0].ID, in.Entities); err != nil {
+				h.log.Error("remember: link entities on dedup failed", "err", err)
+				return rememberOutput{}, errors.New("remember: store unavailable")
+			}
 		}
 		return rememberOutput{MemoryID: string(hits[0].ID), Deduped: true}, nil
 	}
