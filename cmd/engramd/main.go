@@ -1,25 +1,27 @@
 // Command engramd is the Engram memory service. It wires the domain to its Neo4j and
-// inference adapters by hand (no DI container) in main.
-//
-// At M0 it performs a single end-to-end proof — embed a string, persist it as a
-// :Memory node, read it back — and exits. The MCP server registers zero tools until
-// M1, so it is not served over stdio yet.
+// inference adapters by hand (no DI container) in main and serves the MCP tools
+// (remember, recall) over stdio.
 package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/Fraancuus/engram"
 	"github.com/Fraancuus/engram/inference"
+	"github.com/Fraancuus/engram/mcp"
 	eneo4j "github.com/Fraancuus/engram/neo4j"
 )
 
-// systemClock is the production engram.Clock: the wall clock. It lives here at the
-// wiring layer, never inside decay logic, so the "no time.Now() in decay" rule holds.
+// systemClock is the production engram.Clock: the wall clock. It lives here at the wiring
+// layer, never inside decay logic, so the "no time.Now() in decay" rule holds.
 type systemClock struct{}
 
 func (systemClock) Now() time.Time { return time.Now() }
@@ -32,13 +34,11 @@ func main() {
 	}
 }
 
-// run wires the adapters by hand and performs the M0 end-to-end proof:
-// embed a string -> build a Memory -> Put -> Get.
+// run wires the adapters by hand and serves the MCP tools over stdio until the client
+// disconnects or the process is signalled.
 func run() error {
-	ctx := context.Background()
-	var clock engram.Clock = systemClock{}
-
-	var embedder engram.Embedder = inference.New(getenv("TEI_URL", "http://localhost:8080"))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	store, err := eneo4j.New(ctx,
 		getenv("NEO4J_URI", "neo4j://localhost:7687"),
@@ -48,35 +48,16 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("store init: %w", err)
 	}
-	defer func() { _ = store.Close(ctx) }()
+	defer func() { _ = store.Close(context.Background()) }()
 
-	const content = "engram m0 wiring check"
-	vec, err := embedder.Embed(ctx, content)
-	if err != nil {
-		return fmt.Errorf("embed: %w", err)
-	}
+	embedder := inference.New(getenv("TEI_URL", "http://localhost:8080"))
+	srv := mcp.NewServer(embedder, store, systemClock{})
 
-	now := clock.Now()
-	m := engram.Memory{
-		ID:           "m0-smoke",
-		Namespace:    "work/engineering",
-		Type:         engram.Semantic,
-		Content:      content,
-		Embedding:    vec,
-		Importance:   0.5,
-		CreatedAt:    now,
-		LastAccessed: now,
-		Source:       "engramd-m0",
+	// Logs go to stderr (slog default); stdout carries the MCP stdio protocol.
+	slog.Info("engramd serving MCP over stdio", "tools", "remember,recall")
+	if err := mcp.Serve(ctx, srv); err != nil && !errors.Is(err, context.Canceled) {
+		return err
 	}
-	if err := store.Put(ctx, m); err != nil {
-		return fmt.Errorf("put: %w", err)
-	}
-	got, err := store.Get(ctx, m.ID)
-	if err != nil {
-		return fmt.Errorf("get: %w", err)
-	}
-
-	log.Printf("engramd: M0 OK — stored %s, %d-dim embedding round-tripped", got.ID, len(got.Embedding))
 	return nil
 }
 
