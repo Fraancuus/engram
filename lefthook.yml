@@ -1,0 +1,27 @@
+# lefthook pre-commit gates — https://lefthook.dev
+#
+# Sequential by priority so the formatter re-stages files BEFORE the linter reads
+# them. `golangci-lint run` already runs govet/errcheck/staticcheck/depguard/gosec,
+# so we don't duplicate those as separate commands. The lint is whole-module (Go is
+# package-compiled: a change in one file can break another); golangci-lint caches
+# aggressively, so only the first run is slow.
+pre-commit:
+  commands:
+    format:
+      priority: 1
+      glob: "*.go"
+      run: golangci-lint fmt {staged_files} # gofmt + goimports via the v2 formatters
+      stage_fixed: true # re-stage files the formatter rewrote
+    lint:
+      priority: 2
+      run: golangci-lint run ./... # ALL files; cached after first run. Blocks on any failure.
+    secrets:
+      priority: 3
+      run: gitleaks git --pre-commit --staged --redact --verbose # anti-leak on staged content
+
+# Fallback if the full lint ever feels slow on commit: move `lint` to pre-push and
+# keep pre-commit to format + secrets only.
+# pre-push:
+#   commands:
+#     lint:
+#       run: golangci-lint run ./...

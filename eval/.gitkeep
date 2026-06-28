@@ -1,0 +1,4 @@
+# Placeholder so git tracks eval/. Holds eval datasets and scenarios (labelled
+# (query, relevant_memory_ids) data with simulated time + access patterns).
+# Anti-circularity rule: relevance is judged against held-out ground-truth labels,
+# never by the reranker scoring itself. Remove once real datasets land.

@@ -1,0 +1,47 @@
+# Binaries & build output
+/bin/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+# Built binaries that land at repo root. `/engramd` is anchored so it can't match the
+# cmd/engramd/ source dir. We deliberately do NOT ignore a bare `eval` — that would
+# also hide the eval/ dataset dir — so build binaries into bin/ (ignored above):
+#   go build -o bin/ ./...
+/engramd
+
+# Test & coverage output
+*.test
+*.out
+cover.out
+coverage.*
+
+# Go workspace / vendor (we don't vendor)
+go.work
+go.work.sum
+/vendor/
+
+# Local config & secrets — never commit
+.env
+.env.*
+!.env.example
+*.local
+
+# Inference sidecar / model artifacts (pulled locally, not committed)
+/models/
+*.gguf
+*.onnx
+
+# Local datastore volumes (docker-compose Neo4j)
+/data/
+/neo4j/data/
+/neo4j/logs/
+
+# Editor / OS noise
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
