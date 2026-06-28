@@ -76,7 +76,8 @@ golangci-lint run ./...
 ```
 
 CI runs the same, plus `govulncheck`, CodeQL, gitleaks (full history), and the eval
-regression gate (`go run ./cmd/eval --ci`). All are required status checks.
+job (`go run ./cmd/eval --ci`). The eval is a scaffold stub today (exits 0); its real
+precision@k regression gate lands at M5. Make these required status checks once stable.
 
 ## Commits & PRs
 

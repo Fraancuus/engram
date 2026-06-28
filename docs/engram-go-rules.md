@@ -1,6 +1,6 @@
 # Engram — Go Language Rules
 
-> **Loading:** keep this file at `docs/go-style.md` (or `.claude/rules/go.md` if you prefer your convention) and add `@docs/go-style.md` to `CLAUDE.md` so it loads every session. It also serves as the human contributor reference linked from `CONTRIBUTING.md`.
+> **Loading:** this file lives at `docs/engram-go-rules.md` and is imported via `@docs/engram-go-rules.md` in `CLAUDE.md`, so it loads every session. It also serves as the human contributor reference linked from `CONTRIBUTING.md`.
 >
 > **Scope of this doc:** the *judgment* conventions a linter can't fully decide — naming intent, interface placement, error design, concurrency discipline. The *mechanical* subset (formatting, unused vars, unhandled errors, import boundary) is enforced deterministically by `gofmt` + `golangci-lint` (errcheck, depguard, staticcheck, gosec) and is **not** repeated here. Gates do determinism; this doc does judgment.
 >

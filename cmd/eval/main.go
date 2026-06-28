@@ -1,7 +1,10 @@
 // Command eval runs the Engram retrieval eval: conditions A (baseline, no decay),
 // B (uniform decay), and C (type-aware decay), over a labelled dataset with
 // virtualized time, and reports precision@k / recall@k / nDCG plus type-stratified
-// recall. With -ci it fails the build when precision@k regresses beyond tolerance.
+// recall. With -ci it will fail the build when precision@k regresses beyond tolerance.
+//
+// Until M5 this is a scaffold stub: it parses flags, logs, and exits 0 — no dataset,
+// conditions, or metrics yet, so the wired CI gate does not enforce anything.
 package main
 
 import (

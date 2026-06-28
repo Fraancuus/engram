@@ -11,6 +11,7 @@ description = "Engram allowlist — verified false positives only"
 paths = [
   '''(^|/)go\.sum$''',
   '''(^|/)\.env\.example$''',
-  '''(^|/)docs/.*\.md$''',
 ]
-# regexes = []   # add a specific pattern here only after confirming it is not a real secret
+# Note: docs/ is intentionally NOT allowlisted — secrets pasted into design docs must
+# still be caught. Add a narrow regexes entry below only for a confirmed false positive.
+# regexes = []

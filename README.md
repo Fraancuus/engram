@@ -42,7 +42,7 @@ dependency rule is enforced as a build failure by depguard.
 | Store | Neo4j (native vector index + graph) |
 | Inference | Local sidecar (HF Text Embeddings Inference or llama.cpp), CPU |
 | MCP | stdio transport (v1) |
-| Eval | Go `testing` + a harness binary, gated in CI |
+| Eval | Go `testing` + a harness binary (CI job wired; the gate lands at M5) |
 
 ## The memory model
 
@@ -61,7 +61,8 @@ Three conditions over a labelled dataset with virtualized time: **A** baseline (
 decay), **B** uniform decay, **C** type-aware decay + supersession. Metrics:
 precision@k, recall@k, nDCG/MRR, latency, store size over time, and **type-stratified
 recall**. Relevance is judged against held-out ground-truth labels, never the reranker
-scoring itself. A regression fails CI.
+scoring itself. Once M5 lands, a precision@k regression fails CI — the job is wired
+today against a scaffold stub that exits 0.
 
 ## Developing
 

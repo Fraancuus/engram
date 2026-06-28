@@ -10,15 +10,17 @@ Full spec: `docs/engram-prd-v1.md`. Go conventions: `docs/engram-go-rules.md`
 (imported below). Repo/DevEx plan: `docs/engram-repo-setup-prd.md`.
 
 ## Repo map
-- `engram.go`, `memory.go`, `decay.go` — domain core: types (Memory, Entity) + ports
-  (MemoryStore, Embedder, Reranker, DecayModel, Clock). Imports NO infrastructure.
+- `engram.go` — domain core anchor; will hold types (Memory, Entity) + ports
+  (MemoryStore, Embedder, Reranker, DecayModel, Clock). `memory.go`/`decay.go` join it
+  in M0–M1. Imports NO infrastructure.
 - `neo4j/` — MemoryStore adapter (parameterized Cypher only).
 - `inference/` — Embedder/Reranker adapter (sidecar HTTP client).
 - `mcp/` — MCP adapter: remember · recall · forget · memory_stats (stdio).
 - `mock/` — fakes implementing the domain ports, for tests + the eval.
 - `internal/` — not importable by consumers.
 - `cmd/engramd/` — the service; wires deps by hand in `main()`.
-- `cmd/eval/` — the eval harness binary (the CI regression gate).
+- `cmd/eval/` — the eval harness binary. The CI job is wired now, but the real
+  precision@k regression gate lands at M5 (today it's a stub that exits 0).
 - `eval/` — labelled datasets + scenarios (anti-circularity: ground-truth labels,
   never the reranker judging itself).
 
