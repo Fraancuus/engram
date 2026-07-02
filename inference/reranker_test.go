@@ -110,6 +110,17 @@ func TestRerankerCountMismatch(t *testing.T) {
 	}
 }
 
+func TestRerankerRejectsDuplicateIndex(t *testing.T) {
+	t.Parallel()
+	// A malformed body repeating an index passes the count check but would overwrite one
+	// score slot and leave another at zero — silently mis-ranking recall.
+	srv := rerankStub(t, http.StatusOK, rerankBody(t, [][2]float64{{0, 0.9}, {0, 0.1}}))
+	_, err := inference.NewReranker(srv.URL).Rerank(context.Background(), rerankQuery, []string{"a", "b"})
+	if err == nil {
+		t.Fatal("want error on duplicate result index")
+	}
+}
+
 func TestRerankerMalformedJSON(t *testing.T) {
 	t.Parallel()
 	srv := rerankStub(t, http.StatusOK, []byte("not json"))

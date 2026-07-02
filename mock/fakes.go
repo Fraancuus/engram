@@ -2,6 +2,7 @@ package mock
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/Fraancuus/engram"
@@ -105,6 +106,9 @@ func (f *FakeReranker) Rerank(_ context.Context, query string, docs []string) ([
 	f.LastQuery, f.LastDocs = query, docs
 	if f.Err != nil {
 		return nil, f.Err
+	}
+	if len(f.Scores) != len(docs) {
+		return nil, fmt.Errorf("FakeReranker misconfigured: %d docs, %d scores", len(docs), len(f.Scores))
 	}
 	return f.Scores, nil
 }

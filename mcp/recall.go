@@ -154,6 +154,8 @@ func blend(seeds []engram.RecallResult, neighbors []engram.Neighbor, k int, brid
 		best[s.ID] = engram.RecallResult{Memory: s.Memory, Score: s.Score, RetrievedVia: "vector"}
 	}
 	for _, n := range neighbors {
+		// Link neighbors scale by their edge weight; entity bridges deliberately ignore
+		// n.Weight (the store returns a placeholder for them) and take a flat bridgePenalty.
 		score := seedSim[n.SourceID] * n.Weight
 		if strings.HasPrefix(n.Via, "entity:") {
 			score = seedSim[n.SourceID] * bridgePenalty
@@ -182,6 +184,8 @@ func blend(seeds []engram.RecallResult, neighbors []engram.Neighbor, k int, brid
 // If the reranker errors or returns a mismatched count it degrades to the blend order
 // (logged), so recall never fails solely because the reranker is unavailable.
 func (h *handlers) rerankResults(ctx context.Context, query string, cands []engram.RecallResult) []engram.RecallResult {
+	// Nothing to reorder with fewer than two candidates; the lone result keeps its
+	// retrieval (blend) score rather than paying for a single-doc cross-encoder call.
 	if len(cands) < 2 {
 		return cands
 	}
@@ -193,6 +197,8 @@ func (h *handlers) rerankResults(ctx context.Context, query string, cands []engr
 	if err != nil || len(scores) != len(cands) {
 		if err != nil {
 			h.log.Error("recall: rerank failed; using blend order", "err", err)
+		} else {
+			h.log.Error("recall: rerank count mismatch; using blend order", "want", len(cands), "got", len(scores))
 		}
 		return cands
 	}

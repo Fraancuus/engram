@@ -48,3 +48,13 @@ func TestPackBudgetAllFit(t *testing.T) {
 		t.Errorf("packBudget = %d, want 2 (all fit)", len(out))
 	}
 }
+
+func TestPackBudgetExactCeilingKeepsItem(t *testing.T) {
+	t.Parallel()
+	// a = 5 tokens (16/4+1), b = 7 tokens (24/4+1); cumulative 12 == ceiling, so b is kept
+	// because the guard is strictly greater-than. A change to >= would drop b.
+	rs := []engram.RecallResult{rr("a", strings.Repeat("x", 16)), rr("b", strings.Repeat("y", 24))}
+	if out := packBudget(rs, 12); len(out) != 2 {
+		t.Errorf("packBudget at exact ceiling = %d items, want 2 (== ceiling is inclusive)", len(out))
+	}
+}

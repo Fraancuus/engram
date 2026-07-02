@@ -75,10 +75,15 @@ func (r *Reranker) Rerank(ctx context.Context, query string, docs []string) ([]f
 	}
 
 	scores := make([]float64, len(docs))
+	seen := make([]bool, len(docs))
 	for _, item := range out {
 		if item.Index < 0 || item.Index >= len(docs) {
 			return nil, fmt.Errorf("rerank: result index %d out of range", item.Index)
 		}
+		if seen[item.Index] {
+			return nil, fmt.Errorf("rerank: duplicate result index %d", item.Index)
+		}
+		seen[item.Index] = true
 		scores[item.Index] = item.Score
 	}
 	return scores, nil
