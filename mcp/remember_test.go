@@ -245,3 +245,17 @@ func TestDoRememberLinkErrorIsSanitized(t *testing.T) {
 		t.Errorf("leaks internal detail: %q", err.Error())
 	}
 }
+
+func TestDoRememberAutoLinkAtThreshold(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{
+		{Memory: engram.Memory{ID: "n1"}, Score: linkThreshold}, // exactly 0.85 -> links (>=)
+	}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	if _, err := h.doRemember(context.Background(), validRemember()); err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	if edges := st.LinkedEdges["test-id"]; len(edges) != 1 || edges[0].To != "n1" {
+		t.Errorf("candidate at exactly linkThreshold should auto-link, got %+v", edges)
+	}
+}

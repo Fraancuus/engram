@@ -95,3 +95,32 @@ func TestM2EntityBridgeExpansion(t *testing.T) {
 		}
 	}
 }
+
+// TestM2ScopedRecallExcludesCrossNamespaceLink is a regression test: an agent can plant
+// an explicit link to a memory in another namespace, but a namespace-scoped recall must
+// not surface it through the link arm.
+func TestM2ScopedRecallExcludesCrossNamespaceLink(t *testing.T) {
+	h := liveHandlers(t)
+	h.seedN = 1
+	nsA := string(uniqueNS("m2-xlink-a"))
+	nsB := string(uniqueNS("m2-xlink-b"))
+	foreign := mustRemember(t, h, rememberInput{
+		Content: "Universe A note about the quarterly revenue plan.", Type: "semantic", Namespace: nsA,
+	})
+	// A memory in nsB that explicitly links across into nsA.
+	mustRemember(t, h, rememberInput{
+		Content: "Universe B memo that references the other universe.", Type: "episodic", Namespace: nsB,
+		Links: []string{foreign.MemoryID},
+	})
+
+	scoped, err := h.doRecall(context.Background(),
+		recallInput{Query: "Universe B memo referencing the other universe.", Namespaces: []string{nsB}})
+	if err != nil {
+		t.Fatalf("recall: %v", err)
+	}
+	for _, r := range scoped.Results {
+		if r.ID == foreign.MemoryID {
+			t.Errorf("scoped recall leaked cross-namespace linked memory %q via %q", r.ID, r.Provenance.RetrievedVia)
+		}
+	}
+}

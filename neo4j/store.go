@@ -252,9 +252,10 @@ SET r.weight = lk.weight`
 const neighborCapPerSeed = 20
 
 // Neighbors returns memories reachable from the seeds by a 1-hop [:LINKS] edge or via a
-// shared [:MENTIONS] entity (an entity bridge). Bridge targets are restricted to `scope`
-// when it is non-empty (links are intra-namespace by construction, so they need no scope
-// filter); the seeds themselves are excluded, and each kind is capped per seed.
+// shared [:MENTIONS] entity (an entity bridge). Both kinds are restricted to `scope` when
+// it is non-empty — explicit links can cross namespaces, so a scoped recall must filter
+// them just like bridges; the seeds themselves are excluded, and each kind is capped per
+// seed.
 func (s *Store) Neighbors(ctx context.Context, seedIDs []engram.MemoryID, scope []engram.Namespace) ([]engram.Neighbor, error) {
 	if len(seedIDs) == 0 {
 		return nil, nil
@@ -273,9 +274,10 @@ CALL {
   WITH seed
   MATCH (seed)-[r:LINKS]-(nb:Memory)
   WHERE NOT nb.id IN $seeds
+    AND (size($scope) = 0 OR nb.namespace IN $scope)
   RETURN nb, seed.id AS src, 'link' AS via, r.weight AS weight
   ORDER BY r.weight DESC LIMIT $cap
-  UNION
+  UNION ALL
   WITH seed
   MATCH (seed)-[:MENTIONS]->(e:Entity)<-[:MENTIONS]-(nb:Memory)
   WHERE nb.id <> seed.id AND NOT nb.id IN $seeds

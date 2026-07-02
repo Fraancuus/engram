@@ -81,7 +81,7 @@ func (f *FakeStore) Link(_ context.Context, from engram.MemoryID, links []engram
 	if f.LinkedEdges == nil {
 		f.LinkedEdges = make(map[engram.MemoryID][]engram.Link)
 	}
-	f.LinkedEdges[from] = links
+	f.LinkedEdges[from] = append(f.LinkedEdges[from], links...)
 	return f.LinkEdgesErr
 }
 

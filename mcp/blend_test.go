@@ -63,3 +63,15 @@ func TestBlendTopKAndTiebreak(t *testing.T) {
 		t.Errorf("order = [%s %s], want [c a] (score desc, id tiebreak)", out[0].ID, out[1].ID)
 	}
 }
+
+func TestBlendEmptySeeds(t *testing.T) {
+	t.Parallel()
+	// No seeds: a neighbor has no source similarity, so it scores 0. This is unreachable
+	// via the recall path (seeds feed Neighbors), but blend must not panic and must yield
+	// a defined result.
+	neighbors := []engram.Neighbor{{Memory: engram.Memory{ID: "n"}, SourceID: "missing", Via: "link", Weight: 0.9}}
+	out := blend(nil, neighbors, 10, 0.5)
+	if len(out) != 1 || out[0].Score != 0 || out[0].RetrievedVia != "link" {
+		t.Errorf("blend(nil seeds) = %+v, want one result score 0 via link", out)
+	}
+}
