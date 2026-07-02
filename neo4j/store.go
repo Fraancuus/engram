@@ -222,6 +222,31 @@ RETURN count(m) AS c`
 	return nil
 }
 
+// Link creates weighted [:LINKS] edges from `from` to each target, idempotently (MERGE).
+// A target that does not exist is silently skipped, and self-links are refused; an empty
+// list is a no-op.
+func (s *Store) Link(ctx context.Context, from engram.MemoryID, links []engram.Link) error {
+	if len(links) == 0 {
+		return nil
+	}
+	const q = `
+MATCH (a:Memory {id: $from})
+UNWIND $links AS lk
+MATCH (b:Memory {id: lk.to})
+WHERE b.id <> a.id
+MERGE (a)-[r:LINKS]->(b)
+SET r.weight = lk.weight`
+	rows := make([]map[string]any, len(links))
+	for i, l := range links {
+		rows[i] = map[string]any{"to": string(l.To), "weight": l.Weight}
+	}
+	if _, err := neo4jdriver.ExecuteQuery(ctx, s.driver, q,
+		map[string]any{"from": string(from), "links": rows}, neo4jdriver.EagerResultTransformer); err != nil {
+		return fmt.Errorf("link %q: %w", from, err)
+	}
+	return nil
+}
+
 // toFloat64 widens an embedding for storage; Neo4j list/vector properties are float64.
 func toFloat64(v engram.Vector) []float64 {
 	out := make([]float64, len(v))
