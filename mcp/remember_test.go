@@ -19,13 +19,16 @@ func (fixedClock) Now() time.Time { return time.Unix(1_700_000_000, 0).UTC() }
 
 func testHandlers(emb *mock.FakeEmbedder, st *mock.FakeStore) *handlers {
 	return &handlers{
-		embedder:       emb,
-		store:          st,
-		clock:          fixedClock{},
-		dedupThreshold: defaultDedupThreshold,
-		seedN:          defaultSeedN,
-		log:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-		newID:          func() (engram.MemoryID, error) { return "test-id", nil },
+		embedder:         emb,
+		reranker:         &mock.FakeReranker{},
+		store:            st,
+		clock:            fixedClock{},
+		dedupThreshold:   defaultDedupThreshold,
+		seedN:            defaultSeedN,
+		rerankCandidates: defaultRerankCandidates,
+		maxTokens:        defaultMaxTokens,
+		log:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		newID:            func() (engram.MemoryID, error) { return "test-id", nil },
 	}
 }
 
