@@ -44,6 +44,7 @@ func liveHandlers(t *testing.T) *handlers {
 		store:          store,
 		clock:          fixedClock{},
 		dedupThreshold: defaultDedupThreshold,
+		seedN:          defaultSeedN,
 		log:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		newID:          newMemoryID,
 	}

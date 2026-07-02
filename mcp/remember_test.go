@@ -23,6 +23,7 @@ func testHandlers(emb *mock.FakeEmbedder, st *mock.FakeStore) *handlers {
 		store:          st,
 		clock:          fixedClock{},
 		dedupThreshold: defaultDedupThreshold,
+		seedN:          defaultSeedN,
 		log:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		newID:          func() (engram.MemoryID, error) { return "test-id", nil },
 	}

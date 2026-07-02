@@ -17,9 +17,9 @@ const (
 	maxK          = 100
 	maxNamespaces = 64
 
-	// seedN is how many vector hits seed the associative expansion; bridgePenalty
+	// defaultSeedN is how many vector hits seed the associative expansion; bridgePenalty
 	// discounts entity-bridge neighbors relative to the seed that reached them.
-	seedN         = 50
+	defaultSeedN  = 50
 	bridgePenalty = 0.5
 )
 
@@ -90,7 +90,7 @@ func (h *handlers) doRecall(ctx context.Context, in recallInput) (out recallOutp
 		h.log.Error("recall: embed failed", "err", err)
 		return recallOutput{}, errors.New("recall: embedding failed")
 	}
-	seeds, err := h.store.Search(ctx, namespaces, vec, seedN)
+	seeds, err := h.store.Search(ctx, namespaces, vec, h.seedN)
 	if err != nil {
 		h.log.Error("recall: search failed", "err", err)
 		return recallOutput{}, errors.New("recall: store unavailable")

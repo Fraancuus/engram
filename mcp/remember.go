@@ -29,6 +29,7 @@ type handlers struct {
 	store          Store
 	clock          engram.Clock
 	dedupThreshold float64
+	seedN          int
 	log            *slog.Logger
 	newID          func() (engram.MemoryID, error)
 }

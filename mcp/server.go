@@ -32,6 +32,7 @@ func NewServer(embedder engram.Embedder, store Store, clock engram.Clock) *mcpsd
 		store:          store,
 		clock:          clock,
 		dedupThreshold: defaultDedupThreshold,
+		seedN:          defaultSeedN,
 		log:            slog.Default(),
 		newID:          newMemoryID,
 	}
