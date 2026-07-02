@@ -20,6 +20,7 @@ type Store interface {
 	Reinforce(ctx context.Context, id engram.MemoryID, now time.Time) error
 	LinkEntities(ctx context.Context, id engram.MemoryID, names []string) error
 	Link(ctx context.Context, from engram.MemoryID, links []engram.Link) error
+	Neighbors(ctx context.Context, seedIDs []engram.MemoryID, scope []engram.Namespace) ([]engram.Neighbor, error)
 }
 
 // handlers holds the dependencies shared by the MCP tool handlers.

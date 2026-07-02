@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,18 @@ import (
 	"github.com/Fraancuus/engram"
 	"github.com/Fraancuus/engram/mock"
 )
+
+// manySeeds builds n distinct RecallResults with descending scores.
+func manySeeds(n int) []engram.RecallResult {
+	out := make([]engram.RecallResult, n)
+	for i := range out {
+		out[i] = engram.RecallResult{
+			Memory: engram.Memory{ID: engram.MemoryID(fmt.Sprintf("m%04d", i))},
+			Score:  1.0 - float64(i)/float64(n),
+		}
+	}
+	return out
+}
 
 func TestDoRecallMapsResults(t *testing.T) {
 	t.Parallel()
@@ -57,15 +70,47 @@ func TestDoRecallClampsK(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			st := &mock.FakeStore{}
+			// Search fetches a fixed seed set (seedN); the k clamp is applied at blend, so
+			// assert the result count.
+			st := &mock.FakeStore{SearchResults: manySeeds(120)}
 			h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
-			if _, err := h.doRecall(context.Background(), recallInput{Query: "q", K: tt.in}); err != nil {
+			out, err := h.doRecall(context.Background(), recallInput{Query: "q", K: tt.in})
+			if err != nil {
 				t.Fatalf("doRecall: %v", err)
 			}
-			if st.LastSearchK != tt.want {
-				t.Errorf("Search k = %d, want %d", st.LastSearchK, tt.want)
+			if len(out.Results) != tt.want {
+				t.Errorf("results = %d, want %d (k clamp)", len(out.Results), tt.want)
 			}
 		})
+	}
+}
+
+func TestDoRecallExpandsAndTagsProvenance(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{
+		SearchResults: []engram.RecallResult{{Memory: engram.Memory{ID: "s1", Content: "seed"}, Score: 0.8}},
+		NeighborsRes:  []engram.Neighbor{{Memory: engram.Memory{ID: "n1", Content: "neighbor"}, SourceID: "s1", Via: "link", Weight: 0.5}},
+	}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	out, err := h.doRecall(context.Background(), recallInput{Query: "q", Namespaces: []string{"nsA"}})
+	if err != nil {
+		t.Fatalf("doRecall: %v", err)
+	}
+	if len(st.LastNeighborSeeds) != 1 || st.LastNeighborSeeds[0] != "s1" {
+		t.Errorf("Neighbors seeds = %v, want [s1]", st.LastNeighborSeeds)
+	}
+	if len(st.LastNeighborScope) != 1 || st.LastNeighborScope[0] != "nsA" {
+		t.Errorf("Neighbors scope = %v, want [nsA]", st.LastNeighborScope)
+	}
+	via := map[engram.MemoryID]string{}
+	for _, r := range out.Results {
+		via[engram.MemoryID(r.ID)] = r.Provenance.RetrievedVia
+	}
+	if via["s1"] != "vector" {
+		t.Errorf("s1 retrieved_via = %q, want vector", via["s1"])
+	}
+	if via["n1"] != "link" {
+		t.Errorf("n1 retrieved_via = %q, want link", via["n1"])
 	}
 }
 

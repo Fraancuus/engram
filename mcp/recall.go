@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/Fraancuus/engram"
@@ -14,6 +16,11 @@ const (
 	defaultK      = 10
 	maxK          = 100
 	maxNamespaces = 64
+
+	// seedN is how many vector hits seed the associative expansion; bridgePenalty
+	// discounts entity-bridge neighbors relative to the seed that reached them.
+	seedN         = 50
+	bridgePenalty = 0.5
 )
 
 type recallInput struct {
@@ -27,6 +34,7 @@ type provenanceDTO struct {
 	CreatedAt    time.Time `json:"created_at"`
 	LastAccessed time.Time `json:"last_accessed"`
 	AccessCount  int       `json:"access_count"`
+	RetrievedVia string    `json:"retrieved_via"`
 }
 
 type recallResultDTO struct {
@@ -82,11 +90,21 @@ func (h *handlers) doRecall(ctx context.Context, in recallInput) (out recallOutp
 		h.log.Error("recall: embed failed", "err", err)
 		return recallOutput{}, errors.New("recall: embedding failed")
 	}
-	results, err := h.store.Search(ctx, namespaces, vec, k)
+	seeds, err := h.store.Search(ctx, namespaces, vec, seedN)
 	if err != nil {
 		h.log.Error("recall: search failed", "err", err)
 		return recallOutput{}, errors.New("recall: store unavailable")
 	}
+	seedIDs := make([]engram.MemoryID, len(seeds))
+	for i, s := range seeds {
+		seedIDs[i] = s.ID
+	}
+	neighbors, err := h.store.Neighbors(ctx, seedIDs, namespaces)
+	if err != nil {
+		h.log.Error("recall: neighbors failed", "err", err)
+		return recallOutput{}, errors.New("recall: store unavailable")
+	}
+	results := blend(seeds, neighbors, k, bridgePenalty)
 
 	out = recallOutput{Results: make([]recallResultDTO, len(results))}
 	for i, r := range results {
@@ -101,8 +119,45 @@ func (h *handlers) doRecall(ctx context.Context, in recallInput) (out recallOutp
 				CreatedAt:    r.CreatedAt,
 				LastAccessed: r.LastAccessed,
 				AccessCount:  r.AccessCount,
+				RetrievedVia: r.RetrievedVia,
 			},
 		}
 	}
 	return out, nil
+}
+
+// blend merges vector seeds and expansion neighbors into one ranked list by propagated
+// scoring: a link neighbor scores sim_source*weight, an entity bridge scores
+// sim_source*bridgePenalty, and a memory reached multiple ways keeps its highest score.
+// Results are sorted by score (id-tiebroken) and truncated to k.
+func blend(seeds []engram.RecallResult, neighbors []engram.Neighbor, k int, bridgePenalty float64) []engram.RecallResult {
+	seedSim := make(map[engram.MemoryID]float64, len(seeds))
+	best := make(map[engram.MemoryID]engram.RecallResult, len(seeds))
+	for _, s := range seeds {
+		seedSim[s.ID] = s.Score
+		best[s.ID] = engram.RecallResult{Memory: s.Memory, Score: s.Score, RetrievedVia: "vector"}
+	}
+	for _, n := range neighbors {
+		score := seedSim[n.SourceID] * n.Weight
+		if strings.HasPrefix(n.Via, "entity:") {
+			score = seedSim[n.SourceID] * bridgePenalty
+		}
+		if cur, ok := best[n.Memory.ID]; !ok || score > cur.Score {
+			best[n.Memory.ID] = engram.RecallResult{Memory: n.Memory, Score: score, RetrievedVia: n.Via}
+		}
+	}
+	out := make([]engram.RecallResult, 0, len(best))
+	for _, r := range best {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Score != out[j].Score {
+			return out[i].Score > out[j].Score
+		}
+		return out[i].ID < out[j].ID
+	})
+	if len(out) > k {
+		out = out[:k]
+	}
+	return out
 }
