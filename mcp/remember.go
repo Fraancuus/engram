@@ -19,6 +19,7 @@ type Store interface {
 	Search(ctx context.Context, namespaces []engram.Namespace, vec engram.Vector, k int) ([]engram.RecallResult, error)
 	Reinforce(ctx context.Context, id engram.MemoryID, now time.Time) error
 	LinkEntities(ctx context.Context, id engram.MemoryID, names []string) error
+	Link(ctx context.Context, from engram.MemoryID, links []engram.Link) error
 }
 
 // handlers holds the dependencies shared by the MCP tool handlers.
@@ -42,6 +43,11 @@ const (
 	// defaultDedupThreshold is the cosine similarity at or above which a new memory is
 	// treated as a duplicate of the nearest existing one in its namespace.
 	defaultDedupThreshold = 0.95
+
+	// autoLinkK is how many nearest neighbors a new memory considers linking to;
+	// linkThreshold is the minimum cosine similarity for an auto-link.
+	autoLinkK     = 5
+	linkThreshold = 0.85
 )
 
 type rememberInput struct {
@@ -51,6 +57,7 @@ type rememberInput struct {
 	Importance *float64 `json:"importance,omitempty" jsonschema:"importance from 0 to 1; defaults to 0.5"`
 	Source     string   `json:"source,omitempty" jsonschema:"where this memory came from"`
 	Entities   []string `json:"entities,omitempty" jsonschema:"entity names this memory mentions"`
+	Links      []string `json:"links,omitempty" jsonschema:"ids of existing memories to link this one to"`
 }
 
 type rememberOutput struct {
@@ -95,6 +102,14 @@ func (h *handlers) doRemember(ctx context.Context, in rememberInput) (out rememb
 			return rememberOutput{}, fmt.Errorf("entity names must be 1..%d bytes", maxEntityBytes)
 		}
 	}
+	if len(in.Links) > maxEntities {
+		return rememberOutput{}, fmt.Errorf("at most %d links allowed", maxEntities)
+	}
+	for _, l := range in.Links {
+		if l == "" || len(l) > maxEntityBytes {
+			return rememberOutput{}, fmt.Errorf("link ids must be 1..%d bytes", maxEntityBytes)
+		}
+	}
 
 	ns := engram.Namespace(in.Namespace)
 	vec, err := h.embedder.Embed(ctx, in.Content)
@@ -103,26 +118,26 @@ func (h *handlers) doRemember(ctx context.Context, in rememberInput) (out rememb
 		return rememberOutput{}, errors.New("remember: embedding failed")
 	}
 
-	// Dedup: reinforce the nearest existing memory if it is similar enough.
-	hits, err := h.store.Search(ctx, []engram.Namespace{ns}, vec, 1)
+	// Search the namespace once: candidates[0] drives dedup; the rest feed auto-linking.
+	candidates, err := h.store.Search(ctx, []engram.Namespace{ns}, vec, autoLinkK)
 	if err != nil {
-		h.log.Error("remember: dedup search failed", "err", err)
+		h.log.Error("remember: search failed", "err", err)
 		return rememberOutput{}, errors.New("remember: store unavailable")
 	}
-	if len(hits) > 0 && hits[0].Score >= h.dedupThreshold {
-		if err := h.store.Reinforce(ctx, hits[0].ID, h.clock.Now()); err != nil {
+	if len(candidates) > 0 && candidates[0].Score >= h.dedupThreshold {
+		if err := h.store.Reinforce(ctx, candidates[0].ID, h.clock.Now()); err != nil {
 			h.log.Error("remember: reinforce failed", "err", err)
 			return rememberOutput{}, errors.New("remember: store unavailable")
 		}
 		// Merge any supplied entities onto the existing memory so a retry after a prior
 		// LinkEntities failure (or genuinely new mentions) still records them.
 		if len(in.Entities) > 0 {
-			if err := h.store.LinkEntities(ctx, hits[0].ID, in.Entities); err != nil {
+			if err := h.store.LinkEntities(ctx, candidates[0].ID, in.Entities); err != nil {
 				h.log.Error("remember: link entities on dedup failed", "err", err)
 				return rememberOutput{}, errors.New("remember: store unavailable")
 			}
 		}
-		return rememberOutput{MemoryID: string(hits[0].ID), Deduped: true}, nil
+		return rememberOutput{MemoryID: string(candidates[0].ID), Deduped: true}, nil
 	}
 
 	id, err := h.newID()
@@ -150,6 +165,23 @@ func (h *handlers) doRemember(ctx context.Context, in rememberInput) (out rememb
 	if len(in.Entities) > 0 {
 		if err := h.store.LinkEntities(ctx, id, in.Entities); err != nil {
 			h.log.Error("remember: link entities failed", "err", err)
+			return rememberOutput{}, errors.New("remember: store unavailable")
+		}
+	}
+
+	// Auto-link to the sufficiently-similar candidates, plus any explicit links.
+	var links []engram.Link
+	for _, c := range candidates {
+		if c.Score >= linkThreshold {
+			links = append(links, engram.Link{To: c.ID, Weight: c.Score})
+		}
+	}
+	for _, lid := range in.Links {
+		links = append(links, engram.Link{To: engram.MemoryID(lid), Weight: 1.0})
+	}
+	if len(links) > 0 {
+		if err := h.store.Link(ctx, id, links); err != nil {
+			h.log.Error("remember: link failed", "err", err)
 			return rememberOutput{}, errors.New("remember: store unavailable")
 		}
 	}

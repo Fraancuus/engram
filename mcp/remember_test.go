@@ -172,3 +172,75 @@ func TestDoRememberEmbedErrorIsSanitized(t *testing.T) {
 		t.Error("must not Put when embed fails")
 	}
 }
+
+func TestDoRememberAutoLinks(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{
+		{Memory: engram.Memory{ID: "n1"}, Score: 0.9}, // >= linkThreshold
+		{Memory: engram.Memory{ID: "n2"}, Score: 0.7}, // below linkThreshold
+	}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	out, err := h.doRemember(context.Background(), validRemember())
+	if err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	if out.Deduped {
+		t.Fatal("should insert, not dedup")
+	}
+	edges := st.LinkedEdges["test-id"]
+	if len(edges) != 1 || edges[0].To != "n1" || edges[0].Weight != 0.9 {
+		t.Errorf("auto-links = %+v, want [{n1 0.9}] (n2 below threshold filtered)", edges)
+	}
+}
+
+func TestDoRememberExplicitLinks(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{} // no auto-link candidates
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	in := validRemember()
+	in.Links = []string{"x", "y"}
+	if _, err := h.doRemember(context.Background(), in); err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	edges := st.LinkedEdges["test-id"]
+	if len(edges) != 2 || edges[0].To != "x" || edges[0].Weight != 1.0 || edges[1].To != "y" {
+		t.Errorf("explicit links = %+v, want [{x 1} {y 1}]", edges)
+	}
+}
+
+func TestDoRememberDedupSkipsAutoLink(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{
+		{Memory: engram.Memory{ID: "existing"}, Score: 0.97},
+	}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	out, err := h.doRemember(context.Background(), validRemember())
+	if err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	if !out.Deduped {
+		t.Fatal("want dedup")
+	}
+	if len(st.Puts) != 0 {
+		t.Error("dedup must not Put")
+	}
+	if len(st.LinkedEdges) != 0 {
+		t.Error("dedup must not create link edges")
+	}
+}
+
+func TestDoRememberLinkErrorIsSanitized(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{
+		SearchResults: []engram.RecallResult{{Memory: engram.Memory{ID: "n1"}, Score: 0.9}},
+		LinkEdgesErr:  errors.New("db-internal-detail"),
+	}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	_, err := h.doRemember(context.Background(), validRemember())
+	if err == nil {
+		t.Fatal("want error when Link fails")
+	}
+	if strings.Contains(err.Error(), "db-internal-detail") {
+		t.Errorf("leaks internal detail: %q", err.Error())
+	}
+}
