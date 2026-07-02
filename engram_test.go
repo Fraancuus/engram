@@ -64,3 +64,23 @@ func TestRecallResultEmbedsMemory(t *testing.T) {
 		t.Errorf("Score = %v, want 0.87", r.Score)
 	}
 }
+
+func TestRecallResultRetrievedVia(t *testing.T) {
+	t.Parallel()
+	r := engram.RecallResult{Memory: engram.Memory{ID: "x"}, Score: 1, RetrievedVia: "vector"}
+	if r.RetrievedVia != "vector" {
+		t.Errorf("RetrievedVia = %q, want vector", r.RetrievedVia)
+	}
+}
+
+func TestLinkAndNeighborTypes(t *testing.T) {
+	t.Parallel()
+	l := engram.Link{To: "a", Weight: 0.9}
+	if l.To != "a" || l.Weight != 0.9 {
+		t.Errorf("Link = %+v, want {a 0.9}", l)
+	}
+	n := engram.Neighbor{Memory: engram.Memory{ID: "b"}, SourceID: "a", Via: "link", Weight: 0.9}
+	if n.Memory.ID != "b" || n.SourceID != "a" || n.Via != "link" || n.Weight != 0.9 {
+		t.Errorf("Neighbor = %+v", n)
+	}
+}

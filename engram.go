@@ -82,6 +82,26 @@ type Memory struct {
 type RecallResult struct {
 	Memory
 	Score float64
+	// RetrievedVia records how this result surfaced during recall: "vector", "link", or
+	// "entity:<name>". Empty until recall sets it (M2 graph expansion).
+	RetrievedVia string
+}
+
+// Link is a weighted association from one memory to another, persisted as a [:LINKS]
+// edge. Weight is the cosine similarity for auto-links, or 1.0 for an explicit link.
+type Link struct {
+	To     MemoryID
+	Weight float64
+}
+
+// Neighbor is a memory reached during recall's associative expansion, tagged with the
+// seed it was reached from (SourceID) and how (Via is "link" or "entity:<name>"). Weight
+// is the [:LINKS] edge weight and is meaningless for entity bridges.
+type Neighbor struct {
+	Memory   Memory
+	SourceID MemoryID
+	Via      string
+	Weight   float64
 }
 
 // Entity is a cross-namespace bridge node reached from memories via MENTIONS. It is
