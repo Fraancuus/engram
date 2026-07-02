@@ -247,6 +247,79 @@ SET r.weight = lk.weight`
 	return nil
 }
 
+// neighborCapPerSeed bounds how many neighbors each seed contributes per kind, so a hub
+// entity cannot explode recall expansion.
+const neighborCapPerSeed = 20
+
+// Neighbors returns memories reachable from the seeds by a 1-hop [:LINKS] edge or via a
+// shared [:MENTIONS] entity (an entity bridge). Bridge targets are restricted to `scope`
+// when it is non-empty (links are intra-namespace by construction, so they need no scope
+// filter); the seeds themselves are excluded, and each kind is capped per seed.
+func (s *Store) Neighbors(ctx context.Context, seedIDs []engram.MemoryID, scope []engram.Namespace) ([]engram.Neighbor, error) {
+	if len(seedIDs) == 0 {
+		return nil, nil
+	}
+	seeds := make([]string, len(seedIDs))
+	for i, id := range seedIDs {
+		seeds[i] = string(id)
+	}
+	ns := make([]string, len(scope))
+	for i, n := range scope {
+		ns[i] = string(n)
+	}
+	const q = `
+MATCH (seed:Memory) WHERE seed.id IN $seeds
+CALL {
+  WITH seed
+  MATCH (seed)-[r:LINKS]-(nb:Memory)
+  WHERE NOT nb.id IN $seeds
+  RETURN nb, seed.id AS src, 'link' AS via, r.weight AS weight
+  ORDER BY r.weight DESC LIMIT $cap
+  UNION
+  WITH seed
+  MATCH (seed)-[:MENTIONS]->(e:Entity)<-[:MENTIONS]-(nb:Memory)
+  WHERE nb.id <> seed.id AND NOT nb.id IN $seeds
+    AND (size($scope) = 0 OR nb.namespace IN $scope)
+  RETURN nb, seed.id AS src, 'entity:' + e.name AS via, 1.0 AS weight
+  ORDER BY nb.id LIMIT $cap
+}
+RETURN nb, src, via, weight`
+	res, err := neo4jdriver.ExecuteQuery(ctx, s.driver, q, map[string]any{
+		"seeds": seeds, "scope": ns, "cap": neighborCapPerSeed,
+	}, neo4jdriver.EagerResultTransformer)
+	if err != nil {
+		return nil, fmt.Errorf("neighbors: %w", err)
+	}
+	out := make([]engram.Neighbor, 0, len(res.Records))
+	for _, rec := range res.Records {
+		nbRaw, ok := rec.Get("nb")
+		if !ok {
+			return nil, fmt.Errorf("neighbors: record missing node")
+		}
+		node, ok := nbRaw.(neo4jdriver.Node)
+		if !ok {
+			return nil, fmt.Errorf("neighbors: nb is %T, want node", nbRaw)
+		}
+		m, err := nodeToMemory(node)
+		if err != nil {
+			return nil, fmt.Errorf("neighbors: %w", err)
+		}
+		src, _ := rec.Get("src")
+		via, _ := rec.Get("via")
+		w, _ := rec.Get("weight")
+		srcStr, _ := src.(string)
+		viaStr, _ := via.(string)
+		weight, _ := w.(float64)
+		out = append(out, engram.Neighbor{
+			Memory:   m,
+			SourceID: engram.MemoryID(srcStr),
+			Via:      viaStr,
+			Weight:   weight,
+		})
+	}
+	return out, nil
+}
+
 // toFloat64 widens an embedding for storage; Neo4j list/vector properties are float64.
 func toFloat64(v engram.Vector) []float64 {
 	out := make([]float64, len(v))

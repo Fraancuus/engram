@@ -60,3 +60,55 @@ func TestStoreLink(t *testing.T) {
 		t.Errorf("LINKS from A after missing-target link = %d, want 2", n)
 	}
 }
+
+func TestStoreNeighbors(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	nsX := engram.Namespace(string(uniqueID("itest-nb-x")))
+	nsY := engram.Namespace(string(uniqueID("itest-nb-y")))
+	a, b, c := uniqueID("A"), uniqueID("B"), uniqueID("C")
+	putBare(t, s, a, nsX)
+	putBare(t, s, b, nsX)
+	putBare(t, s, c, nsY)
+	if err := s.Link(ctx, a, []engram.Link{{To: b, Weight: 0.9}}); err != nil {
+		t.Fatalf("Link: %v", err)
+	}
+	if err := s.LinkEntities(ctx, a, []string{"Redis"}); err != nil {
+		t.Fatalf("LinkEntities A: %v", err)
+	}
+	if err := s.LinkEntities(ctx, c, []string{"Redis"}); err != nil {
+		t.Fatalf("LinkEntities C: %v", err)
+	}
+
+	// Unscoped: link neighbor B and entity-bridge neighbor C (shared "Redis").
+	all, err := s.Neighbors(ctx, []engram.MemoryID{a}, nil)
+	if err != nil {
+		t.Fatalf("Neighbors: %v", err)
+	}
+	byID := map[engram.MemoryID]engram.Neighbor{}
+	for _, n := range all {
+		byID[n.Memory.ID] = n
+	}
+	if nb, ok := byID[b]; !ok || nb.Via != "link" || nb.SourceID != a || nb.Weight != 0.9 {
+		t.Errorf("link neighbor B = %+v (ok=%v), want via=link src=A weight=0.9", nb, ok)
+	}
+	if nc, ok := byID[c]; !ok || nc.Via != "entity:Redis" || nc.SourceID != a {
+		t.Errorf("bridge neighbor C = %+v (ok=%v), want via=entity:Redis src=A", nc, ok)
+	}
+
+	// Scoped to nsX: link B stays; entity bridge C (nsY) is excluded.
+	scoped, err := s.Neighbors(ctx, []engram.MemoryID{a}, []engram.Namespace{nsX})
+	if err != nil {
+		t.Fatalf("Neighbors scoped: %v", err)
+	}
+	got := map[engram.MemoryID]bool{}
+	for _, n := range scoped {
+		got[n.Memory.ID] = true
+	}
+	if !got[b] {
+		t.Error("scoped Neighbors dropped link neighbor B")
+	}
+	if got[c] {
+		t.Error("scoped Neighbors leaked cross-namespace bridge C")
+	}
+}
