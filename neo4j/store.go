@@ -186,8 +186,11 @@ RETURN count(m) AS c`
 	if len(res.Records) == 0 {
 		return fmt.Errorf("reinforce %q: %w", id, engram.ErrNotFound)
 	}
-	c, _ := res.Records[0].Get("c")
-	if n, _ := c.(int64); n == 0 {
+	n, err := recordValue[int64](res.Records[0], "c")
+	if err != nil {
+		return fmt.Errorf("reinforce %q: %w", id, err)
+	}
+	if n == 0 {
 		return fmt.Errorf("reinforce %q: %w", id, engram.ErrNotFound)
 	}
 	return nil
@@ -215,8 +218,11 @@ RETURN count(m) AS c`
 	if len(res.Records) == 0 {
 		return fmt.Errorf("link entities %q: %w", id, engram.ErrNotFound)
 	}
-	c, _ := res.Records[0].Get("c")
-	if n, _ := c.(int64); n == 0 {
+	n, err := recordValue[int64](res.Records[0], "c")
+	if err != nil {
+		return fmt.Errorf("link entities %q: %w", id, err)
+	}
+	if n == 0 {
 		return fmt.Errorf("link entities %q: %w", id, engram.ErrNotFound)
 	}
 	return nil
@@ -229,20 +235,37 @@ func (s *Store) Link(ctx context.Context, from engram.MemoryID, links []engram.L
 	if len(links) == 0 {
 		return nil
 	}
+	// The write happens in a unit CALL subquery so the outer `a` row survives even when no
+	// targets match, letting count(a) distinguish a missing source from zero valid targets.
 	const q = `
 MATCH (a:Memory {id: $from})
-UNWIND $links AS lk
-MATCH (b:Memory {id: lk.to})
-WHERE b.id <> a.id
-MERGE (a)-[r:LINKS]->(b)
-SET r.weight = lk.weight`
+CALL {
+  WITH a
+  UNWIND $links AS lk
+  MATCH (b:Memory {id: lk.to})
+  WHERE b.id <> a.id
+  MERGE (a)-[r:LINKS]->(b)
+  SET r.weight = lk.weight
+}
+RETURN count(a) AS c`
 	rows := make([]map[string]any, len(links))
 	for i, l := range links {
 		rows[i] = map[string]any{"to": string(l.To), "weight": l.Weight}
 	}
-	if _, err := neo4jdriver.ExecuteQuery(ctx, s.driver, q,
-		map[string]any{"from": string(from), "links": rows}, neo4jdriver.EagerResultTransformer); err != nil {
+	res, err := neo4jdriver.ExecuteQuery(ctx, s.driver, q,
+		map[string]any{"from": string(from), "links": rows}, neo4jdriver.EagerResultTransformer)
+	if err != nil {
 		return fmt.Errorf("link %q: %w", from, err)
+	}
+	if len(res.Records) == 0 {
+		return fmt.Errorf("link %q: %w", from, engram.ErrNotFound)
+	}
+	n, err := recordValue[int64](res.Records[0], "c")
+	if err != nil {
+		return fmt.Errorf("link %q: %w", from, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("link %q: %w", from, engram.ErrNotFound)
 	}
 	return nil
 }
@@ -306,12 +329,18 @@ RETURN nb, src, via, weight`
 		if err != nil {
 			return nil, fmt.Errorf("neighbors: %w", err)
 		}
-		src, _ := rec.Get("src")
-		via, _ := rec.Get("via")
-		w, _ := rec.Get("weight")
-		srcStr, _ := src.(string)
-		viaStr, _ := via.(string)
-		weight, _ := w.(float64)
+		srcStr, err := recordValue[string](rec, "src")
+		if err != nil {
+			return nil, fmt.Errorf("neighbors: %w", err)
+		}
+		viaStr, err := recordValue[string](rec, "via")
+		if err != nil {
+			return nil, fmt.Errorf("neighbors: %w", err)
+		}
+		weight, err := recordValue[float64](rec, "weight")
+		if err != nil {
+			return nil, fmt.Errorf("neighbors: %w", err)
+		}
 		out = append(out, engram.Neighbor{
 			Memory:   m,
 			SourceID: engram.MemoryID(srcStr),
@@ -439,4 +468,20 @@ func vecProp(p map[string]any, key string) (engram.Vector, error) {
 	default:
 		return nil, fmt.Errorf("property %q: want list, got %T", key, v)
 	}
+}
+
+// recordValue extracts a query-result column of exact type T, failing if the column is
+// missing or of an unexpected type — so a malformed result surfaces as an error rather
+// than a zero value that could be mistaken for "not found".
+func recordValue[T any](rec *neo4jdriver.Record, key string) (T, error) {
+	var zero T
+	v, ok := rec.Get(key)
+	if !ok {
+		return zero, fmt.Errorf("result missing %q", key)
+	}
+	t, ok := v.(T)
+	if !ok {
+		return zero, fmt.Errorf("result %q: want %T, got %T", key, zero, v)
+	}
+	return t, nil
 }

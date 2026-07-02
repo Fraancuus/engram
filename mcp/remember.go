@@ -83,8 +83,8 @@ func (h *handlers) doRemember(ctx context.Context, in rememberInput) (out rememb
 	if !mt.Valid() {
 		return rememberOutput{}, fmt.Errorf("invalid type %q: want episodic, semantic, or procedural", in.Type)
 	}
-	if in.Content == "" || len(in.Content) > maxContentBytes {
-		return rememberOutput{}, fmt.Errorf("content must be 1..%d bytes", maxContentBytes)
+	if strings.TrimSpace(in.Content) == "" || len(in.Content) > maxContentBytes {
+		return rememberOutput{}, fmt.Errorf("content must be 1..%d bytes and not blank", maxContentBytes)
 	}
 	if strings.TrimSpace(in.Namespace) == "" || len(in.Namespace) > maxNamespaceBytes {
 		return rememberOutput{}, fmt.Errorf("namespace must be 1..%d bytes and not blank", maxNamespaceBytes)
@@ -100,16 +100,16 @@ func (h *handlers) doRemember(ctx context.Context, in rememberInput) (out rememb
 		return rememberOutput{}, fmt.Errorf("at most %d entities allowed", maxEntities)
 	}
 	for _, e := range in.Entities {
-		if e == "" || len(e) > maxEntityBytes {
-			return rememberOutput{}, fmt.Errorf("entity names must be 1..%d bytes", maxEntityBytes)
+		if strings.TrimSpace(e) == "" || len(e) > maxEntityBytes {
+			return rememberOutput{}, fmt.Errorf("entity names must be 1..%d bytes and not blank", maxEntityBytes)
 		}
 	}
 	if len(in.Links) > maxEntities {
 		return rememberOutput{}, fmt.Errorf("at most %d links allowed", maxEntities)
 	}
 	for _, l := range in.Links {
-		if l == "" || len(l) > maxEntityBytes {
-			return rememberOutput{}, fmt.Errorf("link ids must be 1..%d bytes", maxEntityBytes)
+		if strings.TrimSpace(l) == "" || len(l) > maxEntityBytes {
+			return rememberOutput{}, fmt.Errorf("link ids must be 1..%d bytes and not blank", maxEntityBytes)
 		}
 	}
 

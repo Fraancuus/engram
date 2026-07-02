@@ -149,3 +149,23 @@ func TestDoRecallEmbedErrorIsSanitized(t *testing.T) {
 		t.Errorf("leaks internal detail: %q", err.Error())
 	}
 }
+
+func TestDoRecallRejectsBlankQuery(t *testing.T) {
+	t.Parallel()
+	emb := &mock.FakeEmbedder{Vec: engram.Vector{1}}
+	h := testHandlers(emb, &mock.FakeStore{})
+	if _, err := h.doRecall(context.Background(), recallInput{Query: "   "}); err == nil {
+		t.Fatal("want error for whitespace-only query")
+	}
+	if emb.Last != "" {
+		t.Error("must not embed on a blank query")
+	}
+}
+
+func TestDoRecallRejectsBlankNamespace(t *testing.T) {
+	t.Parallel()
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, &mock.FakeStore{})
+	if _, err := h.doRecall(context.Background(), recallInput{Query: "q", Namespaces: []string{"  "}}); err == nil {
+		t.Fatal("want error for whitespace-only namespace")
+	}
+}

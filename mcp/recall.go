@@ -61,16 +61,16 @@ func (h *handlers) doRecall(ctx context.Context, in recallInput) (out recallOutp
 		}
 	}()
 
-	if in.Query == "" || len(in.Query) > maxContentBytes {
-		return recallOutput{}, fmt.Errorf("query must be 1..%d bytes", maxContentBytes)
+	if strings.TrimSpace(in.Query) == "" || len(in.Query) > maxContentBytes {
+		return recallOutput{}, fmt.Errorf("query must be 1..%d bytes and not blank", maxContentBytes)
 	}
 	if len(in.Namespaces) > maxNamespaces {
 		return recallOutput{}, fmt.Errorf("at most %d namespaces allowed", maxNamespaces)
 	}
 	namespaces := make([]engram.Namespace, 0, len(in.Namespaces))
 	for _, n := range in.Namespaces {
-		if n == "" || len(n) > maxNamespaceBytes {
-			return recallOutput{}, fmt.Errorf("namespace must be 1..%d bytes", maxNamespaceBytes)
+		if strings.TrimSpace(n) == "" || len(n) > maxNamespaceBytes {
+			return recallOutput{}, fmt.Errorf("namespace must be 1..%d bytes and not blank", maxNamespaceBytes)
 		}
 		namespaces = append(namespaces, engram.Namespace(n))
 	}

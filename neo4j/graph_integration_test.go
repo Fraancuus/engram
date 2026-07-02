@@ -4,6 +4,7 @@ package neo4j_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -110,5 +111,17 @@ func TestStoreNeighbors(t *testing.T) {
 	}
 	if got[c] {
 		t.Error("scoped Neighbors leaked cross-namespace bridge C")
+	}
+}
+
+func TestStoreLinkNotFound(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	ns := engram.Namespace(string(uniqueID("itest-link-nf")))
+	target := uniqueID("target")
+	putBare(t, s, target, ns)
+	err := s.Link(ctx, uniqueID("missing-source"), []engram.Link{{To: target, Weight: 1}})
+	if !errors.Is(err, engram.ErrNotFound) {
+		t.Fatalf("Link(missing source): want engram.ErrNotFound, got %v", err)
 	}
 }

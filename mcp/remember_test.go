@@ -124,6 +124,9 @@ func TestDoRememberValidation(t *testing.T) {
 		{"empty namespace", func(in *rememberInput) { in.Namespace = "" }},
 		{"importance too high", func(in *rememberInput) { in.Importance = imp(1.5) }},
 		{"importance negative", func(in *rememberInput) { in.Importance = imp(-0.1) }},
+		{"whitespace content", func(in *rememberInput) { in.Content = "   " }},
+		{"whitespace entity", func(in *rememberInput) { in.Entities = []string{"  "} }},
+		{"whitespace link", func(in *rememberInput) { in.Links = []string{"  "} }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
