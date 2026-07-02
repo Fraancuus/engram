@@ -4,7 +4,7 @@
 > service over a graph + vector store, with **type-aware forgetting**, namespaced
 > "universes", and a rigorous eval proving the forgetting actually helps.
 
-**Status:** v1 in progress — repo scaffolding stage (M0 not yet landed).
+**Status:** v1 in progress — **M2 graph landed** (auto-linking + associative expansion: 1-hop links + entity bridges). Next: M3 rerank.
 **Module:** `github.com/Fraancuus/engram` · **Go:** 1.26
 
 Most "agent memory" projects are a vector store with `save()` and `search()`. They
@@ -81,6 +81,36 @@ golangci-lint run ./...
 Ensure your Go bin dir (`go env GOPATH`/bin) is on `PATH` so the git hook resolves
 the tools. See [CONTRIBUTING.md](CONTRIBUTING.md) for the gates-vs-agents workflow and
 [docs/engram-go-rules.md](docs/engram-go-rules.md) for Go conventions.
+
+## Run Engram
+
+Bring up the stack, apply the schema, and serve the MCP tools over stdio:
+
+```bash
+docker compose up -d --wait                                        # Neo4j + TEI (first run pulls images + model)
+docker compose exec -T neo4j cypher-shell < schema/001_init.cypher # apply schema (idempotent)
+go run ./cmd/engramd                                               # serves the MCP tools over stdio
+```
+
+`engramd` speaks the Model Context Protocol over stdio, so point any MCP client at the
+command (`go run ./cmd/engramd`, or a built binary). It exposes two tools:
+
+- **`remember`** — `{content, type, namespace, importance?, source?, entities?, links?}` → `{memory_id, deduped}`. Embeds the content, deduplicates within the namespace (reinforcing a near-identical memory instead of inserting), writes `:Entity` nodes + `[:MENTIONS]` edges, and **auto-links** to sufficiently-similar neighbors (plus any explicit `links`) via weighted `[:LINKS]` edges.
+- **`recall`** — `{query, namespaces?, k?}` → ranked `[{id, content, score, type, namespace, provenance}]`. Vector kNN seeds are expanded via 1-hop `[:LINKS]` and entity bridges (cross-namespace unless scoped), ranked by propagated scoring; `provenance.retrieved_via` reports how each result surfaced (`vector` / `link` / `entity:<name>`).
+
+Service-backed tests are tagged `integration` and excluded from the default unit run:
+
+```bash
+go test ./...                      # unit tests — no services needed
+go test -tags integration ./...    # store + end-to-end — needs the stack up
+```
+
+Config (env vars, with defaults): `NEO4J_URI` (`neo4j://localhost:7687`), `NEO4J_USER`
+(`neo4j`), `NEO4J_PASSWORD` (empty → the no-auth dev stack), `TEI_URL`
+(`http://localhost:8080`). The local stack runs Neo4j with `NEO4J_AUTH=none` bound to
+loopback — auth is out of v1 scope.
+
+> A compose-backed CI job to run the `integration` tests is still a TODO.
 
 ## Milestones
 
