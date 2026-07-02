@@ -53,6 +53,9 @@ func TestStoreSearch(t *testing.T) {
 	if got[0].ID != mA.ID {
 		t.Errorf("top result = %q, want %q (exact-direction match should rank first)", got[0].ID, mA.ID)
 	}
+	if len(got[0].Embedding) != 0 {
+		t.Errorf("Search hydrated the embedding (%d dims); the recall path should project it away", len(got[0].Embedding))
+	}
 	if got[0].Score <= got[len(got)-1].Score && len(got) > 1 {
 		t.Errorf("results not ranked by descending score: %v", scores(got))
 	}
