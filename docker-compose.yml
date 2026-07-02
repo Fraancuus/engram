@@ -49,6 +49,21 @@ services:
       retries: 30
       start_period: 60s
 
+  tei-rerank:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.6
+    command: ["--model-id", "BAAI/bge-reranker-v2-m3"]
+    ports:
+      - "127.0.0.1:8081:80" # TEI rerank HTTP (container listens on :80)
+    volumes:
+      - tei-rerank-cache:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:80/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
 volumes:
   neo4j-data:
   tei-cache:
+  tei-rerank-cache:
