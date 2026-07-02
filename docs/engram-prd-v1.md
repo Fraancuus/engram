@@ -211,7 +211,7 @@ Tools are registered with the official SDK's generic `mcpsdk.AddTool`, which der
 
 - **M0 — Skeleton.** Go module, Neo4j up, schema (`:Memory`/`:Entity`, vector index, type+namespace props), inference sidecar standing up, `MemoryStore` + `Embedder`/`Reranker` interfaces, embed a string end-to-end.
 - **M1 — Core loop.** `remember` + `recall` (vector-only, namespace-filtered) over MCP. Dedup. Type + namespace + entities written. Working store→search demo.
-- **M2 — Graph.** Auto-linking + entity bridges on write; 1-hop + entity-bridge expansion in `recall`. **DR-1 re-evaluation checkpoint.**
+- **M2 — Graph.** Auto-linking + entity bridges on write; 1-hop + entity-bridge expansion in `recall`. **DR-1 resolved — keep Neo4j** (graph traversal is load-bearing; see `docs/adr/`).
 - **M3 — Rerank.** Cross-encoder rerank + token-budget assembly. Reranker = `bge-reranker-v2-m3` on the TEI sidecar (`/rerank`), with `gte-reranker-modernbert-base` as the efficiency challenger; embedder stays `bge-small-en-v1.5` (384-dim). See [ADR-0002](adr/0002-embedding-model-and-amd-acceleration.md).
 - **M4 — Type-aware decay.** Per-type retrievability, supersession, scheduled sweep, reinforcement (+ edge propagation), soft-forget/hard-prune, `forget`/pin/supersede.
 - **M5 — Eval.** Mixed-type dataset; A/B/C conditions; metrics + type-stratified recall; CI gate. *The milestone that makes it credible.*

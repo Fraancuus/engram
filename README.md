@@ -4,7 +4,7 @@
 > service over a graph + vector store, with **type-aware forgetting**, namespaced
 > "universes", and a rigorous eval proving the forgetting actually helps.
 
-**Status:** v1 in progress — **M1 core loop landed** (remember + recall over MCP: vector recall, dedup, entities written). Next: M2 graph + entity bridges.
+**Status:** v1 in progress — **M2 graph landed** (auto-linking + associative expansion: 1-hop links + entity bridges). Next: M3 rerank.
 **Module:** `github.com/Fraancuus/engram` · **Go:** 1.26
 
 Most "agent memory" projects are a vector store with `save()` and `search()`. They
@@ -95,8 +95,8 @@ go run ./cmd/engramd                                               # serves the 
 `engramd` speaks the Model Context Protocol over stdio, so point any MCP client at the
 command (`go run ./cmd/engramd`, or a built binary). It exposes two tools:
 
-- **`remember`** — `{content, type, namespace, importance?, source?, entities?}` → `{memory_id, deduped}`. Embeds the content, deduplicates within the namespace (reinforcing a near-identical memory instead of inserting), and writes `:Entity` nodes + `[:MENTIONS]` edges.
-- **`recall`** — `{query, namespaces?, k?}` → ranked `[{id, content, score, type, namespace, provenance}]` via vector search over the requested namespace(s).
+- **`remember`** — `{content, type, namespace, importance?, source?, entities?, links?}` → `{memory_id, deduped}`. Embeds the content, deduplicates within the namespace (reinforcing a near-identical memory instead of inserting), writes `:Entity` nodes + `[:MENTIONS]` edges, and **auto-links** to sufficiently-similar neighbors (plus any explicit `links`) via weighted `[:LINKS]` edges.
+- **`recall`** — `{query, namespaces?, k?}` → ranked `[{id, content, score, type, namespace, provenance}]`. Vector kNN seeds are expanded via 1-hop `[:LINKS]` and entity bridges (cross-namespace unless scoped), ranked by propagated scoring; `provenance.retrieved_via` reports how each result surfaced (`vector` / `link` / `entity:<name>`).
 
 Service-backed tests are tagged `integration` and excluded from the default unit run:
 
