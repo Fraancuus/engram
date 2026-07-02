@@ -40,6 +40,13 @@ type FakeStore struct {
 	LastSearchNS  []engram.Namespace
 	LastSearchVec engram.Vector
 	LastSearchK   int
+
+	LinkedEdges       map[engram.MemoryID][]engram.Link
+	LinkEdgesErr      error
+	NeighborsRes      []engram.Neighbor
+	NeighborsErr      error
+	LastNeighborSeeds []engram.MemoryID
+	LastNeighborScope []engram.Namespace
 }
 
 // Put records m and returns the configured PutErr.
@@ -67,4 +74,19 @@ func (f *FakeStore) LinkEntities(_ context.Context, id engram.MemoryID, names []
 	}
 	f.Linked[id] = names
 	return f.LinkErr
+}
+
+// Link records the edges under from and returns the configured LinkEdgesErr.
+func (f *FakeStore) Link(_ context.Context, from engram.MemoryID, links []engram.Link) error {
+	if f.LinkedEdges == nil {
+		f.LinkedEdges = make(map[engram.MemoryID][]engram.Link)
+	}
+	f.LinkedEdges[from] = links
+	return f.LinkEdgesErr
+}
+
+// Neighbors records its arguments and returns the configured result/error.
+func (f *FakeStore) Neighbors(_ context.Context, seedIDs []engram.MemoryID, scope []engram.Namespace) ([]engram.Neighbor, error) {
+	f.LastNeighborSeeds, f.LastNeighborScope = seedIDs, scope
+	return f.NeighborsRes, f.NeighborsErr
 }
