@@ -23,6 +23,7 @@ func testHandlers(emb *mock.FakeEmbedder, st *mock.FakeStore) *handlers {
 		reranker:         &mock.FakeReranker{},
 		decay:            mock.FakeDecay{R: 1}, // nothing soft-forgotten by default
 		store:            st,
+		forget:           st,
 		clock:            fixedClock{},
 		dedupThreshold:   defaultDedupThreshold,
 		seedN:            defaultSeedN,

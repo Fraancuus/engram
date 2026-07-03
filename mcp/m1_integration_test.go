@@ -44,6 +44,7 @@ func liveHandlers(t *testing.T) *handlers {
 		reranker:         inference.NewReranker(envOr("TEI_RERANK_TEST_URL", "http://localhost:8081")),
 		decay:            engram.TypeAwareDecay{},
 		store:            store,
+		forget:           store,
 		clock:            fixedClock{},
 		dedupThreshold:   defaultDedupThreshold,
 		seedN:            defaultSeedN,

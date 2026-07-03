@@ -30,6 +30,7 @@ type handlers struct {
 	reranker         engram.Reranker
 	decay            engram.DecayModel
 	store            Store
+	forget           forgetStore
 	clock            engram.Clock
 	dedupThreshold   float64
 	seedN            int
