@@ -28,7 +28,9 @@ reinforce-on-access, decay sweep, supersession. **→ M6:** `memory_stats`.
 5. **Take k**, then **token-budget assembly:** greedily pack results under a max-token
    ceiling (`maxTokens`; token ≈ `len(content)/4`), stopping before the ceiling is
    exceeded (may return fewer than `k`).
-6. Map to DTO; `score` = rerank score; `retrieved_via` unchanged.
+6. Map to DTO; `score` = the rerank score when reranking applies, else the retrieval
+   (blend) score — see *Graceful degradation* below and the single-candidate bypass;
+   `retrieved_via` unchanged.
 
 **Graceful degradation:** if the reranker errors or is unreachable, `recall` logs it and
 falls back to the blend order — rerank is a quality enhancement, not a correctness

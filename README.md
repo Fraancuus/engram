@@ -96,7 +96,7 @@ go run ./cmd/engramd                                               # serves the 
 command (`go run ./cmd/engramd`, or a built binary). It exposes two tools:
 
 - **`remember`** — `{content, type, namespace, importance?, source?, entities?, links?}` → `{memory_id, deduped}`. Embeds the content, deduplicates within the namespace (reinforcing a near-identical memory instead of inserting), writes `:Entity` nodes + `[:MENTIONS]` edges, and **auto-links** to sufficiently-similar neighbors (plus any explicit `links`) via weighted `[:LINKS]` edges.
-- **`recall`** — `{query, namespaces?, k?}` → ranked `[{id, content, score, type, namespace, provenance}]`. Vector kNN seeds are expanded via 1-hop `[:LINKS]` and entity bridges (cross-namespace unless scoped); the expanded candidates are **reranked by a cross-encoder** (`score` is the rerank score; degrades to similarity order if the reranker is unavailable) and the result is packed under a **token budget**. `provenance.retrieved_via` reports how each result surfaced (`vector` / `link` / `entity:<name>`).
+- **`recall`** — `{query, namespaces?, k?}` → ranked `[{id, content, score, type, namespace, provenance}]`. Vector kNN seeds are expanded via 1-hop `[:LINKS]` and entity bridges (cross-namespace unless scoped); the expanded candidates are **reranked by a cross-encoder** (`score` is the cross-encoder score when reranking applies, or the similarity/blend score when it is skipped — a lone candidate — or the reranker is unavailable) and the result is packed under a **token budget**. `provenance.retrieved_via` reports how each result surfaced (`vector` / `link` / `entity:<name>`).
 
 Service-backed tests are tagged `integration` and excluded from the default unit run:
 
