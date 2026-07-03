@@ -219,10 +219,12 @@ func (h *handlers) doRemember(ctx context.Context, in rememberInput) (out rememb
 			ids[i] = engram.MemoryID(sid)
 		}
 		if err := h.store.Supersede(ctx, ids); err != nil {
-			h.log.Error("remember: supersede failed", "err", err)
-			return rememberOutput{}, errors.New("remember: store unavailable")
+			// The memory is already stored; supersession is best-effort, so log and return the
+			// successful insert rather than failing an accepted write.
+			h.log.Error("remember: supersede failed (memory stored)", "err", err)
+		} else {
+			out.Superseded = in.Supersedes
 		}
-		out.Superseded = in.Supersedes
 	}
 	return out, nil
 }

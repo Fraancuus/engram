@@ -518,9 +518,15 @@ func mapToMemory(p map[string]any) (engram.Memory, error) {
 	if m.Stability, err = prop[float64](p, "stability"); err != nil {
 		return engram.Memory{}, err
 	}
-	m.Superseded = boolProp(p, "superseded")
-	m.Pinned = boolProp(p, "pinned")
-	m.Forgotten = boolProp(p, "forgotten")
+	if m.Superseded, err = boolProp(p, "superseded"); err != nil {
+		return engram.Memory{}, err
+	}
+	if m.Pinned, err = boolProp(p, "pinned"); err != nil {
+		return engram.Memory{}, err
+	}
+	if m.Forgotten, err = boolProp(p, "forgotten"); err != nil {
+		return engram.Memory{}, err
+	}
 	accessCount, err := prop[int64](p, "access_count")
 	if err != nil {
 		return engram.Memory{}, err
@@ -555,11 +561,19 @@ func prop[T any](p map[string]any, key string) (T, error) {
 	return t, nil
 }
 
-// boolProp reads an optional boolean property, defaulting to false when it is absent or of
-// an unexpected type — so memories written before the property existed read cleanly.
-func boolProp(p map[string]any, key string) bool {
-	b, _ := p[key].(bool)
-	return b
+// boolProp reads an optional boolean property: absent (a pre-migration row) reads as false
+// and a bool reads through, but a present non-bool value is a corruption we surface rather
+// than silently treat as false (which could unpin a memory and get it pruned).
+func boolProp(p map[string]any, key string) (bool, error) {
+	v, ok := p[key]
+	if !ok || v == nil { // a map projection returns an absent property as an explicit nil
+		return false, nil
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return false, fmt.Errorf("property %q: want bool, got %T", key, v)
+	}
+	return b, nil
 }
 
 // strProp extracts a string property and converts it to a string-kind type T

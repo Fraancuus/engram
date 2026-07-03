@@ -91,3 +91,14 @@ func TestSweepOnceAtFloorKeeps(t *testing.T) {
 		t.Errorf("memory at exactly the floor pruned: n=%d", n)
 	}
 }
+
+func TestNewGuardsConstruction(t *testing.T) {
+	t.Parallel()
+	// nil log + interval/batch <= 0 are defaulted at construction; the delete-error log path
+	// must not panic on a nil logger.
+	p := &mock.FakeStore{PruneCands: []engram.Memory{{ID: "a"}}, DeleteErr: errors.New("boom")}
+	sw := New(p, mock.FakeDecay{R: 0}, fixedClock{}, 0, time.Hour, 0.02, 0, nil)
+	if _, err := sw.SweepOnce(context.Background(), fixedClock{}.Now()); err != nil {
+		t.Fatalf("SweepOnce with defaulted config: %v", err)
+	}
+}

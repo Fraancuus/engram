@@ -106,6 +106,25 @@ func TestDoRememberTooManySupersedes(t *testing.T) {
 	}
 }
 
+func TestDoRememberSupersedeFailureDoesNotFailInsert(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SupersedeErr: errors.New("db-down")}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	in := validRemember()
+	in.Type = "procedural"
+	in.Supersedes = []string{"old1"}
+	out, err := h.doRemember(context.Background(), in)
+	if err != nil {
+		t.Fatalf("remember must succeed after a successful insert even if supersede fails: %v", err)
+	}
+	if out.MemoryID == "" || len(st.Puts) != 1 {
+		t.Error("the memory should still have been stored")
+	}
+	if out.Superseded != nil {
+		t.Errorf("Superseded = %v, want nil (supersession failed)", out.Superseded)
+	}
+}
+
 func TestDoRememberSetsInitialStability(t *testing.T) {
 	t.Parallel()
 	st := &mock.FakeStore{}

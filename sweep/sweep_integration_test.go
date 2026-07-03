@@ -43,7 +43,10 @@ func TestSweepOncePrunesDecayedLive(t *testing.T) {
 	ctx := context.Background()
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	ns := engram.Namespace("sweep-itest-" + suffix)
-	t0 := (fixedClock{}).Now()
+	// Anchor these memories in the far past (year 2000) so the grace-period filter makes
+	// only this test's data prune candidates — never other packages' newer test memories,
+	// which would otherwise be churned by the bulk delete during a concurrent `go test ./...`.
+	t0 := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 	emb := make(engram.Vector, 384)
 	emb[0] = 1
 	put := func(id engram.MemoryID, typ engram.MemoryType, pinned bool) {

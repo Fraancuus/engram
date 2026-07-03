@@ -35,6 +35,15 @@ type Sweeper struct {
 // access a memory must sit before it can be pruned; hardFloor is the retrievability below
 // which a candidate is deleted; batch bounds candidates fetched per tick.
 func New(p Pruner, d engram.DecayModel, c engram.Clock, interval, grace time.Duration, hardFloor float64, batch int, log *slog.Logger) *Sweeper {
+	if log == nil {
+		log = slog.Default()
+	}
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	if batch <= 0 {
+		batch = 500
+	}
 	return &Sweeper{
 		pruner:    p,
 		decay:     d,

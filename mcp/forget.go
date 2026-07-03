@@ -27,9 +27,10 @@ type forgetOutput struct {
 	OK bool `json:"ok"`
 }
 
-// doForget validates the untrusted input and dispatches to the matching lifecycle op. A
-// missing id surfaces as a legible ErrNotFound (actionable for the caller); other internal
-// failures are logged and returned sanitized.
+// doForget validates the untrusted input and dispatches to the matching lifecycle op. For
+// soft/hard/pin a missing id surfaces as a legible ErrNotFound (actionable for the caller);
+// supersede is idempotent and succeeds even for an absent id. Other internal failures are
+// logged and returned sanitized.
 func (h *handlers) doForget(ctx context.Context, in forgetInput) (out forgetOutput, err error) {
 	defer func() {
 		if r := recover(); r != nil {
