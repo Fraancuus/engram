@@ -1,6 +1,6 @@
 // Command engramd is the Engram memory service. It wires the domain to its Neo4j and
-// inference adapters by hand (no DI container) in main and serves the MCP tools
-// (remember, recall) over stdio.
+// inference adapters by hand (no DI container) in main, serves the MCP tools
+// (remember, recall, forget) over stdio, and runs the decay sweep in the background.
 package main
 
 import (
@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/Fraancuus/engram/inference"
 	"github.com/Fraancuus/engram/mcp"
 	eneo4j "github.com/Fraancuus/engram/neo4j"
+	"github.com/Fraancuus/engram/sweep"
 )
 
 // systemClock is the production engram.Clock: the wall clock. It lives here at the wiring
@@ -27,6 +29,14 @@ type systemClock struct{}
 func (systemClock) Now() time.Time { return time.Now() }
 
 var _ engram.Clock = systemClock{}
+
+// Decay sweep configuration (see docs/engram-m4-design.md).
+const (
+	sweepInterval = time.Hour
+	sweepGrace    = 30 * 24 * time.Hour
+	sweepFloor    = 0.02
+	sweepBatch    = 500
+)
 
 func main() {
 	if err := run(); err != nil {
@@ -55,10 +65,22 @@ func run() error {
 	decay := engram.TypeAwareDecay{}
 	srv := mcp.NewServer(embedder, reranker, decay, store, systemClock{})
 
+	// The decay sweep runs alongside serving and exits when ctx is cancelled.
+	sweeper := sweep.New(store, decay, systemClock{}, sweepInterval, sweepGrace, sweepFloor, sweepBatch, slog.Default())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		sweeper.Run(ctx)
+	}()
+
 	// Logs go to stderr (slog default); stdout carries the MCP stdio protocol.
-	slog.Info("engramd serving MCP over stdio", "tools", "remember,recall")
-	if err := mcp.Serve(ctx, srv); err != nil && !errors.Is(err, context.Canceled) {
-		return err
+	slog.Info("engramd serving MCP over stdio", "tools", "remember,recall,forget", "sweep_interval", sweepInterval.String())
+	serveErr := mcp.Serve(ctx, srv)
+	stop() // cancel ctx (even on a clean client disconnect) so the sweep goroutine drains
+	wg.Wait()
+	if serveErr != nil && !errors.Is(serveErr, context.Canceled) {
+		return serveErr
 	}
 	return nil
 }
