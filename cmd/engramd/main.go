@@ -52,7 +52,8 @@ func run() error {
 
 	embedder := inference.New(getenv("TEI_URL", "http://localhost:8080"))
 	reranker := inference.NewReranker(getenv("TEI_RERANK_URL", "http://localhost:8081"))
-	srv := mcp.NewServer(embedder, reranker, store, systemClock{})
+	decay := engram.TypeAwareDecay{}
+	srv := mcp.NewServer(embedder, reranker, decay, store, systemClock{})
 
 	// Logs go to stderr (slog default); stdout carries the MCP stdio protocol.
 	slog.Info("engramd serving MCP over stdio", "tools", "remember,recall")

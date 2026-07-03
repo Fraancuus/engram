@@ -235,3 +235,81 @@ func TestDoRecallRerankCountMismatchFallback(t *testing.T) {
 		t.Errorf("fallback order = %v, want blend order [s1 ...]", got)
 	}
 }
+
+func TestDoRecallSoftForget(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{
+		{Memory: engram.Memory{ID: "s1", Content: "a"}, Score: 0.9},
+	}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	h.decay = mock.FakeDecay{R: 0} // below softThreshold -> soft-forgotten
+
+	out, err := h.doRecall(context.Background(), recallInput{Query: "q"})
+	if err != nil {
+		t.Fatalf("doRecall: %v", err)
+	}
+	if len(out.Results) != 0 {
+		t.Errorf("soft-forgotten memory returned: %v", resultIDs(out))
+	}
+
+	out, err = h.doRecall(context.Background(), recallInput{Query: "q", IncludeForgotten: true})
+	if err != nil {
+		t.Fatalf("doRecall(include_forgotten): %v", err)
+	}
+	if len(out.Results) != 1 || out.Results[0].ID != "s1" {
+		t.Errorf("include_forgotten did not return it: %v", resultIDs(out))
+	}
+}
+
+func TestDoRecallExcludesSupersededAndForgotten(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{
+		{Memory: engram.Memory{ID: "sup", Content: "a", Superseded: true}, Score: 0.9},
+		{Memory: engram.Memory{ID: "forg", Content: "b", Forgotten: true}, Score: 0.9},
+		{Memory: engram.Memory{ID: "ok", Content: "c"}, Score: 0.9},
+	}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	h.decay = mock.FakeDecay{R: 1}
+	out, err := h.doRecall(context.Background(), recallInput{Query: "q"})
+	if err != nil {
+		t.Fatalf("doRecall: %v", err)
+	}
+	if got := resultIDs(out); len(got) != 1 || got[0] != "ok" {
+		t.Errorf("results = %v, want [ok] (superseded/forgotten excluded)", got)
+	}
+}
+
+func TestDoRecallWeightedScore(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{
+		{Memory: engram.Memory{ID: "s1", Content: "a", Importance: 0.25}, Score: 0.5},
+	}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	h.decay = mock.FakeDecay{R: 0.125}
+	h.wSim, h.wImp, h.wRet = 2, 4, 8
+	out, err := h.doRecall(context.Background(), recallInput{Query: "q"})
+	if err != nil {
+		t.Fatalf("doRecall: %v", err)
+	}
+	// 2*0.5 + 4*0.25 + 8*0.125 = 1 + 1 + 1 = 3 (all binary-exact).
+	if len(out.Results) != 1 || out.Results[0].Score != 3.0 {
+		t.Errorf("weighted score = %v, want 3.0", out.Results[0].Score)
+	}
+}
+
+func TestDoRecallReinforcesResults(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{
+		{Memory: engram.Memory{ID: "s1", Content: "a"}, Score: 0.9},
+	}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	if _, err := h.doRecall(context.Background(), recallInput{Query: "q"}); err != nil {
+		t.Fatalf("doRecall: %v", err)
+	}
+	if len(st.Reinforced) != 1 || st.Reinforced[0] != "s1" {
+		t.Errorf("Reinforced = %v, want [s1]", st.Reinforced)
+	}
+	if st.LastPropagateID != "s1" || st.LastPropagateThr != propagateThreshold {
+		t.Errorf("propagate = id:%q thr:%v, want s1/%v", st.LastPropagateID, st.LastPropagateThr, propagateThreshold)
+	}
+}

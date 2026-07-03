@@ -21,18 +21,24 @@ type Store interface {
 	LinkEntities(ctx context.Context, id engram.MemoryID, names []string) error
 	Link(ctx context.Context, from engram.MemoryID, links []engram.Link) error
 	Neighbors(ctx context.Context, seedIDs []engram.MemoryID, scope []engram.Namespace) ([]engram.Neighbor, error)
+	PropagateReinforce(ctx context.Context, id engram.MemoryID, weightThreshold float64, now time.Time) error
 }
 
 // handlers holds the dependencies shared by the MCP tool handlers.
 type handlers struct {
 	embedder         engram.Embedder
 	reranker         engram.Reranker
+	decay            engram.DecayModel
 	store            Store
 	clock            engram.Clock
 	dedupThreshold   float64
 	seedN            int
 	rerankCandidates int
 	maxTokens        int
+	wSim             float64
+	wImp             float64
+	wRet             float64
+	softThreshold    float64
 	log              *slog.Logger
 	newID            func() (engram.MemoryID, error)
 }

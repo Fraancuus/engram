@@ -21,12 +21,17 @@ func testHandlers(emb *mock.FakeEmbedder, st *mock.FakeStore) *handlers {
 	return &handlers{
 		embedder:         emb,
 		reranker:         &mock.FakeReranker{},
+		decay:            mock.FakeDecay{R: 1}, // nothing soft-forgotten by default
 		store:            st,
 		clock:            fixedClock{},
 		dedupThreshold:   defaultDedupThreshold,
 		seedN:            defaultSeedN,
 		rerankCandidates: defaultRerankCandidates,
 		maxTokens:        defaultMaxTokens,
+		wSim:             1, // wImp/wRet 0 so unit-test scores stay the raw similarity
+		wImp:             0,
+		wRet:             0,
+		softThreshold:    defaultSoftThresh,
 		log:              slog.New(slog.NewTextHandler(io.Discard, nil)),
 		newID:            func() (engram.MemoryID, error) { return "test-id", nil },
 	}
