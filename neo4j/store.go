@@ -60,7 +60,9 @@ SET m.namespace = $namespace,
     m.created_at = $created_at,
     m.last_accessed = $last_accessed,
     m.source = $source,
-    m.superseded = $superseded
+    m.superseded = $superseded,
+    m.pinned = $pinned,
+    m.forgotten = $forgotten
 WITH m
 CALL db.create.setNodeVectorProperty(m, 'embedding', $embedding)`
 	params := map[string]any{
@@ -77,6 +79,8 @@ CALL db.create.setNodeVectorProperty(m, 'embedding', $embedding)`
 		"last_accessed": m.LastAccessed.UTC(),
 		"source":        m.Source,
 		"superseded":    m.Superseded,
+		"pinned":        m.Pinned,
+		"forgotten":     m.Forgotten,
 		"embedding":     toFloat64(m.Embedding),
 	}
 	if _, err := neo4jdriver.ExecuteQuery(ctx, s.driver, q, params, neo4jdriver.EagerResultTransformer); err != nil {
@@ -131,7 +135,7 @@ func (s *Store) Search(ctx context.Context, namespaces []engram.Namespace, vec e
 CALL db.index.vector.queryNodes('memory_embedding', $fetch, $vec)
 YIELD node, score
 WHERE size($namespaces) = 0 OR node.namespace IN $namespaces
-RETURN node {.id, .namespace, .type, .content, .source, .importance, .stability, .superseded, .access_count, .created_at, .last_accessed} AS m, score
+RETURN node {.id, .namespace, .type, .content, .source, .importance, .stability, .superseded, .pinned, .forgotten, .access_count, .created_at, .last_accessed} AS m, score
 ORDER BY score DESC
 LIMIT $k`
 	params := map[string]any{
@@ -298,14 +302,14 @@ CALL {
   MATCH (seed)-[r:LINKS]-(nb:Memory)
   WHERE NOT nb.id IN $seeds
     AND (size($scope) = 0 OR nb.namespace IN $scope)
-  RETURN nb {.id, .namespace, .type, .content, .source, .importance, .stability, .superseded, .access_count, .created_at, .last_accessed} AS m, seed.id AS src, 'link' AS via, r.weight AS weight
+  RETURN nb {.id, .namespace, .type, .content, .source, .importance, .stability, .superseded, .pinned, .forgotten, .access_count, .created_at, .last_accessed} AS m, seed.id AS src, 'link' AS via, r.weight AS weight
   ORDER BY r.weight DESC LIMIT $cap
   UNION ALL
   WITH seed
   MATCH (seed)-[:MENTIONS]->(e:Entity)<-[:MENTIONS]-(nb:Memory)
   WHERE nb.id <> seed.id AND NOT nb.id IN $seeds
     AND (size($scope) = 0 OR nb.namespace IN $scope)
-  RETURN nb {.id, .namespace, .type, .content, .source, .importance, .stability, .superseded, .access_count, .created_at, .last_accessed} AS m, seed.id AS src, 'entity:' + e.name AS via, 1.0 AS weight
+  RETURN nb {.id, .namespace, .type, .content, .source, .importance, .stability, .superseded, .pinned, .forgotten, .access_count, .created_at, .last_accessed} AS m, seed.id AS src, 'entity:' + e.name AS via, 1.0 AS weight
   ORDER BY nb.id LIMIT $cap
 }
 RETURN m, src, via, weight`
@@ -351,6 +355,126 @@ RETURN m, src, via, weight`
 	return out, nil
 }
 
+// Supersede marks each of ids as superseded (begins its fast archival decay). Absent ids
+// are silently skipped — superseding an already-gone memory is a no-op, not an error.
+func (s *Store) Supersede(ctx context.Context, ids []engram.MemoryID) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	strs := make([]string, len(ids))
+	for i, id := range ids {
+		strs[i] = string(id)
+	}
+	const q = `MATCH (m:Memory) WHERE m.id IN $ids SET m.superseded = true`
+	if _, err := neo4jdriver.ExecuteQuery(ctx, s.driver, q,
+		map[string]any{"ids": strs}, neo4jdriver.EagerResultTransformer); err != nil {
+		return fmt.Errorf("supersede: %w", err)
+	}
+	return nil
+}
+
+// SetForgotten soft-forgets the memory (excluded from default recall). Returns
+// engram.ErrNotFound if no memory has the id.
+func (s *Store) SetForgotten(ctx context.Context, id engram.MemoryID) error {
+	const q = `MATCH (m:Memory {id: $id}) SET m.forgotten = true RETURN count(m) AS c`
+	return s.flagOne(ctx, "set forgotten", id, q)
+}
+
+// Pin protects the memory from decay. Returns engram.ErrNotFound if no memory has the id.
+func (s *Store) Pin(ctx context.Context, id engram.MemoryID) error {
+	const q = `MATCH (m:Memory {id: $id}) SET m.pinned = true RETURN count(m) AS c`
+	return s.flagOne(ctx, "pin", id, q)
+}
+
+// flagOne runs a single-memory flag-setting query (q is a compile-time constant, never
+// input) and maps a zero match count to engram.ErrNotFound.
+func (s *Store) flagOne(ctx context.Context, op string, id engram.MemoryID, q string) error {
+	res, err := neo4jdriver.ExecuteQuery(ctx, s.driver, q,
+		map[string]any{"id": string(id)}, neo4jdriver.EagerResultTransformer)
+	if err != nil {
+		return fmt.Errorf("%s %q: %w", op, id, err)
+	}
+	if len(res.Records) == 0 {
+		return fmt.Errorf("%s %q: %w", op, id, engram.ErrNotFound)
+	}
+	n, err := recordValue[int64](res.Records[0], "c")
+	if err != nil {
+		return fmt.Errorf("%s %q: %w", op, id, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%s %q: %w", op, id, engram.ErrNotFound)
+	}
+	return nil
+}
+
+// Delete removes the memory and its relationships. Returns engram.ErrNotFound if no memory
+// has the id.
+func (s *Store) Delete(ctx context.Context, id engram.MemoryID) error {
+	const q = `
+MATCH (m:Memory {id: $id})
+WITH m, count(m) AS c
+DETACH DELETE m
+RETURN c`
+	res, err := neo4jdriver.ExecuteQuery(ctx, s.driver, q,
+		map[string]any{"id": string(id)}, neo4jdriver.EagerResultTransformer)
+	if err != nil {
+		return fmt.Errorf("delete %q: %w", id, err)
+	}
+	if len(res.Records) == 0 {
+		return fmt.Errorf("delete %q: %w", id, engram.ErrNotFound)
+	}
+	return nil
+}
+
+// PruneCandidates returns up to limit non-pinned memories whose last_accessed predates
+// before — the cheap pre-filter for the decay sweep, which then computes retrievability in
+// Go. Embeddings are projected away.
+func (s *Store) PruneCandidates(ctx context.Context, before time.Time, limit int) ([]engram.Memory, error) {
+	const q = `
+MATCH (m:Memory)
+WHERE m.last_accessed < $before AND coalesce(m.pinned, false) = false
+RETURN m {.id, .namespace, .type, .content, .source, .importance, .stability, .superseded, .pinned, .forgotten, .access_count, .created_at, .last_accessed} AS m
+LIMIT $limit`
+	res, err := neo4jdriver.ExecuteQuery(ctx, s.driver, q,
+		map[string]any{"before": before.UTC(), "limit": limit}, neo4jdriver.EagerResultTransformer)
+	if err != nil {
+		return nil, fmt.Errorf("prune candidates: %w", err)
+	}
+	out := make([]engram.Memory, 0, len(res.Records))
+	for _, rec := range res.Records {
+		raw, ok := rec.Get("m")
+		if !ok {
+			return nil, fmt.Errorf("prune candidates: record missing memory")
+		}
+		p, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("prune candidates: memory is %T, want map", raw)
+		}
+		m, err := mapToMemory(p)
+		if err != nil {
+			return nil, fmt.Errorf("prune candidates: %w", err)
+		}
+		out = append(out, m)
+	}
+	return out, nil
+}
+
+// PropagateReinforce refreshes the last_accessed of the memory's strong-edge (weight >=
+// weightThreshold) 1-hop LINKS neighbors to now — spreading activation from an accessed
+// memory, without bumping their access_count.
+func (s *Store) PropagateReinforce(ctx context.Context, id engram.MemoryID, weightThreshold float64, now time.Time) error {
+	const q = `
+MATCH (a:Memory {id: $id})-[r:LINKS]-(nb:Memory)
+WHERE r.weight >= $thr
+SET nb.last_accessed = $now`
+	if _, err := neo4jdriver.ExecuteQuery(ctx, s.driver, q,
+		map[string]any{"id": string(id), "thr": weightThreshold, "now": now.UTC()},
+		neo4jdriver.EagerResultTransformer); err != nil {
+		return fmt.Errorf("propagate reinforce %q: %w", id, err)
+	}
+	return nil
+}
+
 // toFloat64 widens an embedding for storage; Neo4j list/vector properties are float64.
 func toFloat64(v engram.Vector) []float64 {
 	out := make([]float64, len(v))
@@ -389,9 +513,9 @@ func mapToMemory(p map[string]any) (engram.Memory, error) {
 	if m.Stability, err = prop[float64](p, "stability"); err != nil {
 		return engram.Memory{}, err
 	}
-	if m.Superseded, err = prop[bool](p, "superseded"); err != nil {
-		return engram.Memory{}, err
-	}
+	m.Superseded = boolProp(p, "superseded")
+	m.Pinned = boolProp(p, "pinned")
+	m.Forgotten = boolProp(p, "forgotten")
 	accessCount, err := prop[int64](p, "access_count")
 	if err != nil {
 		return engram.Memory{}, err
@@ -424,6 +548,13 @@ func prop[T any](p map[string]any, key string) (T, error) {
 		return zero, fmt.Errorf("property %q: want %T, got %T", key, zero, v)
 	}
 	return t, nil
+}
+
+// boolProp reads an optional boolean property, defaulting to false when it is absent or of
+// an unexpected type — so memories written before the property existed read cleanly.
+func boolProp(p map[string]any, key string) bool {
+	b, _ := p[key].(bool)
+	return b
 }
 
 // strProp extracts a string property and converts it to a string-kind type T
