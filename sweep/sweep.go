@@ -61,7 +61,8 @@ func (s *Sweeper) SweepOnce(ctx context.Context, now time.Time) (pruned int, err
 		}
 		if s.decay.Retrievability(m, now) < s.hardFloor {
 			if err := s.pruner.Delete(ctx, m.ID); err != nil {
-				return pruned, fmt.Errorf("sweep delete %q: %w", m.ID, err)
+				s.log.Error("sweep: delete failed", "id", m.ID, "err", err)
+				continue
 			}
 			pruned++
 		}

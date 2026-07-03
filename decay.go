@@ -63,7 +63,11 @@ func (d TypeAwareDecay) Retrievability(m Memory, now time.Time) float64 {
 
 // Stability implements DecayModel: type-keyed S0 raised by reinforcement and importance.
 func (TypeAwareDecay) Stability(t MemoryType, accessCount int, importance float64) float64 {
-	return s0ByType[t] * (1 + reinforceGain*float64(accessCount)) * (1 + importance)
+	s0, ok := s0ByType[t]
+	if !ok {
+		s0 = s0ByType[Episodic] // an unregistered type falls back to the fastest curve, never S=0
+	}
+	return s0 * (1 + reinforceGain*float64(accessCount)) * (1 + importance)
 }
 
 // UniformDecay is the one-curve-for-all baseline (eval arm B): it ignores type, so it

@@ -91,6 +91,21 @@ func TestDoRememberSupersedesValidation(t *testing.T) {
 	}
 }
 
+func TestDoRememberTooManySupersedes(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	in := validRemember()
+	in.Type = "procedural"
+	in.Supersedes = make([]string, maxEntities+1)
+	for i := range in.Supersedes {
+		in.Supersedes[i] = "x"
+	}
+	if _, err := h.doRemember(context.Background(), in); err == nil {
+		t.Error("want error for too many supersedes")
+	}
+}
+
 func TestDoRememberSetsInitialStability(t *testing.T) {
 	t.Parallel()
 	st := &mock.FakeStore{}

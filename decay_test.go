@@ -96,3 +96,40 @@ func TestStabilityMonotonic(t *testing.T) {
 		t.Error("semantic S0 should exceed episodic S0")
 	}
 }
+
+func TestDaysSinceBoundaries(t *testing.T) {
+	t.Parallel()
+	if got := daysSince(decayBase, daysLater(1)); got != 0 {
+		t.Errorf("daysSince(now, future) = %v, want 0 (clamped)", got)
+	}
+	if got := daysSince(daysLater(1), decayBase); got <= 0 {
+		t.Errorf("daysSince(now, past) = %v, want > 0", got)
+	}
+	if got := daysSince(decayBase, decayBase); got != 0 {
+		t.Errorf("daysSince(now, now) = %v, want 0", got)
+	}
+}
+
+func TestTypeAwareSupersededDecaysFast(t *testing.T) {
+	t.Parallel()
+	// A superseded memory uses the fast archival curve regardless of type: a semantic
+	// memory that would barely decay in 2 days drops to ~1/e once superseded.
+	m := mem(Semantic, 0, decayBase)
+	m.Superseded = true
+	if got := (TypeAwareDecay{}).Retrievability(m, daysLater(2)); math.Abs(got-math.Exp(-1)) > 1e-6 {
+		t.Errorf("superseded semantic R at 2d = %v, want ~1/e (fast archival)", got)
+	}
+}
+
+func TestTypeAwareUnknownTypeFallsBack(t *testing.T) {
+	t.Parallel()
+	// An unregistered type must not silently yield S=0 (which would hard-prune a fresh
+	// memory); it falls back to a sane stability.
+	d := TypeAwareDecay{}
+	if got := d.Stability(MemoryType("reference"), 0, 0); got <= 0 {
+		t.Errorf("Stability(unknown) = %v, want > 0 (fallback)", got)
+	}
+	if got := d.Retrievability(mem(MemoryType("reference"), 0, decayBase), decayBase); got == 0 {
+		t.Errorf("Retrievability(fresh unknown) = %v, want > 0", got)
+	}
+}

@@ -313,3 +313,19 @@ func TestDoRecallReinforcesResults(t *testing.T) {
 		t.Errorf("propagate = id:%q thr:%v, want s1/%v", st.LastPropagateID, st.LastPropagateThr, propagateThreshold)
 	}
 }
+
+func TestDoRecallReinforceFailureDoesNotFailRecall(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{
+		SearchResults: []engram.RecallResult{{Memory: engram.Memory{ID: "s1", Content: "a"}, Score: 0.9}},
+		ReinforceErr:  errors.New("db-down"),
+	}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	out, err := h.doRecall(context.Background(), recallInput{Query: "q"})
+	if err != nil {
+		t.Fatalf("recall must succeed even when reinforce fails: %v", err)
+	}
+	if len(out.Results) != 1 {
+		t.Errorf("results = %d, want 1 (reinforce failure is non-fatal)", len(out.Results))
+	}
+}

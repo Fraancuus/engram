@@ -255,8 +255,10 @@ func (h *handlers) scoreAndFilter(cands []engram.RecallResult, now time.Time, in
 }
 
 // reinforce records access on the returned memories (last_accessed/access_count) and
-// spreads a freshness bump to their strong-edge neighbors. Failures never fail recall —
-// the results are already assembled — so they are logged and skipped.
+// spreads a freshness bump to their strong-edge neighbors. It runs synchronously before the
+// response is sent — a deliberate v1 tradeoff (correctness over latency; a detached, batched
+// write is a future optimization). A reinforce failure is logged and skipped so it never
+// fails an otherwise-successful recall.
 func (h *handlers) reinforce(ctx context.Context, results []engram.RecallResult, now time.Time) {
 	for _, r := range results {
 		if err := h.store.Reinforce(ctx, r.ID, now); err != nil {

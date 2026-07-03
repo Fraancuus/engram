@@ -67,8 +67,27 @@ func TestSweepOnceErrorsPropagate(t *testing.T) {
 	if _, err := testSweeper(p, mock.FakeDecay{R: 0}).SweepOnce(context.Background(), fixedClock{}.Now()); err == nil {
 		t.Error("want error when PruneCandidates fails")
 	}
+	// A Delete failure is best-effort: logged and skipped, not fatal — the sweep continues.
 	p2 := &mock.FakeStore{PruneCands: []engram.Memory{{ID: "a"}}, DeleteErr: errors.New("boom")}
-	if _, err := testSweeper(p2, mock.FakeDecay{R: 0}).SweepOnce(context.Background(), fixedClock{}.Now()); err == nil {
-		t.Error("want error when Delete fails")
+	n, err := testSweeper(p2, mock.FakeDecay{R: 0}).SweepOnce(context.Background(), fixedClock{}.Now())
+	if err != nil {
+		t.Errorf("Delete failure should not fail the sweep: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("pruned = %d, want 0 (delete failed)", n)
+	}
+}
+
+func TestSweepOnceAtFloorKeeps(t *testing.T) {
+	t.Parallel()
+	// The prune condition is strictly < hardFloor(0.02), so a memory at exactly the floor
+	// is kept.
+	p := &mock.FakeStore{PruneCands: []engram.Memory{{ID: "a"}}}
+	n, err := testSweeper(p, mock.FakeDecay{R: 0.02}).SweepOnce(context.Background(), fixedClock{}.Now())
+	if err != nil {
+		t.Fatalf("SweepOnce: %v", err)
+	}
+	if n != 0 || len(p.Deleted) != 0 {
+		t.Errorf("memory at exactly the floor pruned: n=%d", n)
 	}
 }

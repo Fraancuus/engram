@@ -79,3 +79,13 @@ func TestDoForgetStoreErrorSanitized(t *testing.T) {
 		t.Errorf("leaks internal detail: %q", err.Error())
 	}
 }
+
+func TestDoForgetSoftNotFound(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SetForgottenErr: engram.ErrNotFound}
+	h := testHandlers(&mock.FakeEmbedder{}, st)
+	_, err := h.doForget(context.Background(), forgetInput{ID: "missing", Mode: "soft"})
+	if !errors.Is(err, engram.ErrNotFound) {
+		t.Errorf("doForget(soft, missing) = %v, want wrapped ErrNotFound", err)
+	}
+}

@@ -459,16 +459,21 @@ LIMIT $limit`
 	return out, nil
 }
 
+// propagateReinforceCap bounds how many strong-edge neighbors a single reinforce touches,
+// so a hub memory cannot turn one recall into an unbounded write fan-out.
+const propagateReinforceCap = 20
+
 // PropagateReinforce refreshes the last_accessed of the memory's strong-edge (weight >=
 // weightThreshold) 1-hop LINKS neighbors to now — spreading activation from an accessed
-// memory, without bumping their access_count.
+// memory, without bumping their access_count. The fan-out is capped at propagateReinforceCap.
 func (s *Store) PropagateReinforce(ctx context.Context, id engram.MemoryID, weightThreshold float64, now time.Time) error {
 	const q = `
 MATCH (a:Memory {id: $id})-[r:LINKS]-(nb:Memory)
 WHERE r.weight >= $thr
+WITH nb, r ORDER BY r.weight DESC LIMIT $cap
 SET nb.last_accessed = $now`
 	if _, err := neo4jdriver.ExecuteQuery(ctx, s.driver, q,
-		map[string]any{"id": string(id), "thr": weightThreshold, "now": now.UTC()},
+		map[string]any{"id": string(id), "thr": weightThreshold, "cap": propagateReinforceCap, "now": now.UTC()},
 		neo4jdriver.EagerResultTransformer); err != nil {
 		return fmt.Errorf("propagate reinforce %q: %w", id, err)
 	}
