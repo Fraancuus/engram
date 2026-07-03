@@ -169,3 +169,69 @@ func TestDoRecallRejectsBlankNamespace(t *testing.T) {
 		t.Fatal("want error for whitespace-only namespace")
 	}
 }
+
+func TestDoRecallReranks(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{
+		{Memory: engram.Memory{ID: "s1", Content: "first"}, Score: 0.9},
+		{Memory: engram.Memory{ID: "s2", Content: "second"}, Score: 0.5},
+	}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	h.reranker = &mock.FakeReranker{Scores: []float64{0.1, 0.8}} // s1->0.1, s2->0.8 => s2 first
+	out, err := h.doRecall(context.Background(), recallInput{Query: "q"})
+	if err != nil {
+		t.Fatalf("doRecall: %v", err)
+	}
+	if got := resultIDs(out); len(got) != 2 || got[0] != "s2" || got[1] != "s1" {
+		t.Errorf("rerank order = %v, want [s2 s1]", got)
+	}
+	if out.Results[0].Score != 0.8 {
+		t.Errorf("top score = %v, want rerank score 0.8", out.Results[0].Score)
+	}
+	fr := h.reranker.(*mock.FakeReranker)
+	if fr.LastQuery != "q" || len(fr.LastDocs) != 2 || fr.LastDocs[0] != "first" {
+		t.Errorf("reranker got query=%q docs=%v", fr.LastQuery, fr.LastDocs)
+	}
+}
+
+func TestDoRecallRerankFallback(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{
+		{Memory: engram.Memory{ID: "s1", Content: "first"}, Score: 0.9},
+		{Memory: engram.Memory{ID: "s2", Content: "second"}, Score: 0.5},
+	}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	h.reranker = &mock.FakeReranker{Err: errors.New("rerank-down")}
+	out, err := h.doRecall(context.Background(), recallInput{Query: "q"})
+	if err != nil {
+		t.Fatalf("doRecall should not fail when rerank errors: %v", err)
+	}
+	if got := resultIDs(out); len(got) != 2 || got[0] != "s1" || got[1] != "s2" {
+		t.Errorf("fallback order = %v, want blend order [s1 s2]", got)
+	}
+}
+
+// countMismatchReranker returns fewer scores than docs with no error — the mismatch
+// fallback path that the validating FakeReranker can no longer produce.
+type countMismatchReranker struct{}
+
+func (countMismatchReranker) Rerank(_ context.Context, _ string, _ []string) ([]float64, error) {
+	return []float64{0.1}, nil
+}
+
+func TestDoRecallRerankCountMismatchFallback(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{
+		{Memory: engram.Memory{ID: "s1", Content: "first"}, Score: 0.9},
+		{Memory: engram.Memory{ID: "s2", Content: "second"}, Score: 0.5},
+	}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	h.reranker = countMismatchReranker{}
+	out, err := h.doRecall(context.Background(), recallInput{Query: "q"})
+	if err != nil {
+		t.Fatalf("doRecall must not fail on rerank count mismatch: %v", err)
+	}
+	if got := resultIDs(out); len(got) != 2 || got[0] != "s1" {
+		t.Errorf("fallback order = %v, want blend order [s1 ...]", got)
+	}
+}

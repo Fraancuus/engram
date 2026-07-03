@@ -21,6 +21,11 @@ const (
 	// discounts entity-bridge neighbors relative to the seed that reached them.
 	defaultSeedN  = 50
 	bridgePenalty = 0.5
+
+	// defaultRerankCandidates is how many top candidates go to the cross-encoder;
+	// defaultMaxTokens bounds the assembled recall output (approx tokens = len/4).
+	defaultRerankCandidates = 20
+	defaultMaxTokens        = 2048
 )
 
 type recallInput struct {
@@ -104,7 +109,18 @@ func (h *handlers) doRecall(ctx context.Context, in recallInput) (out recallOutp
 		h.log.Error("recall: neighbors failed", "err", err)
 		return recallOutput{}, errors.New("recall: store unavailable")
 	}
-	results := blend(seeds, neighbors, k, bridgePenalty)
+	// Blend selects a candidate pool (>= k so the reranker has room to reorder), the
+	// reranker decides the final order, then we take k and trim under the token budget.
+	poolSize := k
+	if h.rerankCandidates > poolSize {
+		poolSize = h.rerankCandidates
+	}
+	cands := blend(seeds, neighbors, poolSize, bridgePenalty)
+	ranked := h.rerankResults(ctx, in.Query, cands)
+	if len(ranked) > k {
+		ranked = ranked[:k]
+	}
+	results := packBudget(ranked, h.maxTokens)
 
 	out = recallOutput{Results: make([]recallResultDTO, len(results))}
 	for i, r := range results {
@@ -138,6 +154,8 @@ func blend(seeds []engram.RecallResult, neighbors []engram.Neighbor, k int, brid
 		best[s.ID] = engram.RecallResult{Memory: s.Memory, Score: s.Score, RetrievedVia: "vector"}
 	}
 	for _, n := range neighbors {
+		// Link neighbors scale by their edge weight; entity bridges deliberately ignore
+		// n.Weight (the store returns a placeholder for them) and take a flat bridgePenalty.
 		score := seedSim[n.SourceID] * n.Weight
 		if strings.HasPrefix(n.Via, "entity:") {
 			score = seedSim[n.SourceID] * bridgePenalty
@@ -160,4 +178,48 @@ func blend(seeds []engram.RecallResult, neighbors []engram.Neighbor, k int, brid
 		out = out[:k]
 	}
 	return out
+}
+
+// rerankResults reorders candidates by the cross-encoder's score (the final authority).
+// If the reranker errors or returns a mismatched count it degrades to the blend order
+// (logged), so recall never fails solely because the reranker is unavailable.
+func (h *handlers) rerankResults(ctx context.Context, query string, cands []engram.RecallResult) []engram.RecallResult {
+	// Nothing to reorder with fewer than two candidates; the lone result keeps its
+	// retrieval (blend) score rather than paying for a single-doc cross-encoder call.
+	if len(cands) < 2 {
+		return cands
+	}
+	docs := make([]string, len(cands))
+	for i, c := range cands {
+		docs[i] = c.Content
+	}
+	scores, err := h.reranker.Rerank(ctx, query, docs)
+	if err != nil || len(scores) != len(cands) {
+		if err != nil {
+			h.log.Error("recall: rerank failed; using blend order", "err", err)
+		} else {
+			h.log.Error("recall: rerank count mismatch; using blend order", "want", len(cands), "got", len(scores))
+		}
+		return cands
+	}
+	out := make([]engram.RecallResult, len(cands))
+	copy(out, cands)
+	for i := range out {
+		out[i].Score = scores[i]
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	return out
+}
+
+// packBudget keeps results in order while their cumulative approximate token count
+// (len(content)/4) stays within maxTokens; it always keeps at least the first result.
+func packBudget(rs []engram.RecallResult, maxTokens int) []engram.RecallResult {
+	total := 0
+	for i, r := range rs {
+		total += len(r.Content)/4 + 1
+		if total > maxTokens && i > 0 {
+			return rs[:i]
+		}
+	}
+	return rs
 }

@@ -25,13 +25,16 @@ type Store interface {
 
 // handlers holds the dependencies shared by the MCP tool handlers.
 type handlers struct {
-	embedder       engram.Embedder
-	store          Store
-	clock          engram.Clock
-	dedupThreshold float64
-	seedN          int
-	log            *slog.Logger
-	newID          func() (engram.MemoryID, error)
+	embedder         engram.Embedder
+	reranker         engram.Reranker
+	store            Store
+	clock            engram.Clock
+	dedupThreshold   float64
+	seedN            int
+	rerankCandidates int
+	maxTokens        int
+	log              *slog.Logger
+	newID            func() (engram.MemoryID, error)
 }
 
 // Bounds on untrusted MCP input, enforced at the handler boundary.

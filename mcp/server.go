@@ -26,15 +26,18 @@ const (
 // from the Go input struct (the type gate); the handlers enforce the policy bounds.
 //
 // Serve it over stdio with Serve(ctx, srv).
-func NewServer(embedder engram.Embedder, store Store, clock engram.Clock) *mcpsdk.Server {
+func NewServer(embedder engram.Embedder, reranker engram.Reranker, store Store, clock engram.Clock) *mcpsdk.Server {
 	h := &handlers{
-		embedder:       embedder,
-		store:          store,
-		clock:          clock,
-		dedupThreshold: defaultDedupThreshold,
-		seedN:          defaultSeedN,
-		log:            slog.Default(),
-		newID:          newMemoryID,
+		embedder:         embedder,
+		reranker:         reranker,
+		store:            store,
+		clock:            clock,
+		dedupThreshold:   defaultDedupThreshold,
+		seedN:            defaultSeedN,
+		rerankCandidates: defaultRerankCandidates,
+		maxTokens:        defaultMaxTokens,
+		log:              slog.Default(),
+		newID:            newMemoryID,
 	}
 
 	srv := mcpsdk.NewServer(&mcpsdk.Implementation{Name: serverName, Version: serverVersion}, nil)

@@ -104,7 +104,7 @@ func (s *Store) Get(ctx context.Context, id engram.MemoryID) (engram.Memory, err
 	if !ok {
 		return engram.Memory{}, fmt.Errorf("get memory %q: result is %T, want node", id, raw)
 	}
-	m, err := nodeToMemory(node)
+	m, err := mapToMemory(node.Props)
 	if err != nil {
 		return engram.Memory{}, fmt.Errorf("get memory %q: %w", id, err)
 	}
@@ -131,7 +131,7 @@ func (s *Store) Search(ctx context.Context, namespaces []engram.Namespace, vec e
 CALL db.index.vector.queryNodes('memory_embedding', $fetch, $vec)
 YIELD node, score
 WHERE size($namespaces) = 0 OR node.namespace IN $namespaces
-RETURN node, score
+RETURN node {.id, .namespace, .type, .content, .source, .importance, .stability, .superseded, .access_count, .created_at, .last_accessed} AS m, score
 ORDER BY score DESC
 LIMIT $k`
 	params := map[string]any{
@@ -146,15 +146,15 @@ LIMIT $k`
 	}
 	out := make([]engram.RecallResult, 0, len(res.Records))
 	for _, rec := range res.Records {
-		raw, ok := rec.Get("node")
+		props, ok := rec.Get("m")
 		if !ok {
-			return nil, fmt.Errorf("search: record missing node")
+			return nil, fmt.Errorf("search: record missing memory")
 		}
-		node, ok := raw.(neo4jdriver.Node)
+		p, ok := props.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("search: node is %T, want node", raw)
+			return nil, fmt.Errorf("search: memory is %T, want map", props)
 		}
-		m, err := nodeToMemory(node)
+		m, err := mapToMemory(p)
 		if err != nil {
 			return nil, fmt.Errorf("search: %w", err)
 		}
@@ -298,17 +298,17 @@ CALL {
   MATCH (seed)-[r:LINKS]-(nb:Memory)
   WHERE NOT nb.id IN $seeds
     AND (size($scope) = 0 OR nb.namespace IN $scope)
-  RETURN nb, seed.id AS src, 'link' AS via, r.weight AS weight
+  RETURN nb {.id, .namespace, .type, .content, .source, .importance, .stability, .superseded, .access_count, .created_at, .last_accessed} AS m, seed.id AS src, 'link' AS via, r.weight AS weight
   ORDER BY r.weight DESC LIMIT $cap
   UNION ALL
   WITH seed
   MATCH (seed)-[:MENTIONS]->(e:Entity)<-[:MENTIONS]-(nb:Memory)
   WHERE nb.id <> seed.id AND NOT nb.id IN $seeds
     AND (size($scope) = 0 OR nb.namespace IN $scope)
-  RETURN nb, seed.id AS src, 'entity:' + e.name AS via, 1.0 AS weight
+  RETURN nb {.id, .namespace, .type, .content, .source, .importance, .stability, .superseded, .access_count, .created_at, .last_accessed} AS m, seed.id AS src, 'entity:' + e.name AS via, 1.0 AS weight
   ORDER BY nb.id LIMIT $cap
 }
-RETURN nb, src, via, weight`
+RETURN m, src, via, weight`
 	res, err := neo4jdriver.ExecuteQuery(ctx, s.driver, q, map[string]any{
 		"seeds": seeds, "scope": ns, "cap": neighborCapPerSeed,
 	}, neo4jdriver.EagerResultTransformer)
@@ -317,15 +317,15 @@ RETURN nb, src, via, weight`
 	}
 	out := make([]engram.Neighbor, 0, len(res.Records))
 	for _, rec := range res.Records {
-		nbRaw, ok := rec.Get("nb")
+		props, ok := rec.Get("m")
 		if !ok {
-			return nil, fmt.Errorf("neighbors: record missing node")
+			return nil, fmt.Errorf("neighbors: record missing memory")
 		}
-		node, ok := nbRaw.(neo4jdriver.Node)
+		p, ok := props.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("neighbors: nb is %T, want node", nbRaw)
+			return nil, fmt.Errorf("neighbors: memory is %T, want map", props)
 		}
-		m, err := nodeToMemory(node)
+		m, err := mapToMemory(p)
 		if err != nil {
 			return nil, fmt.Errorf("neighbors: %w", err)
 		}
@@ -360,11 +360,12 @@ func toFloat64(v engram.Vector) []float64 {
 	return out
 }
 
-// nodeToMemory maps a :Memory node's properties back into the domain type, failing if a
-// required property is missing or has an unexpected type rather than returning a
-// half-populated memory.
-func nodeToMemory(n neo4jdriver.Node) (engram.Memory, error) {
-	p := n.Props
+// mapToMemory maps a :Memory node's properties — from a full node's Props or a Cypher map
+// projection — back into the domain type, failing if a required property is missing or has
+// an unexpected type rather than returning a half-populated memory. The embedding is
+// optional: recall paths project it away for performance, so it is populated only when the
+// property is present.
+func mapToMemory(p map[string]any) (engram.Memory, error) {
 	var m engram.Memory
 	var err error
 	if m.ID, err = strProp[engram.MemoryID](p, "id"); err != nil {
@@ -402,8 +403,10 @@ func nodeToMemory(n neo4jdriver.Node) (engram.Memory, error) {
 	if m.LastAccessed, err = prop[time.Time](p, "last_accessed"); err != nil {
 		return engram.Memory{}, err
 	}
-	if m.Embedding, err = vecProp(p, "embedding"); err != nil {
-		return engram.Memory{}, err
+	if _, ok := p["embedding"]; ok {
+		if m.Embedding, err = vecProp(p, "embedding"); err != nil {
+			return engram.Memory{}, err
+		}
 	}
 	return m, nil
 }

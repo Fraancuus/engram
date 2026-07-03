@@ -4,7 +4,7 @@
 > service over a graph + vector store, with **type-aware forgetting**, namespaced
 > "universes", and a rigorous eval proving the forgetting actually helps.
 
-**Status:** v1 in progress — **M2 graph landed** (auto-linking + associative expansion: 1-hop links + entity bridges). Next: M3 rerank.
+**Status:** v1 in progress — **M3 rerank landed** (cross-encoder rerank of the expanded candidates + token-budget assembly). Next: M4 type-aware decay.
 **Module:** `github.com/Fraancuus/engram` · **Go:** 1.26
 
 Most "agent memory" projects are a vector store with `save()` and `search()`. They
@@ -87,7 +87,7 @@ the tools. See [CONTRIBUTING.md](CONTRIBUTING.md) for the gates-vs-agents workfl
 Bring up the stack, apply the schema, and serve the MCP tools over stdio:
 
 ```bash
-docker compose up -d --wait                                        # Neo4j + TEI (first run pulls images + model)
+docker compose up -d --wait                                        # Neo4j + TEI embed + TEI rerank (first run pulls images + models)
 docker compose exec -T neo4j cypher-shell < schema/001_init.cypher # apply schema (idempotent)
 go run ./cmd/engramd                                               # serves the MCP tools over stdio
 ```
@@ -96,7 +96,7 @@ go run ./cmd/engramd                                               # serves the 
 command (`go run ./cmd/engramd`, or a built binary). It exposes two tools:
 
 - **`remember`** — `{content, type, namespace, importance?, source?, entities?, links?}` → `{memory_id, deduped}`. Embeds the content, deduplicates within the namespace (reinforcing a near-identical memory instead of inserting), writes `:Entity` nodes + `[:MENTIONS]` edges, and **auto-links** to sufficiently-similar neighbors (plus any explicit `links`) via weighted `[:LINKS]` edges.
-- **`recall`** — `{query, namespaces?, k?}` → ranked `[{id, content, score, type, namespace, provenance}]`. Vector kNN seeds are expanded via 1-hop `[:LINKS]` and entity bridges (cross-namespace unless scoped), ranked by propagated scoring; `provenance.retrieved_via` reports how each result surfaced (`vector` / `link` / `entity:<name>`).
+- **`recall`** — `{query, namespaces?, k?}` → ranked `[{id, content, score, type, namespace, provenance}]`. Vector kNN seeds are expanded via 1-hop `[:LINKS]` and entity bridges (cross-namespace unless scoped); the expanded candidates are **reranked by a cross-encoder** (`score` is the cross-encoder score when reranking applies, or the similarity/blend score when it is skipped — a lone candidate — or the reranker is unavailable) and the result is packed under a **token budget**. `provenance.retrieved_via` reports how each result surfaced (`vector` / `link` / `entity:<name>`).
 
 Service-backed tests are tagged `integration` and excluded from the default unit run:
 
@@ -107,8 +107,8 @@ go test -tags integration ./...    # store + end-to-end — needs the stack up
 
 Config (env vars, with defaults): `NEO4J_URI` (`neo4j://localhost:7687`), `NEO4J_USER`
 (`neo4j`), `NEO4J_PASSWORD` (empty → the no-auth dev stack), `TEI_URL`
-(`http://localhost:8080`). The local stack runs Neo4j with `NEO4J_AUTH=none` bound to
-loopback — auth is out of v1 scope.
+(`http://localhost:8080`), `TEI_RERANK_URL` (`http://localhost:8081`). The local stack
+runs Neo4j with `NEO4J_AUTH=none` bound to loopback — auth is out of v1 scope.
 
 > A compose-backed CI job to run the `integration` tests is still a TODO.
 

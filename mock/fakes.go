@@ -2,6 +2,7 @@ package mock
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/Fraancuus/engram"
@@ -89,4 +90,25 @@ func (f *FakeStore) Link(_ context.Context, from engram.MemoryID, links []engram
 func (f *FakeStore) Neighbors(_ context.Context, seedIDs []engram.MemoryID, scope []engram.Namespace) ([]engram.Neighbor, error) {
 	f.LastNeighborSeeds, f.LastNeighborScope = seedIDs, scope
 	return f.NeighborsRes, f.NeighborsErr
+}
+
+// FakeReranker is a programmable engram.Reranker for tests: it records the query/docs and
+// returns the configured scores or error.
+type FakeReranker struct {
+	Scores    []float64
+	Err       error
+	LastQuery string
+	LastDocs  []string
+}
+
+// Rerank records its arguments and returns the configured scores/error.
+func (f *FakeReranker) Rerank(_ context.Context, query string, docs []string) ([]float64, error) {
+	f.LastQuery, f.LastDocs = query, docs
+	if f.Err != nil {
+		return nil, f.Err
+	}
+	if len(f.Scores) != len(docs) {
+		return nil, fmt.Errorf("FakeReranker misconfigured: %d docs, %d scores", len(docs), len(f.Scores))
+	}
+	return f.Scores, nil
 }

@@ -40,13 +40,16 @@ func liveHandlers(t *testing.T) *handlers {
 	}
 	t.Cleanup(func() { _ = store.Close(context.Background()) })
 	return &handlers{
-		embedder:       inference.New(envOr("TEI_TEST_URL", "http://localhost:8080")),
-		store:          store,
-		clock:          fixedClock{},
-		dedupThreshold: defaultDedupThreshold,
-		seedN:          defaultSeedN,
-		log:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-		newID:          newMemoryID,
+		embedder:         inference.New(envOr("TEI_TEST_URL", "http://localhost:8080")),
+		reranker:         inference.NewReranker(envOr("TEI_RERANK_TEST_URL", "http://localhost:8081")),
+		store:            store,
+		clock:            fixedClock{},
+		dedupThreshold:   defaultDedupThreshold,
+		seedN:            defaultSeedN,
+		rerankCandidates: defaultRerankCandidates,
+		maxTokens:        defaultMaxTokens,
+		log:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		newID:            newMemoryID,
 	}
 }
 
