@@ -4,7 +4,7 @@
 > service over a graph + vector store, with **type-aware forgetting**, namespaced
 > "universes", and a rigorous eval proving the forgetting actually helps.
 
-**Status:** v1 in progress — **M3 rerank landed** (cross-encoder rerank of the expanded candidates + token-budget assembly). Next: M4 type-aware decay.
+**Status:** v1 in progress — **M4 type-aware decay landed** (per-type retrievability, reinforce-on-access, the decay sweep, supersession, and the `forget` tool). Next: M5 eval.
 **Module:** `github.com/Fraancuus/engram` · **Go:** 1.26
 
 Most "agent memory" projects are a vector store with `save()` and `search()`. They
@@ -93,10 +93,13 @@ go run ./cmd/engramd                                               # serves the 
 ```
 
 `engramd` speaks the Model Context Protocol over stdio, so point any MCP client at the
-command (`go run ./cmd/engramd`, or a built binary). It exposes two tools:
+command (`go run ./cmd/engramd`, or a built binary). It exposes three tools:
 
-- **`remember`** — `{content, type, namespace, importance?, source?, entities?, links?}` → `{memory_id, deduped}`. Embeds the content, deduplicates within the namespace (reinforcing a near-identical memory instead of inserting), writes `:Entity` nodes + `[:MENTIONS]` edges, and **auto-links** to sufficiently-similar neighbors (plus any explicit `links`) via weighted `[:LINKS]` edges.
-- **`recall`** — `{query, namespaces?, k?}` → ranked `[{id, content, score, type, namespace, provenance}]`. Vector kNN seeds are expanded via 1-hop `[:LINKS]` and entity bridges (cross-namespace unless scoped); the expanded candidates are **reranked by a cross-encoder** (`score` is the cross-encoder score when reranking applies, or the similarity/blend score when it is skipped — a lone candidate — or the reranker is unavailable) and the result is packed under a **token budget**. `provenance.retrieved_via` reports how each result surfaced (`vector` / `link` / `entity:<name>`).
+- **`remember`** — `{content, type, namespace, importance?, source?, entities?, links?, supersedes?}` → `{memory_id, deduped, superseded?}`. Embeds the content, deduplicates within the namespace (reinforcing a near-identical memory instead of inserting), writes `:Entity` nodes + `[:MENTIONS]` edges, **auto-links** to sufficiently-similar neighbors (plus any explicit `links`), and lets a procedural memory **supersede** older ones it replaces.
+- **`recall`** — `{query, namespaces?, k?, include_forgotten?}` → ranked `[{id, content, score, type, namespace, provenance}]`. Vector kNN seeds are expanded via 1-hop `[:LINKS]` and entity bridges (cross-namespace unless scoped), scored by a **decay-weighted blend** (similarity + importance + type-aware **retrievability**) with **decayed/soft-forgotten memories excluded** (unless `include_forgotten`), then **reranked by a cross-encoder** and packed under a **token budget**; returned memories are **reinforced on access**. `provenance.retrieved_via` reports how each result surfaced (`vector` / `link` / `entity:<name>`).
+- **`forget`** — `{id, mode}` → `{ok}`, where `mode` is `soft` (exclude from recall, recoverable), `hard` (delete), `pin` (protect from decay), or `supersede` (mark replaced).
+
+A background **decay sweep** periodically hard-prunes memories whose type-aware retrievability has fallen below a floor (pinned and procedural memories are protected) — the thesis M5 will measure.
 
 Service-backed tests are tagged `integration` and excluded from the default unit run:
 
