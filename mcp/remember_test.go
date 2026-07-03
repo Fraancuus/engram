@@ -21,12 +21,18 @@ func testHandlers(emb *mock.FakeEmbedder, st *mock.FakeStore) *handlers {
 	return &handlers{
 		embedder:         emb,
 		reranker:         &mock.FakeReranker{},
+		decay:            mock.FakeDecay{R: 1}, // nothing soft-forgotten by default
 		store:            st,
+		forget:           st,
 		clock:            fixedClock{},
 		dedupThreshold:   defaultDedupThreshold,
 		seedN:            defaultSeedN,
 		rerankCandidates: defaultRerankCandidates,
 		maxTokens:        defaultMaxTokens,
+		wSim:             1, // wImp/wRet 0 so unit-test scores stay the raw similarity
+		wImp:             0,
+		wRet:             0,
+		softThreshold:    defaultSoftThresh,
 		log:              slog.New(slog.NewTextHandler(io.Discard, nil)),
 		newID:            func() (engram.MemoryID, error) { return "test-id", nil },
 	}
@@ -34,6 +40,105 @@ func testHandlers(emb *mock.FakeEmbedder, st *mock.FakeStore) *handlers {
 
 func validRemember() rememberInput {
 	return rememberInput{Content: "hello world", Type: "semantic", Namespace: "work/eng"}
+}
+
+func TestDoRememberSupersedesProcedural(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	in := validRemember()
+	in.Type = "procedural"
+	in.Supersedes = []string{"old1"}
+	out, err := h.doRemember(context.Background(), in)
+	if err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	if len(st.Superseded) != 1 || len(st.Superseded[0]) != 1 || st.Superseded[0][0] != "old1" {
+		t.Errorf("Supersede not called with [old1]: %v", st.Superseded)
+	}
+	if len(out.Superseded) != 1 || out.Superseded[0] != "old1" {
+		t.Errorf("output.Superseded = %v, want [old1]", out.Superseded)
+	}
+}
+
+func TestDoRememberSupersedeIgnoredForNonProcedural(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	in := validRemember() // semantic
+	in.Supersedes = []string{"old1"}
+	out, err := h.doRemember(context.Background(), in)
+	if err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	if len(st.Superseded) != 0 {
+		t.Errorf("Supersede should not run for a non-procedural memory: %v", st.Superseded)
+	}
+	if out.Superseded != nil {
+		t.Errorf("output.Superseded = %v, want nil", out.Superseded)
+	}
+}
+
+func TestDoRememberSupersedesValidation(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	in := validRemember()
+	in.Type = "procedural"
+	in.Supersedes = []string{"  "}
+	if _, err := h.doRemember(context.Background(), in); err == nil {
+		t.Error("want validation error for a blank supersedes id")
+	}
+}
+
+func TestDoRememberTooManySupersedes(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	in := validRemember()
+	in.Type = "procedural"
+	in.Supersedes = make([]string, maxEntities+1)
+	for i := range in.Supersedes {
+		in.Supersedes[i] = "x"
+	}
+	if _, err := h.doRemember(context.Background(), in); err == nil {
+		t.Error("want error for too many supersedes")
+	}
+}
+
+func TestDoRememberSupersedeFailureDoesNotFailInsert(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SupersedeErr: errors.New("db-down")}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	in := validRemember()
+	in.Type = "procedural"
+	in.Supersedes = []string{"old1"}
+	out, err := h.doRemember(context.Background(), in)
+	if err != nil {
+		t.Fatalf("remember must succeed after a successful insert even if supersede fails: %v", err)
+	}
+	if out.MemoryID == "" || len(st.Puts) != 1 {
+		t.Error("the memory should still have been stored")
+	}
+	if out.Superseded != nil {
+		t.Errorf("Superseded = %v, want nil (supersession failed)", out.Superseded)
+	}
+}
+
+func TestDoRememberSetsInitialStability(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	h.decay = mock.FakeDecay{R: 1, S: 42}
+	if _, err := h.doRemember(context.Background(), validRemember()); err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	if len(st.Puts) != 1 {
+		t.Fatalf("Puts = %d, want 1", len(st.Puts))
+	}
+	if st.Puts[0].Stability != 42 {
+		t.Errorf("inserted stability = %v, want 42 (from decay.Stability)", st.Puts[0].Stability)
+	}
 }
 
 func TestDoRememberInserts(t *testing.T) {

@@ -20,22 +20,35 @@ const (
 	serverVersion = "0.0.0-dev"
 )
 
+// serverStore is the full persistence surface NewServer wires in; each handler field then
+// narrows to just what it uses (Store for remember/recall, forgetStore for forget).
+type serverStore interface {
+	Store
+	forgetStore
+}
+
 // NewServer constructs the Engram MCP server on the official Model Context Protocol Go
 // SDK, wiring the domain ports into the remember and recall tool handlers. Each tool is
 // registered with the generic mcpsdk.AddTool, which infers and validates its JSON Schema
 // from the Go input struct (the type gate); the handlers enforce the policy bounds.
 //
 // Serve it over stdio with Serve(ctx, srv).
-func NewServer(embedder engram.Embedder, reranker engram.Reranker, store Store, clock engram.Clock) *mcpsdk.Server {
+func NewServer(embedder engram.Embedder, reranker engram.Reranker, decay engram.DecayModel, store serverStore, clock engram.Clock) *mcpsdk.Server {
 	h := &handlers{
 		embedder:         embedder,
 		reranker:         reranker,
+		decay:            decay,
 		store:            store,
+		forget:           store,
 		clock:            clock,
 		dedupThreshold:   defaultDedupThreshold,
 		seedN:            defaultSeedN,
 		rerankCandidates: defaultRerankCandidates,
 		maxTokens:        defaultMaxTokens,
+		wSim:             defaultWSim,
+		wImp:             defaultWImp,
+		wRet:             defaultWRet,
+		softThreshold:    defaultSoftThresh,
 		log:              slog.Default(),
 		newID:            newMemoryID,
 	}
@@ -55,6 +68,14 @@ func NewServer(embedder engram.Embedder, reranker engram.Reranker, store Store, 
 		Description: "Search memories by semantic similarity to a query, optionally restricted to namespaces; returns ranked results with provenance.",
 	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, in recallInput) (*mcpsdk.CallToolResult, recallOutput, error) {
 		out, err := h.doRecall(ctx, in)
+		return nil, out, err
+	})
+
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name:        "forget",
+		Description: "Forget a memory by id: mode 'soft' (excluded from recall, recoverable), 'hard' (delete), 'pin' (protect from decay), or 'supersede' (mark replaced).",
+	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, in forgetInput) (*mcpsdk.CallToolResult, forgetOutput, error) {
+		out, err := h.doForget(ctx, in)
 		return nil, out, err
 	})
 

@@ -48,6 +48,21 @@ type FakeStore struct {
 	NeighborsErr      error
 	LastNeighborSeeds []engram.MemoryID
 	LastNeighborScope []engram.Namespace
+
+	// M4 lifecycle recorders + programmable errors/results.
+	SupersedeErr     error
+	SetForgottenErr  error
+	PinErr           error
+	DeleteErr        error
+	PropagateErr     error
+	PruneErr         error
+	Superseded       [][]engram.MemoryID
+	Forgot           []engram.MemoryID
+	PinnedIDs        []engram.MemoryID
+	Deleted          []engram.MemoryID
+	PruneCands       []engram.Memory
+	LastPropagateID  engram.MemoryID
+	LastPropagateThr float64
 }
 
 // Put records m and returns the configured PutErr.
@@ -92,6 +107,41 @@ func (f *FakeStore) Neighbors(_ context.Context, seedIDs []engram.MemoryID, scop
 	return f.NeighborsRes, f.NeighborsErr
 }
 
+// Supersede records the batch of ids and returns the configured error.
+func (f *FakeStore) Supersede(_ context.Context, ids []engram.MemoryID) error {
+	f.Superseded = append(f.Superseded, ids)
+	return f.SupersedeErr
+}
+
+// SetForgotten records the id and returns the configured error.
+func (f *FakeStore) SetForgotten(_ context.Context, id engram.MemoryID) error {
+	f.Forgot = append(f.Forgot, id)
+	return f.SetForgottenErr
+}
+
+// Pin records the id and returns the configured error.
+func (f *FakeStore) Pin(_ context.Context, id engram.MemoryID) error {
+	f.PinnedIDs = append(f.PinnedIDs, id)
+	return f.PinErr
+}
+
+// Delete records the id and returns the configured error.
+func (f *FakeStore) Delete(_ context.Context, id engram.MemoryID) error {
+	f.Deleted = append(f.Deleted, id)
+	return f.DeleteErr
+}
+
+// PropagateReinforce records the id and threshold and returns the configured error.
+func (f *FakeStore) PropagateReinforce(_ context.Context, id engram.MemoryID, threshold float64, _ time.Time) error {
+	f.LastPropagateID, f.LastPropagateThr = id, threshold
+	return f.PropagateErr
+}
+
+// PruneCandidates returns the configured candidates/error.
+func (f *FakeStore) PruneCandidates(_ context.Context, _ time.Time, _ int) ([]engram.Memory, error) {
+	return f.PruneCands, f.PruneErr
+}
+
 // FakeReranker is a programmable engram.Reranker for tests: it records the query/docs and
 // returns the configured scores or error.
 type FakeReranker struct {
@@ -112,3 +162,16 @@ func (f *FakeReranker) Rerank(_ context.Context, query string, docs []string) ([
 	}
 	return f.Scores, nil
 }
+
+// FakeDecay is a programmable engram.DecayModel for tests: Retrievability returns R and
+// Stability returns S regardless of the memory, so handler tests control forgetting.
+type FakeDecay struct {
+	R float64
+	S float64
+}
+
+// Retrievability returns the configured R.
+func (f FakeDecay) Retrievability(engram.Memory, time.Time) float64 { return f.R }
+
+// Stability returns the configured S.
+func (f FakeDecay) Stability(engram.MemoryType, int, float64) float64 { return f.S }

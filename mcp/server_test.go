@@ -12,7 +12,7 @@ import (
 // confirms they satisfy engram.Embedder and the Store interface.
 func TestNewServerWiresPorts(t *testing.T) {
 	t.Parallel()
-	srv := NewServer(&mock.FakeEmbedder{}, &mock.FakeReranker{}, &mock.FakeStore{}, fixedClock{})
+	srv := NewServer(&mock.FakeEmbedder{}, &mock.FakeReranker{}, mock.FakeDecay{}, &mock.FakeStore{}, fixedClock{})
 	if srv == nil {
 		t.Fatal("NewServer returned nil")
 	}

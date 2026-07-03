@@ -68,16 +68,17 @@ func TestStoreNeighbors(t *testing.T) {
 	nsX := engram.Namespace(string(uniqueID("itest-nb-x")))
 	nsY := engram.Namespace(string(uniqueID("itest-nb-y")))
 	a, b, c := uniqueID("A"), uniqueID("B"), uniqueID("C")
+	redis := string(uniqueID("Redis")) // unique per run so the entity-bridge cap can't drop C
 	putBare(t, s, a, nsX)
 	putBare(t, s, b, nsX)
 	putBare(t, s, c, nsY)
 	if err := s.Link(ctx, a, []engram.Link{{To: b, Weight: 0.9}}); err != nil {
 		t.Fatalf("Link: %v", err)
 	}
-	if err := s.LinkEntities(ctx, a, []string{"Redis"}); err != nil {
+	if err := s.LinkEntities(ctx, a, []string{redis}); err != nil {
 		t.Fatalf("LinkEntities A: %v", err)
 	}
-	if err := s.LinkEntities(ctx, c, []string{"Redis"}); err != nil {
+	if err := s.LinkEntities(ctx, c, []string{redis}); err != nil {
 		t.Fatalf("LinkEntities C: %v", err)
 	}
 
@@ -93,8 +94,8 @@ func TestStoreNeighbors(t *testing.T) {
 	if nb, ok := byID[b]; !ok || nb.Via != "link" || nb.SourceID != a || nb.Weight != 0.9 {
 		t.Errorf("link neighbor B = %+v (ok=%v), want via=link src=A weight=0.9", nb, ok)
 	}
-	if nc, ok := byID[c]; !ok || nc.Via != "entity:Redis" || nc.SourceID != a {
-		t.Errorf("bridge neighbor C = %+v (ok=%v), want via=entity:Redis src=A", nc, ok)
+	if nc, ok := byID[c]; !ok || nc.Via != "entity:"+redis || nc.SourceID != a {
+		t.Errorf("bridge neighbor C = %+v (ok=%v), want via=entity:%s src=A", nc, ok, redis)
 	}
 
 	// Scoped to nsX: link B stays; entity bridge C (nsY) is excluded.

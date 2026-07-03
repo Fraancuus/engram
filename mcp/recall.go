@@ -26,12 +26,22 @@ const (
 	// defaultMaxTokens bounds the assembled recall output (approx tokens = len/4).
 	defaultRerankCandidates = 20
 	defaultMaxTokens        = 2048
+
+	// Decay-weighted blend: score = wSim·sim + wImp·importance + wRet·retrievability.
+	// softThreshold is the retrievability below which a memory is soft-forgotten; a recalled
+	// memory refreshes strong-edge (weight >= propagateThreshold) neighbors.
+	defaultWSim        = 1.0
+	defaultWImp        = 0.3
+	defaultWRet        = 0.5
+	defaultSoftThresh  = 0.05
+	propagateThreshold = 0.85
 )
 
 type recallInput struct {
-	Query      string   `json:"query" jsonschema:"text to search for"`
-	Namespaces []string `json:"namespaces,omitempty" jsonschema:"restrict to these universes; empty means all"`
-	K          *int     `json:"k,omitempty" jsonschema:"max results, default 10, capped at 100"`
+	Query            string   `json:"query" jsonschema:"text to search for"`
+	Namespaces       []string `json:"namespaces,omitempty" jsonschema:"restrict to these universes; empty means all"`
+	K                *int     `json:"k,omitempty" jsonschema:"max results, default 10, capped at 100"`
+	IncludeForgotten bool     `json:"include_forgotten,omitempty" jsonschema:"include soft-forgotten/decayed memories"`
 }
 
 type provenanceDTO struct {
@@ -89,6 +99,7 @@ func (h *handlers) doRecall(ctx context.Context, in recallInput) (out recallOutp
 	if k > maxK {
 		k = maxK
 	}
+	now := h.clock.Now()
 
 	vec, err := h.embedder.Embed(ctx, in.Query)
 	if err != nil {
@@ -116,6 +127,7 @@ func (h *handlers) doRecall(ctx context.Context, in recallInput) (out recallOutp
 		poolSize = h.rerankCandidates
 	}
 	cands := blend(seeds, neighbors, poolSize, bridgePenalty)
+	cands = h.scoreAndFilter(cands, now, in.IncludeForgotten)
 	ranked := h.rerankResults(ctx, in.Query, cands)
 	if len(ranked) > k {
 		ranked = ranked[:k]
@@ -139,6 +151,7 @@ func (h *handlers) doRecall(ctx context.Context, in recallInput) (out recallOutp
 			},
 		}
 	}
+	h.reinforce(ctx, results, now)
 	return out, nil
 }
 
@@ -222,4 +235,38 @@ func packBudget(rs []engram.RecallResult, maxTokens int) []engram.RecallResult {
 		}
 	}
 	return rs
+}
+
+// scoreAndFilter applies the decay-weighted blend and the soft-forget filter: it drops
+// superseded/forgotten/below-threshold-retrievability candidates (unless includeForgotten)
+// and re-scores the rest as wSim·sim + wImp·importance + wRet·retrievability.
+func (h *handlers) scoreAndFilter(cands []engram.RecallResult, now time.Time, includeForgotten bool) []engram.RecallResult {
+	out := make([]engram.RecallResult, 0, len(cands))
+	for _, c := range cands {
+		r := h.decay.Retrievability(c.Memory, now)
+		if !includeForgotten && (c.Superseded || c.Forgotten || r < h.softThreshold) {
+			continue
+		}
+		c.Score = h.wSim*c.Score + h.wImp*c.Importance + h.wRet*r
+		out = append(out, c)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	return out
+}
+
+// reinforce records access on the returned memories (last_accessed/access_count) and
+// spreads a freshness bump to their strong-edge neighbors. It runs synchronously before the
+// response is sent — a deliberate v1 tradeoff (correctness over latency; a detached, batched
+// write is a future optimization). A reinforce failure is logged and skipped so it never
+// fails an otherwise-successful recall.
+func (h *handlers) reinforce(ctx context.Context, results []engram.RecallResult, now time.Time) {
+	for _, r := range results {
+		if err := h.store.Reinforce(ctx, r.ID, now); err != nil {
+			h.log.Error("recall: reinforce failed", "id", r.ID, "err", err)
+			continue
+		}
+		if err := h.store.PropagateReinforce(ctx, r.ID, propagateThreshold, now); err != nil {
+			h.log.Error("recall: propagate failed", "id", r.ID, "err", err)
+		}
+	}
 }

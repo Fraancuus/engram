@@ -21,18 +21,26 @@ type Store interface {
 	LinkEntities(ctx context.Context, id engram.MemoryID, names []string) error
 	Link(ctx context.Context, from engram.MemoryID, links []engram.Link) error
 	Neighbors(ctx context.Context, seedIDs []engram.MemoryID, scope []engram.Namespace) ([]engram.Neighbor, error)
+	PropagateReinforce(ctx context.Context, id engram.MemoryID, weightThreshold float64, now time.Time) error
+	Supersede(ctx context.Context, ids []engram.MemoryID) error
 }
 
 // handlers holds the dependencies shared by the MCP tool handlers.
 type handlers struct {
 	embedder         engram.Embedder
 	reranker         engram.Reranker
+	decay            engram.DecayModel
 	store            Store
+	forget           forgetStore
 	clock            engram.Clock
 	dedupThreshold   float64
 	seedN            int
 	rerankCandidates int
 	maxTokens        int
+	wSim             float64
+	wImp             float64
+	wRet             float64
+	softThreshold    float64
 	log              *slog.Logger
 	newID            func() (engram.MemoryID, error)
 }
@@ -63,11 +71,13 @@ type rememberInput struct {
 	Source     string   `json:"source,omitempty" jsonschema:"where this memory came from"`
 	Entities   []string `json:"entities,omitempty" jsonschema:"entity names this memory mentions"`
 	Links      []string `json:"links,omitempty" jsonschema:"ids of existing memories to link this one to"`
+	Supersedes []string `json:"supersedes,omitempty" jsonschema:"ids of existing memories this (procedural) memory replaces"`
 }
 
 type rememberOutput struct {
-	MemoryID string `json:"memory_id"`
-	Deduped  bool   `json:"deduped"`
+	MemoryID   string   `json:"memory_id"`
+	Deduped    bool     `json:"deduped"`
+	Superseded []string `json:"superseded,omitempty"`
 }
 
 // doRemember validates the input, deduplicates within the namespace (reinforcing an
@@ -115,6 +125,14 @@ func (h *handlers) doRemember(ctx context.Context, in rememberInput) (out rememb
 			return rememberOutput{}, fmt.Errorf("link ids must be 1..%d bytes and not blank", maxEntityBytes)
 		}
 	}
+	if len(in.Supersedes) > maxEntities {
+		return rememberOutput{}, fmt.Errorf("at most %d supersedes allowed", maxEntities)
+	}
+	for _, sid := range in.Supersedes {
+		if strings.TrimSpace(sid) == "" || len(sid) > maxEntityBytes {
+			return rememberOutput{}, fmt.Errorf("supersedes ids must be 1..%d bytes and not blank", maxEntityBytes)
+		}
+	}
 
 	ns := engram.Namespace(in.Namespace)
 	vec, err := h.embedder.Embed(ctx, in.Content)
@@ -158,6 +176,7 @@ func (h *handlers) doRemember(ctx context.Context, in rememberInput) (out rememb
 		Content:      in.Content,
 		Embedding:    vec,
 		Importance:   importance,
+		Stability:    h.decay.Stability(mt, 0, importance),
 		AccessCount:  0,
 		CreatedAt:    now,
 		LastAccessed: now,
@@ -190,5 +209,22 @@ func (h *handlers) doRemember(ctx context.Context, in rememberInput) (out rememb
 			return rememberOutput{}, errors.New("remember: store unavailable")
 		}
 	}
-	return rememberOutput{MemoryID: string(id), Deduped: false}, nil
+
+	out = rememberOutput{MemoryID: string(id), Deduped: false}
+	// Supersession: a new procedural memory can mark older ones replaced — how reference
+	// memory "forgets", by replacement rather than by time.
+	if mt == engram.Procedural && len(in.Supersedes) > 0 {
+		ids := make([]engram.MemoryID, len(in.Supersedes))
+		for i, sid := range in.Supersedes {
+			ids[i] = engram.MemoryID(sid)
+		}
+		if err := h.store.Supersede(ctx, ids); err != nil {
+			// The memory is already stored; supersession is best-effort, so log and return the
+			// successful insert rather than failing an accepted write.
+			h.log.Error("remember: supersede failed (memory stored)", "err", err)
+		} else {
+			out.Superseded = in.Supersedes
+		}
+	}
+	return out, nil
 }

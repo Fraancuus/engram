@@ -42,12 +42,18 @@ func liveHandlers(t *testing.T) *handlers {
 	return &handlers{
 		embedder:         inference.New(envOr("TEI_TEST_URL", "http://localhost:8080")),
 		reranker:         inference.NewReranker(envOr("TEI_RERANK_TEST_URL", "http://localhost:8081")),
+		decay:            engram.TypeAwareDecay{},
 		store:            store,
+		forget:           store,
 		clock:            fixedClock{},
 		dedupThreshold:   defaultDedupThreshold,
 		seedN:            defaultSeedN,
 		rerankCandidates: defaultRerankCandidates,
 		maxTokens:        defaultMaxTokens,
+		wSim:             defaultWSim,
+		wImp:             defaultWImp,
+		wRet:             defaultWRet,
+		softThreshold:    defaultSoftThresh,
 		log:              slog.New(slog.NewTextHandler(io.Discard, nil)),
 		newID:            newMemoryID,
 	}
