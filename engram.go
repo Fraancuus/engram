@@ -73,7 +73,9 @@ type Memory struct {
 	CreatedAt    time.Time
 	LastAccessed time.Time
 	Source       string
-	Superseded   bool
+	Superseded   bool // replaced by a newer memory; begins a fast decay toward archival
+	Pinned       bool // explicitly protected from decay (distinct from importance)
+	Forgotten    bool // soft-forgotten; excluded from default recall, recoverable
 }
 
 // RecallResult is a memory returned by a recall, paired with its similarity Score
