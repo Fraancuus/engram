@@ -32,16 +32,16 @@ Two implementations behind the port encode the eval's C-vs-B contrast; a third i
 - **`TypeAwareDecay`** (Engram, arm C):
   ```
   Retrievability(m, now):
-    if m.Importance >= pinThreshold(1.0):            return 1   # pinned, any type
-    if m.Type == procedural && !m.Superseded:         return 1   # permanent
+    if m.Pinned:                                      return 1   # explicit pin, any type
+    if m.Type == procedural && !m.Superseded:         return 1   # permanent by type
     S := Stability(m.Type, m.AccessCount, m.Importance)
     if m.Superseded: S = supersededStability                     # fast archival curve
     Δt := max(0, now - m.LastAccessed) in days
-    return exp(-Δt / S)
+    return retrievability(S, Δt)                                  # shared pure helper exp(-Δt/S)
 
   Stability(type, accessCount, importance):
     return S0[type] * (1 + reinforceGain*accessCount) * (1 + importance)
-    # S0: episodic 2d · semantic 60d · procedural 1e6d (permanence handled above)
+    # S0: episodic 2d · semantic 60d · procedural 3650d (the branch above owns permanence)
   ```
 - **`UniformDecay`** (arm B): `pinned → 1`; else `exp(-Δt / Sᵤ)` with **one** `Sᵤ` for all
   types — it *wrongly decays procedural*, which is the whole point of the contrast.
@@ -76,13 +76,15 @@ bump refreshes 1-hop `[:LINKS]` neighbors reachable by a strong edge
 read path touch only Neo4j (no shared mutable Go state), so `-race` is unaffected.
 
 ## 4. Decay sweep — goroutine
-A `Sweeper` runs a `time.Ticker` loop that **exits on `ctx.Done()`** (known lifecycle, no
-fire-and-forget). Each tick calls a pure-ish `SweepOnce(ctx, now)`:
+A `Sweeper` (new top-level `sweep` package, consuming a narrow `Pruner` interface plus
+`DecayModel` + `Clock`) runs a `time.Ticker` loop that **exits on `ctx.Done()`** and
+`recover()`s at the goroutine boundary (known lifecycle, no fire-and-forget). Each tick
+calls the testable `SweepOnce(ctx, now)`:
 1. Fetch prune candidates cheaply (`last_accessed < now - GRACE_PERIOD`, not pinned), in
    bounded batches.
 2. Compute `R` in Go via the `DecayModel` (exp isn't worth doing in Cypher).
 3. **Hard-prune** (delete) those with `R < HARD_FLOOR` and past the grace period; pinned
-   (`importance=1`) exempt. Emit counts to the log (feeds M6 stats).
+   (`Pinned = true`) exempt. Emit counts to the log (feeds M6 stats).
 
 **Soft-forget is never persisted by the sweep** — it is the live `recall` filter (§2),
 consistent with the domain rule "retrievability is derived per-call, never stored." The
@@ -99,27 +101,33 @@ on shutdown.
   - `soft` — set `Forgotten = true` (excluded from default recall, recoverable via
     `include_forgotten`).
   - `hard` — delete the memory.
-  - `pin` — set `Importance = 1.0` (decay-exempt).
+  - `pin` — set `Pinned = true` (decay-exempt; a dedicated flag, not importance, so pinning
+    does not skew the blend's importance term).
   - `supersede` — set `Superseded = true`.
   Untrusted input validated at the handler boundary (id well-formed, mode in the set).
 
-`Forgotten` is a new boolean property. Neo4j is schemaless for properties, so no migration
-is needed — writes set it; reads treat a missing value as `false` (optional read in
-`mapToMemory`).
+`Forgotten` and `Pinned` are new boolean properties. Neo4j is schemaless for properties, so
+no migration is needed — writes set them; reads treat a missing value as `false` (optional
+read in `mapToMemory`).
 
 ## Ports / store surface (new)
 - `engram.DecayModel` — implemented by `TypeAwareDecay`/`UniformDecay`/`NullDecay` in
-  `decay.go`. `mock` gets a programmable `FakeDecay` for handler tests.
-- `neo4j.Store` new methods (all parameterized Cypher): `Supersede(ids)`, `SetForgotten(id)`,
+  `decay.go`, sharing a package-level pure `retrievability(S, Δt)` helper (no base struct).
+  `mock` gets a programmable `FakeDecay` for handler tests.
+- `neo4j.Store` gains (all parameterized Cypher): `Supersede(ids)`, `SetForgotten(id)`,
   `Pin(id)`, `Delete(id)`, `PruneCandidates(before, limit)`, `PropagateReinforce(id, weightThreshold, now)`.
-- `mcp.Store` (the consumer interface) extends with what the handlers use; `recall` reads
-  `Forgotten`/`Superseded` via the projection (add both to the `Search`/`Neighbors` map
-  projection so the filter can see them).
+- **Interfaces split by capability** (not one god-Store): the new `forget` handler owns a
+  narrow `{SetForgotten, Pin, Delete, Supersede}` interface (its own field on `handlers`);
+  the `sweep` package owns `Pruner {PruneCandidates, Delete}`; `mcp.Store` gains only
+  `PropagateReinforce` (the same recall write-back path as `Reinforce`). Overlap (e.g.
+  `Delete`) is fine — no shared `Deleter`. The one `*neo4j.Store` satisfies them all.
+- `recall` reads `Forgotten`/`Superseded`/`Pinned` via the projection (add the three to the
+  `Search`/`Neighbors` map projection so the soft-forget filter can see them).
 
 ## Config (env / consts, tunable at M5)
 `SOFT_THRESHOLD=0.05`, `HARD_FLOOR=0.02`, `GRACE_PERIOD=30d`, `SWEEP_INTERVAL=1h`,
-`reinforceGain=1.0`, `propagateThreshold=0.85`, `pinThreshold=1.0`, blend weights above,
-`S0` per type above, `Sᵤ=14d` (uniform), `supersededStability=2d`.
+`reinforceGain=1.0`, `propagateThreshold=0.85`, blend weights above, `S0` per type
+(episodic 2d · semantic 60d · procedural 3650d), `Sᵤ=14d` (uniform), `supersededStability=2d`.
 
 ## Testing
 - **Unit (table-driven, pure):** `decay.go` boundaries (above) for all three impls;
