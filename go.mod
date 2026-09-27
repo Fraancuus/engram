@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/modelcontextprotocol/go-sdk v1.6.1
-	github.com/neo4j/neo4j-go-driver/v5 v5.28.4
+	github.com/neo4j/neo4j-go-driver/v5 v5.28.5
 )
 
 require (
