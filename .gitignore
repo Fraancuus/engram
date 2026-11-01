@@ -45,3 +45,11 @@ go.work.sum
 *.swp
 .DS_Store
 Thumbs.db
+
+# Local workflow artifacts
+# graphify knowledge graph is rebuilt locally (/graphify .), never committed
+/graphify-out/
+# visual-plan local bridge token and block catalog
+plans/*/.plan-url
+plan-blocks.md
+plans/*/preview.html

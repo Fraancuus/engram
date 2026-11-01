@@ -1,0 +1,56 @@
+schema: superspec
+
+# Constraints an agent cannot infer from the code. Everything else lives in CLAUDE.md,
+# docs/engram-go-rules.md and docs/engram-prd-v1.md.
+context: |
+  Engram is a local-first long-term memory service for AI agents: one Go binary over Neo4j
+  plus an inference sidecar, exposed as MCP tools. Built by one developer.
+  v1 scope is fixed in docs/engram-prd-v1.md section 2; a change that adds a v2 feature
+  (consolidation, per-namespace behavior, web UI, GPU/NPU, LLM extraction) stops at the
+  proposal and goes to Franco.
+  Work is organised in milestones M0..M6 (PRD section 9); one change per milestone, one PR
+  per change, branch feat/<milestone>, merged to main by Franco.
+  The eval (cmd/eval, eval/) is the credibility of the project: every change that touches
+  decay, recall, or the eval must say how it affects the A/B/C comparison and the CI gate.
+  Time is injected (Clock / now parameter); no artifact may propose time.Now() inside decay or
+  retrievability logic.
+  Artifacts (brainstorm, proposal, design, specs, tasks, plan) are written in English.
+
+rules:
+  proposal:
+    - >-
+      Name the milestone (PRD section 9) the change delivers and list what is out of scope,
+      including anything deferred to a later milestone or to v2
+  design:
+    - >-
+      State which domain ports (engram.go) are consumed and which packages implement them;
+      a new package or interface is justified in one paragraph or not added
+  specs:
+    - >-
+      Every requirement that touches decay, recall ordering, the sweep, or the eval gets a
+      scenario at the boundary (R near the soft threshold, k at its limit, empty input, a
+      pruned hop node) and one that fixes virtual time explicitly
+  tasks:
+    - >-
+      Order tasks domain (root package) -> mock -> adapters (neo4j, inference, mcp, sweep) ->
+      cmd; each task names the test that proves it and runs under go test -race
+  plan:
+    - >-
+      After plan.md, run /visual-plan on openspec/changes/<slug>/plan.md (and design.md)
+      into plans/<slug>/, stop for Franco's review there, then write every decision back
+      into design.md/plan.md before apply
+  verify:
+    - >-
+      Before verifying, run the project agents on the touched areas: reviewer for any Go
+      change, security-auditor for neo4j/, mcp/ inputs or inference/, architect for a new
+      package or interface, scoping-ux for a new MCP field; every blocking finding resolved
+    - >-
+      go build ./..., go test -race ./..., golangci-lint run ./... must pass; a change to
+      decay or recall also runs go run ./cmd/eval --ci and reports the A/B/C table
+
+operations:
+  apply:
+    guidance:
+      - >-
+        Before the first search or source read, run graphify query on the question; run
+        graphify update . after each task that changes Go code
