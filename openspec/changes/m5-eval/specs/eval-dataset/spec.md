@@ -121,8 +121,8 @@ queries which pass both namespaces involved. Labels MUST NOT depend on any pipel
 - **THEN** the relevant set is {v2}
 
 #### Scenario: Fact query picks the latest version
-- **WHEN** a chain has v1 (day 10), v2 (day 70), v3 (day 130) and a fact query on day 100
-- **THEN** the relevant set is {v2} and cos(query, v1) and cos(query, v3) are each ≥ 0.80
+- **WHEN** the relevance rule is applied to a chain with v1 (day 10), v2 (day 70), v3 (day 115) for a query day of 100 (a unit-level case: generated fact queries always fall after the last version, so this exercises the rule, not the schedule)
+- **THEN** the relevant set is {v2}; and for every generated fact query cos(query, each other version of its chain) ≥ 0.80
 
 #### Scenario: Entity-bridge query scope
 - **WHEN** a bridge query's X and Y are in namespaces n1 and n2
