@@ -234,6 +234,7 @@ func TestDoRememberValidation(t *testing.T) {
 		{"importance negative", func(in *RememberInput) { in.Importance = imp(-0.1) }},
 		{"whitespace content", func(in *RememberInput) { in.Content = "   " }},
 		{"whitespace entity", func(in *RememberInput) { in.Entities = []string{"  "} }},
+		{"source too long", func(in *RememberInput) { in.Source = strings.Repeat("s", 257) }},
 		{"whitespace link", func(in *RememberInput) { in.Links = []string{"  "} }},
 	}
 	for _, tt := range tests {

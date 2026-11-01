@@ -33,10 +33,10 @@ type ForgetOutput struct {
 // soft/hard/pin a missing id surfaces as a legible ErrNotFound (actionable for the caller);
 // supersede is idempotent and succeeds even for an absent id. Other internal failures are
 // logged and returned sanitized.
-func (h *Tools) doForget(ctx context.Context, in ForgetInput) (out ForgetOutput, err error) {
+func (t *Tools) doForget(ctx context.Context, in ForgetInput) (out ForgetOutput, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			h.log.Error("forget: recovered panic", "panic", r)
+			t.log.Error("forget: recovered panic", "panic", r)
 			out, err = ForgetOutput{}, errors.New("forget: internal error")
 		}
 	}()
@@ -48,13 +48,13 @@ func (h *Tools) doForget(ctx context.Context, in ForgetInput) (out ForgetOutput,
 
 	switch in.Mode {
 	case "soft":
-		err = h.forget.SetForgotten(ctx, id)
+		err = t.forget.SetForgotten(ctx, id)
 	case "hard":
-		err = h.forget.Delete(ctx, id)
+		err = t.forget.Delete(ctx, id)
 	case "pin":
-		err = h.forget.Pin(ctx, id)
+		err = t.forget.Pin(ctx, id)
 	case "supersede":
-		err = h.forget.Supersede(ctx, []engram.MemoryID{id})
+		err = t.forget.Supersede(ctx, []engram.MemoryID{id})
 	default:
 		return ForgetOutput{}, fmt.Errorf("invalid mode %q: want soft, hard, pin, or supersede", in.Mode)
 	}
@@ -62,7 +62,7 @@ func (h *Tools) doForget(ctx context.Context, in ForgetInput) (out ForgetOutput,
 		if errors.Is(err, engram.ErrNotFound) {
 			return ForgetOutput{}, fmt.Errorf("forget %q: %w", id, err)
 		}
-		h.log.Error("forget: store op failed", "mode", in.Mode, "err", err)
+		t.log.Error("forget: store op failed", "mode", in.Mode, "err", err)
 		return ForgetOutput{}, errors.New("forget: store unavailable")
 	}
 	return ForgetOutput{OK: true}, nil

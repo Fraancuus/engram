@@ -306,41 +306,44 @@ semantic, because `remember` only supersedes on procedural writes and that match
 ids are injected and sequential in the eval; `Deduped: true` is an eval error; baseline
 floats are rounded and amd64-only; sweep cadence stays daily with batch = store size.
 
-## Result at the floor (2026-11-02)
+## Result at the floor (2026-11-01)
 
 Final frozen generator constants (`eval/vectors.go`, `eval/schedule.go`):
 
 | constant | value |
 |---|---|
-| `sigmaInTopic` | 0.42 |
-| `sigmaTwin` | 3.6 |
-| `sigmaFactVersion` | 0.33 |
+| `sigmaInTopic` | 0.97 |
+| `sigmaChain` | 0.57 |
+| `sigmaFactVersion` | 0.5 |
+| `sigmaTwin` | 1.5 |
 | `kindOffsetScale` | 0.35 |
-| `maxInTopicCos` | 0.94 |
-| `minInTopicCos` | 0.70 |
-| `maxNoiseTries` | 2000 |
+| `noiseLeakMax` | 0.25 |
+| `minOrdinaryCos` / `maxOrdinaryCos` | 0.40 / 0.66 |
+| `minLinkedCos` / `maxLinkedCos` | 0.74 / 0.88 |
+| `maxNoiseTries` | 2048 |
 | `maxChainTries` | 20 |
 | `queryNoise` | 0.15 |
 
-Floor run (`go run ./cmd/eval --ci`, seed 42, k=5, rerank none):
+Floor run (`go run ./cmd/eval --ci`, seed 42, k=5, rerank none, dim 128):
 
 ```
-rerank: none
-arm         precision@5  recall@5     ndcg@5       mrr          procedural   semantic     episodic     bridge-link  bridge-entity  via-vector   via-link     via-entity   store   edges    bridges  p50         p95
-none        0.225±0.000  0.937±0.000  0.897±0.000  0.927±0.000  1.000±0.000  1.000±0.000  0.895±0.000  1.000±0.000  0.500±0.000    0.771±0.000  0.229±0.000  0.000±0.000  5000±0  23081±0  36447±0  1.6±0.0 ms  6.9±0.0 ms
-uniform     0.173±0.000  0.724±0.000  0.677±0.000  0.704±0.000  0.800±0.000  0.605±0.000  0.728±0.000  0.774±0.000  0.365±0.000    0.846±0.000  0.154±0.000  0.000±0.000  4889±0  22530±0  34744±0  1.7±0.0 ms  7.6±0.0 ms
-type-aware  0.154±0.000  0.682±0.000  0.587±0.000  0.582±0.000  1.000±0.000  1.000±0.000  0.463±0.000  0.516±0.000  0.206±0.000    0.860±0.000  0.140±0.000  0.000±0.000  2991±0  10658±0  13371±0  0.0±0.0 ms  5.8±0.0 ms
+rerank: none, seed 42
+arm         precision@5  recall@5  ndcg@5  mrr    procedural semantic episodic bridge-link bridge-entity via-vector via-link via-entity store edges bridges
+none        0.225        0.937     0.901   0.932  1.000      1.000    0.895    1.000       0.500         0.910      0.090    0.000      5000  1048  36114
+uniform     0.176        0.756     0.668   0.662  0.920      0.936    0.642    0.718       0.262         0.912      0.088    0.000      4016  764   23270
+type-aware  0.127        0.604     0.514   0.490  1.000      1.000    0.338    0.218       0.024         0.982      0.018    0.000      1199  507   2020
 
 by query class (ndcg / mrr)
-arm         topic-current  fact         episode-recent  episode-old  bridge-link  bridge-entity
-none        1.000/1.000    0.648/0.531  0.996/0.995     0.995/0.993  1.000/1.000  0.610/0.992
-uniform     0.767/0.756    0.352/0.274  0.993/0.990     0.573/0.555  0.771/0.881  0.416/0.661
-type-aware  1.000/1.000    0.662/0.548  0.600/0.540     0.199/0.186  0.499/0.609  0.206/0.310
+none        topic-current 1.000/1.000  fact 0.673/0.563  episode-recent 1.000/1.000  episode-old 0.990/0.987  bridge-link 1.000/1.000  bridge-entity 0.613/1.000
+uniform     0.864/0.846  0.648/0.552  1.000/1.000  0.243/0.184  0.688/0.737  0.258/0.387
+type-aware  1.000/1.000  0.722/0.627  0.661/0.593  0.000/0.000  0.169/0.200  0.017/0.022
 
 recommended: none (ENGRAM_DECAY=none)
 ```
 
-Baseline (`eval/baseline.json`): k 5, seed 42, goarch amd64, rerank none, precision_at_k 0.1544, ndcg_at_k 0.5868 (arm `type-aware`).
+Baseline (`eval/baseline.json`): k 5, seed 42, goarch amd64, rerank none, dim 128, precision_at_k 0.1268, ndcg_at_k 0.5135 (arm `type-aware`).
+
+- At the real 0.70 auto-link point (raw cosine) the dataset has ~1,048 auto-link edges (was ~23k on the wrong similarity scale).
 
 Findings:
 

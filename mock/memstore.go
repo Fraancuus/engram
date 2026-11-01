@@ -131,7 +131,8 @@ func (s *MemStore) LinkEntities(_ context.Context, id engram.MemoryID, names []s
 
 // Link idempotently upserts weighted edges from `from`. Unknown targets and self-links are
 // skipped, an empty list is a no-op, and an unknown source is engram.ErrNotFound. Edges are
-// stored symmetrically because every read treats them as undirected.
+// stored symmetrically because every read treats them as undirected. The edge carries a
+// single weight, whereas Neo4j keeps directed LINKS edges with independent weights.
 func (s *MemStore) Link(_ context.Context, from engram.MemoryID, links []engram.Link) error {
 	if len(links) == 0 {
 		return nil

@@ -66,8 +66,8 @@ scoring itself. The gate is live: `go run ./cmd/eval --ci` fails when arm
 Run it locally with `go run ./cmd/eval` (flags `-seeds`, `-k`, `-scale`,
 `-rerank none|cosine`, `-json`, `--update-baseline`). The dataset is synthetic with
 generator-owned labels; see `openspec/changes/m5-eval/design.md`. The honest
-headline at seed 42: never-forget nDCG .897 (store 5000), uniform .677 (4889),
-type-aware .587 (2991), so the recommendation is `none` at the shipped blend
+headline at seed 42: never-forget nDCG .901 (store 5000), uniform .668 (4016),
+type-aware .514 (1199), so the recommendation is `none` at the shipped blend
 weights. The per-class table shows type-aware winning on procedural and fact
 queries and losing on recent and old episodes and bridges. The full write-up is M6.
 

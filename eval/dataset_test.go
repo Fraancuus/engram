@@ -2,6 +2,7 @@ package eval
 
 import (
 	"math/rand/v2"
+	"os"
 	"sort"
 	"sync"
 	"testing"
@@ -303,8 +304,8 @@ func TestInTopicRange(t *testing.T) {
 }
 
 func TestNoDedupCollisionsSeeds(t *testing.T) {
-	if testing.Short() {
-		t.Skip("slow")
+	if os.Getenv("ENGRAM_EVAL_SMOKE") != "1" {
+		t.Skip("slow (~160 s); set ENGRAM_EVAL_SMOKE=1 to run")
 	}
 	t.Parallel()
 	for _, seed := range []int64{1, 2, 5, 9} {

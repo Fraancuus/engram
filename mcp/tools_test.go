@@ -33,6 +33,17 @@ func TestWithIDGeneratorSequential(t *testing.T) {
 	}
 }
 
+func TestWithIDGeneratorNilKept(t *testing.T) {
+	t.Parallel()
+	out, err := newTestTools(WithIDGenerator(nil)).Remember(context.Background(), validRemember())
+	if err != nil {
+		t.Fatalf("Remember: %v", err)
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(out.MemoryID) {
+		t.Errorf("MemoryID = %q, want default 32 hex chars", out.MemoryID)
+	}
+}
+
 func TestNewToolsDefaultID(t *testing.T) {
 	t.Parallel()
 	out, err := newTestTools().Remember(context.Background(), validRemember())

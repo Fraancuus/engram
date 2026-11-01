@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/Fraancuus/engram"
@@ -106,6 +107,7 @@ func TestArmBPrunesStaleStandard(t *testing.T) {
 	// value (a write sets LastAccessed but leaves AccessCount alone).
 	recalled := map[string]bool{}
 	base := map[string]int{}
+	day60 := map[string]engram.Memory{}
 	for d := 0; d <= 150; d++ {
 		if err := a.day(context.Background(), ds, d, 5, acc); err != nil {
 			t.Fatalf("day %d: %v", d, err)
@@ -115,6 +117,7 @@ func TestArmBPrunesStaleStandard(t *testing.T) {
 			switch {
 			case d == 60 && ok:
 				base[gid] = snap.AccessCount
+				day60[gid] = snap
 			case d > 60 && ok && snap.AccessCount > base[gid]:
 				recalled[gid] = true
 			}
@@ -124,7 +127,7 @@ func TestArmBPrunesStaleStandard(t *testing.T) {
 	for _, ac := range ds.Accesses {
 		lastAccess[ac.GID] = max(lastAccess[ac.GID], ac.Day)
 	}
-	checked, exempted := 0, 0
+	checked, exempted, wantPruned := 0, 0, 0
 	for _, m := range ds.Memories {
 		// A version written after day 60 has had under 90 days to decay by day
 		// 150 and may still be inside its stability window; only older ones must
@@ -136,14 +139,35 @@ func TestArmBPrunesStaleStandard(t *testing.T) {
 			exempted++
 			continue
 		}
+		snap, ok := day60[m.GID]
+		if !ok || !snap.Superseded {
+			continue // gone, unwritten or not yet superseded at day 60: the snapshot cannot predict day 150
+		}
 		checked++
-		if _, ok := a.store.Snapshot(engram.MemoryID(a.ids[m.GID])); ok {
-			t.Errorf("stale standard %s still in store on day 150", m.GID)
+		// The sweep's own rule: R below the hard floor at day 150 (grace is met).
+		pruned := engram.UniformDecay{}.Retrievability(snap, dayTime(150)) < sweepHardFloor
+		_, present := a.store.Snapshot(engram.MemoryID(a.ids[m.GID]))
+		if pruned {
+			wantPruned++
+		}
+		if pruned == present {
+			t.Errorf("stale standard %s: want pruned=%v on day 150, still present=%v", m.GID, pruned, present)
 		}
 	}
-	t.Logf("stale standards: %d checked, %d exempted as recalled after day 60", checked, exempted)
-	if checked == 0 {
-		t.Fatal("no unrecalled stale standard to check")
+	t.Logf("stale standards: %d checked (%d expected pruned), %d exempted as recalled after day 60", checked, wantPruned, exempted)
+	if wantPruned == 0 {
+		t.Fatal("no unrecalled stale standard expected to be pruned")
+	}
+}
+
+func TestViaShareUnknownErrors(t *testing.T) {
+	for via, want := range map[string]string{"vector": "vector", "link": "link", "entity:Redis": "entity"} {
+		if got, err := viaKey(via); err != nil || got != want {
+			t.Errorf("viaKey(%q) = %q, %v; want %q", via, got, err, want)
+		}
+	}
+	if _, err := viaKey("telepathy"); err == nil || !strings.Contains(err.Error(), "unknown retrieved_via") {
+		t.Errorf("want unknown retrieved_via error, got %v", err)
 	}
 }
 

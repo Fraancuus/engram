@@ -72,10 +72,10 @@ type RecallOutput struct {
 // doRecall validates the query, embeds it, runs a namespace-filtered vector search, and
 // maps the results to the response DTO (provenance is projected from each memory's own
 // fields). Internal failures are logged and returned sanitized.
-func (h *Tools) doRecall(ctx context.Context, in RecallInput) (out RecallOutput, err error) {
+func (t *Tools) doRecall(ctx context.Context, in RecallInput) (out RecallOutput, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			h.log.Error("recall: recovered panic", "panic", r)
+			t.log.Error("recall: recovered panic", "panic", r)
 			out, err = RecallOutput{}, errors.New("recall: internal error")
 		}
 	}()
@@ -103,40 +103,40 @@ func (h *Tools) doRecall(ctx context.Context, in RecallInput) (out RecallOutput,
 	if k > maxK {
 		k = maxK
 	}
-	now := h.clock.Now()
+	now := t.clock.Now()
 
-	vec, err := h.embedder.Embed(ctx, in.Query)
+	vec, err := t.embedder.Embed(ctx, in.Query)
 	if err != nil {
-		h.log.Error("recall: embed failed", "err", err)
+		t.log.Error("recall: embed failed", "err", err)
 		return RecallOutput{}, errors.New("recall: embedding failed")
 	}
-	seeds, err := h.store.Search(ctx, namespaces, vec, h.seedN)
+	seeds, err := t.store.Search(ctx, namespaces, vec, t.seedN)
 	if err != nil {
-		h.log.Error("recall: search failed", "err", err)
+		t.log.Error("recall: search failed", "err", err)
 		return RecallOutput{}, errors.New("recall: store unavailable")
 	}
 	seedIDs := make([]engram.MemoryID, len(seeds))
 	for i, s := range seeds {
 		seedIDs[i] = s.ID
 	}
-	neighbors, err := h.store.Neighbors(ctx, seedIDs, namespaces)
+	neighbors, err := t.store.Neighbors(ctx, seedIDs, namespaces)
 	if err != nil {
-		h.log.Error("recall: neighbors failed", "err", err)
+		t.log.Error("recall: neighbors failed", "err", err)
 		return RecallOutput{}, errors.New("recall: store unavailable")
 	}
 	// Blend selects a candidate pool (>= k so the reranker has room to reorder), the
 	// reranker decides the final order, then we take k and trim under the token budget.
 	poolSize := k
-	if h.rerankCandidates > poolSize {
-		poolSize = h.rerankCandidates
+	if t.rerankCandidates > poolSize {
+		poolSize = t.rerankCandidates
 	}
 	cands := blend(seeds, neighbors, poolSize, bridgePenalty)
-	cands = h.scoreAndFilter(cands, now, in.IncludeForgotten)
-	ranked := h.rerankResults(ctx, in.Query, cands)
+	cands = t.scoreAndFilter(cands, now, in.IncludeForgotten)
+	ranked := t.rerankResults(ctx, in.Query, cands)
 	if len(ranked) > k {
 		ranked = ranked[:k]
 	}
-	results := packBudget(ranked, h.maxTokens)
+	results := packBudget(ranked, t.maxTokens)
 
 	out = RecallOutput{Results: make([]RecallHit, len(results))}
 	for i, r := range results {
@@ -155,7 +155,7 @@ func (h *Tools) doRecall(ctx context.Context, in RecallInput) (out RecallOutput,
 			},
 		}
 	}
-	h.reinforce(ctx, results, now)
+	t.reinforce(ctx, results, now)
 	return out, nil
 }
 
@@ -200,8 +200,8 @@ func blend(seeds []engram.RecallResult, neighbors []engram.Neighbor, k int, brid
 // rerankResults reorders candidates by the cross-encoder's score (the final authority).
 // If the reranker errors or returns a mismatched count it degrades to the blend order
 // (logged), so recall never fails solely because the reranker is unavailable.
-func (h *Tools) rerankResults(ctx context.Context, query string, cands []engram.RecallResult) []engram.RecallResult {
-	if h.reranker == nil {
+func (t *Tools) rerankResults(ctx context.Context, query string, cands []engram.RecallResult) []engram.RecallResult {
+	if t.reranker == nil {
 		return cands
 	}
 	// Nothing to reorder with fewer than two candidates; the lone result keeps its
@@ -213,12 +213,12 @@ func (h *Tools) rerankResults(ctx context.Context, query string, cands []engram.
 	for i, c := range cands {
 		docs[i] = c.Content
 	}
-	scores, err := h.reranker.Rerank(ctx, query, docs)
+	scores, err := t.reranker.Rerank(ctx, query, docs)
 	if err != nil || len(scores) != len(cands) {
 		if err != nil {
-			h.log.Error("recall: rerank failed; using blend order", "err", err)
+			t.log.Error("recall: rerank failed; using blend order", "err", err)
 		} else {
-			h.log.Error("recall: rerank count mismatch; using blend order", "want", len(cands), "got", len(scores))
+			t.log.Error("recall: rerank count mismatch; using blend order", "want", len(cands), "got", len(scores))
 		}
 		return cands
 	}
@@ -247,14 +247,14 @@ func packBudget(rs []engram.RecallResult, maxTokens int) []engram.RecallResult {
 // scoreAndFilter applies the decay-weighted blend and the soft-forget filter: it drops
 // superseded/forgotten/below-threshold-retrievability candidates (unless includeForgotten)
 // and re-scores the rest as wSim·sim + wImp·importance + wRet·retrievability.
-func (h *Tools) scoreAndFilter(cands []engram.RecallResult, now time.Time, includeForgotten bool) []engram.RecallResult {
+func (t *Tools) scoreAndFilter(cands []engram.RecallResult, now time.Time, includeForgotten bool) []engram.RecallResult {
 	out := make([]engram.RecallResult, 0, len(cands))
 	for _, c := range cands {
-		r := h.decay.Retrievability(c.Memory, now)
-		if !includeForgotten && (c.Superseded || c.Forgotten || r < h.softThreshold) {
+		r := t.decay.Retrievability(c.Memory, now)
+		if !includeForgotten && (c.Superseded || c.Forgotten || r < t.softThreshold) {
 			continue
 		}
-		c.Score = h.wSim*c.Score + h.wImp*c.Importance + h.wRet*r
+		c.Score = t.wSim*c.Score + t.wImp*c.Importance + t.wRet*r
 		out = append(out, c)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
@@ -266,14 +266,14 @@ func (h *Tools) scoreAndFilter(cands []engram.RecallResult, now time.Time, inclu
 // response is sent — a deliberate v1 tradeoff (correctness over latency; a detached, batched
 // write is a future optimization). A reinforce failure is logged and skipped so it never
 // fails an otherwise-successful recall.
-func (h *Tools) reinforce(ctx context.Context, results []engram.RecallResult, now time.Time) {
+func (t *Tools) reinforce(ctx context.Context, results []engram.RecallResult, now time.Time) {
 	for _, r := range results {
-		if err := h.store.Reinforce(ctx, r.ID, now); err != nil {
-			h.log.Error("recall: reinforce failed", "id", r.ID, "err", err)
+		if err := t.store.Reinforce(ctx, r.ID, now); err != nil {
+			t.log.Error("recall: reinforce failed", "id", r.ID, "err", err)
 			continue
 		}
-		if err := h.store.PropagateReinforce(ctx, r.ID, propagateThreshold, now); err != nil {
-			h.log.Error("recall: propagate failed", "id", r.ID, "err", err)
+		if err := t.store.PropagateReinforce(ctx, r.ID, propagateThreshold, now); err != nil {
+			t.log.Error("recall: propagate failed", "id", r.ID, "err", err)
 		}
 	}
 }

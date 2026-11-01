@@ -24,16 +24,24 @@ const (
 // narrows to just what it uses (Store for remember/recall, forgetStore for forget).
 type ServerStore interface {
 	Store
-	forgetStore
+	SetForgotten(ctx context.Context, id engram.MemoryID) error
+	Pin(ctx context.Context, id engram.MemoryID) error
+	Delete(ctx context.Context, id engram.MemoryID) error
+	Supersede(ctx context.Context, ids []engram.MemoryID) error
 }
 
 // Option customises a Tools built by NewTools.
 type Option func(*Tools)
 
 // WithIDGenerator overrides how new memory ids are minted (default: 128 random bits as
-// hex). The eval uses it to get deterministic ids.
+// hex). The eval uses it to get deterministic ids. A nil fn is ignored; fn must be safe
+// for concurrent use because handlers may run in parallel.
 func WithIDGenerator(fn func() (engram.MemoryID, error)) Option {
-	return func(t *Tools) { t.newID = fn }
+	return func(t *Tools) {
+		if fn != nil {
+			t.newID = fn
+		}
+	}
 }
 
 // WithoutRerank disables the rerank stage, so recall results keep the blend order. The

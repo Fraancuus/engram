@@ -23,8 +23,13 @@ func precResults(a, b, c float64) *Results {
 	}
 }
 
+// baseAt is a baseline matching precResults' k, rerank and params.
+func baseAt(p float64) Baseline {
+	return Baseline{K: 5, Rerank: "none", Params: Floor(), PrecisionAtK: p}
+}
+
 func TestGateRegression(t *testing.T) {
-	err := CheckGate(precResults(0, 0, 0.52), Baseline{PrecisionAtK: 0.55}, GateTolerance)
+	err := CheckGate(precResults(0, 0, 0.52), baseAt(0.55), GateTolerance)
 	if err == nil {
 		t.Fatal("want regression error")
 	}
@@ -37,14 +42,14 @@ func TestGateRegression(t *testing.T) {
 
 func TestGateWithinTolerance(t *testing.T) {
 	for _, c := range []float64{0.535, 0.53, 0.60} {
-		if err := CheckGate(precResults(0, 0, c), Baseline{PrecisionAtK: 0.55}, GateTolerance); err != nil {
+		if err := CheckGate(precResults(0, 0, c), baseAt(0.55), GateTolerance); err != nil {
 			t.Errorf("c=%v: %v", c, err)
 		}
 	}
 }
 
 func TestGateNullThesisPasses(t *testing.T) {
-	if err := CheckGate(precResults(0.4, 0.9, 0.54), Baseline{PrecisionAtK: 0.55}, GateTolerance); err != nil {
+	if err := CheckGate(precResults(0.4, 0.9, 0.54), baseAt(0.55), GateTolerance); err != nil {
 		t.Fatalf("B above C must not fail the gate: %v", err)
 	}
 }
@@ -52,8 +57,25 @@ func TestGateNullThesisPasses(t *testing.T) {
 func TestGateBelowFloor(t *testing.T) {
 	r := precResults(0, 0, 0.55)
 	r.Params.Memories = 10
-	if err := CheckGate(r, Baseline{PrecisionAtK: 0.55}, GateTolerance); err == nil {
+	if err := CheckGate(r, baseAt(0.55), GateTolerance); err == nil {
 		t.Fatal("want below-floor error")
+	}
+}
+
+func TestGateRejectsStaleParams(t *testing.T) {
+	for name, mut := range map[string]func(*Baseline){
+		"memories": func(b *Baseline) { b.Params.Memories++ },
+		"seed":     func(b *Baseline) { b.Params.Seed++ },
+		"dim":      func(b *Baseline) { b.Params.Dim++ },
+		"rerank":   func(b *Baseline) { b.Rerank = "cross" },
+		"k":        func(b *Baseline) { b.K = 10 },
+	} {
+		b := baseAt(0.55)
+		mut(&b)
+		err := CheckGate(precResults(0, 0, 0.60), b, GateTolerance)
+		if err == nil || !strings.Contains(err.Error(), "baseline stale") {
+			t.Errorf("%s: want stale error, got %v", name, err)
+		}
 	}
 }
 
@@ -133,6 +155,7 @@ func TestLoadBaselineRejectsZero(t *testing.T) {
 	for name, body := range map[string]string{
 		"precision": `{"k":5,"precision_at_k":0}`,
 		"k":         `{"k":0,"precision_at_k":0.5}`,
+		"k too big": `{"k":101,"precision_at_k":0.5}`,
 	} {
 		path := filepath.Join(t.TempDir(), name+".json")
 		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -146,7 +169,7 @@ func TestLoadBaselineRejectsZero(t *testing.T) {
 
 func TestGateRoundsRunSide(t *testing.T) {
 	// 0.52995 rounds to 0.5300, exactly baseline - tol.
-	if err := CheckGate(precResults(0, 0, 0.52995), Baseline{PrecisionAtK: 0.55}, GateTolerance); err != nil {
+	if err := CheckGate(precResults(0, 0, 0.52995), baseAt(0.55), GateTolerance); err != nil {
 		t.Fatal(err)
 	}
 }

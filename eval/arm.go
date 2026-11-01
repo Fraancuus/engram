@@ -77,7 +77,6 @@ type armState struct {
 	tools *mcp.Tools
 	clock *Clock
 	ids   map[string]string // GID -> store id
-	byID  map[string]string // store id -> GID
 }
 
 // armAcc accumulates per-query scores across days.
@@ -153,7 +152,7 @@ func buildArm(decay engram.DecayModel, ds *Dataset, mode RerankMode, rr engram.R
 	}
 	tools := mcp.NewTools(emb, rr, decay, store, clock, opts...)
 	return &armState{decay: decay, store: store, tools: tools, clock: clock,
-		ids: map[string]string{}, byID: map[string]string{}}
+		ids: map[string]string{}}
 }
 
 // translate maps GIDs to store ids; an unwritten GID is a dataset bug.
@@ -240,7 +239,6 @@ func (a *armState) write(ctx context.Context, m Memory) error {
 		return de
 	}
 	a.ids[m.GID] = out.MemoryID
-	a.byID[out.MemoryID] = m.GID
 	return nil
 }
 
@@ -268,12 +266,11 @@ func (a *armState) query(ctx context.Context, ds *Dataset, q Query, k int, acc *
 	for i, h := range out.Results {
 		ret[i] = h.ID
 		got[h.ID] = true
-		switch via := h.Provenance.RetrievedVia; {
-		case via == "vector" || via == "link":
-			acc.via[via]++
-		case strings.HasPrefix(via, "entity:"):
-			acc.via["entity"]++
+		key, err := viaKey(h.Provenance.RetrievedVia)
+		if err != nil {
+			return fmt.Errorf("query %s: %w", q.ID, err)
 		}
+		acc.via[key]++
 	}
 	acc.prec = append(acc.prec, precisionAt(ret, rel, k))
 	r := recallAt(ret, rel, k)
@@ -304,6 +301,17 @@ func (a *armState) query(ctx context.Context, ds *Dataset, q Query, k int, acc *
 		acc.byType[t] = append(acc.byType[t], float64(hit[t])/float64(n))
 	}
 	return nil
+}
+
+// viaKey maps a hit's retrieved_via to its ViaShare bucket.
+func viaKey(via string) (string, error) {
+	switch {
+	case via == "vector" || via == "link":
+		return via, nil
+	case strings.HasPrefix(via, "entity:"):
+		return "entity", nil
+	}
+	return "", fmt.Errorf("unknown retrieved_via %q", via)
 }
 
 // runArm plays the whole dataset under decay and returns the arm's aggregates.

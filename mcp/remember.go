@@ -52,6 +52,7 @@ const (
 	maxNamespaceBytes = 256
 	maxEntities       = 64
 	maxEntityBytes    = 256
+	maxSourceBytes    = 256
 	defaultImportance = 0.5
 
 	// defaultDedupThreshold is the cosine similarity at or above which a new memory is
@@ -87,10 +88,10 @@ type RememberOutput struct {
 // existing near-identical memory instead of inserting), and otherwise stores a new
 // memory with its entity links. Internal failures are logged and returned as a generic
 // error so nothing internal leaks to the caller.
-func (h *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberOutput, err error) {
+func (t *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberOutput, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			h.log.Error("remember: recovered panic", "panic", r)
+			t.log.Error("remember: recovered panic", "panic", r)
 			out, err = RememberOutput{}, errors.New("remember: internal error")
 		}
 	}()
@@ -111,6 +112,9 @@ func (h *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberO
 		if math.IsNaN(importance) || math.IsInf(importance, 0) || importance < 0 || importance > 1 {
 			return RememberOutput{}, errors.New("importance must be a number between 0 and 1")
 		}
+	}
+	if len(in.Source) > maxSourceBytes {
+		return RememberOutput{}, fmt.Errorf("source must be at most %d bytes", maxSourceBytes)
 	}
 	if len(in.Entities) > maxEntities {
 		return RememberOutput{}, fmt.Errorf("at most %d entities allowed", maxEntities)
@@ -138,40 +142,40 @@ func (h *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberO
 	}
 
 	ns := engram.Namespace(in.Namespace)
-	vec, err := h.embedder.Embed(ctx, in.Content)
+	vec, err := t.embedder.Embed(ctx, in.Content)
 	if err != nil {
-		h.log.Error("remember: embed failed", "err", err)
+		t.log.Error("remember: embed failed", "err", err)
 		return RememberOutput{}, errors.New("remember: embedding failed")
 	}
 
 	// Search the namespace once: candidates[0] drives dedup; the rest feed auto-linking.
-	candidates, err := h.store.Search(ctx, []engram.Namespace{ns}, vec, autoLinkK)
+	candidates, err := t.store.Search(ctx, []engram.Namespace{ns}, vec, autoLinkK)
 	if err != nil {
-		h.log.Error("remember: search failed", "err", err)
+		t.log.Error("remember: search failed", "err", err)
 		return RememberOutput{}, errors.New("remember: store unavailable")
 	}
-	if len(candidates) > 0 && candidates[0].Score >= h.dedupThreshold {
-		if err := h.store.Reinforce(ctx, candidates[0].ID, h.clock.Now()); err != nil {
-			h.log.Error("remember: reinforce failed", "err", err)
+	if len(candidates) > 0 && candidates[0].Score >= t.dedupThreshold {
+		if err := t.store.Reinforce(ctx, candidates[0].ID, t.clock.Now()); err != nil {
+			t.log.Error("remember: reinforce failed", "err", err)
 			return RememberOutput{}, errors.New("remember: store unavailable")
 		}
 		// Merge any supplied entities onto the existing memory so a retry after a prior
 		// LinkEntities failure (or genuinely new mentions) still records them.
 		if len(in.Entities) > 0 {
-			if err := h.store.LinkEntities(ctx, candidates[0].ID, in.Entities); err != nil {
-				h.log.Error("remember: link entities on dedup failed", "err", err)
+			if err := t.store.LinkEntities(ctx, candidates[0].ID, in.Entities); err != nil {
+				t.log.Error("remember: link entities on dedup failed", "err", err)
 				return RememberOutput{}, errors.New("remember: store unavailable")
 			}
 		}
 		return RememberOutput{MemoryID: string(candidates[0].ID), Deduped: true}, nil
 	}
 
-	id, err := h.newID()
+	id, err := t.newID()
 	if err != nil {
-		h.log.Error("remember: id generation failed", "err", err)
+		t.log.Error("remember: id generation failed", "err", err)
 		return RememberOutput{}, errors.New("remember: internal error")
 	}
-	now := h.clock.Now()
+	now := t.clock.Now()
 	m := engram.Memory{
 		ID:           id,
 		Namespace:    ns,
@@ -179,19 +183,19 @@ func (h *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberO
 		Content:      in.Content,
 		Embedding:    vec,
 		Importance:   importance,
-		Stability:    h.decay.Stability(mt, 0, importance),
+		Stability:    t.decay.Stability(mt, 0, importance),
 		AccessCount:  0,
 		CreatedAt:    now,
 		LastAccessed: now,
 		Source:       in.Source,
 	}
-	if err := h.store.Put(ctx, m); err != nil {
-		h.log.Error("remember: put failed", "err", err)
+	if err := t.store.Put(ctx, m); err != nil {
+		t.log.Error("remember: put failed", "err", err)
 		return RememberOutput{}, errors.New("remember: store unavailable")
 	}
 	if len(in.Entities) > 0 {
-		if err := h.store.LinkEntities(ctx, id, in.Entities); err != nil {
-			h.log.Error("remember: link entities failed", "err", err)
+		if err := t.store.LinkEntities(ctx, id, in.Entities); err != nil {
+			t.log.Error("remember: link entities failed", "err", err)
 			return RememberOutput{}, errors.New("remember: store unavailable")
 		}
 	}
@@ -207,8 +211,8 @@ func (h *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberO
 		links = append(links, engram.Link{To: engram.MemoryID(lid), Weight: 1.0})
 	}
 	if len(links) > 0 {
-		if err := h.store.Link(ctx, id, links); err != nil {
-			h.log.Error("remember: link failed", "err", err)
+		if err := t.store.Link(ctx, id, links); err != nil {
+			t.log.Error("remember: link failed", "err", err)
 			return RememberOutput{}, errors.New("remember: store unavailable")
 		}
 	}
@@ -221,10 +225,10 @@ func (h *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberO
 		for i, sid := range in.Supersedes {
 			ids[i] = engram.MemoryID(sid)
 		}
-		if err := h.store.Supersede(ctx, ids); err != nil {
+		if err := t.store.Supersede(ctx, ids); err != nil {
 			// The memory is already stored; supersession is best-effort, so log and return the
 			// successful insert rather than failing an accepted write.
-			h.log.Error("remember: supersede failed (memory stored)", "err", err)
+			t.log.Error("remember: supersede failed (memory stored)", "err", err)
 		} else {
 			out.Superseded = in.Supersedes
 		}
