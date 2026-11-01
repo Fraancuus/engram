@@ -58,9 +58,14 @@ of the first relevant id (0 if none). k defaults to 5 and is set by `-k`.
 Per arm and seed the harness MUST report: means of the four metrics; recall stratified by
 the type of the relevant memory (procedural, semantic, episodic); bridge recall split by
 link and entity; share of returned results by `retrieved_via` class (vector, link, entity);
-latency p50 and p95 of `Recall`; final store size, edge count, bridge count; and a series
-of (day, size, edges, bridges) every 10 days. Across seeds it MUST report mean and sample
+latency p50 and p95 of `Recall`; nDCG@k and MRR per query class (topic-current, fact,
+episode-recent, episode-old, bridge-link, bridge-entity); final store size, edge count,
+bridge count; and a series of (day, size, edges, bridges) every 10 days. Across seeds it MUST report mean and sample
 standard deviation.
+
+#### Scenario: Per-class breakdown
+- **WHEN** an arm answers 75 fact queries with mean nDCG 0.5 and 125 topic-current queries with mean nDCG 1.0
+- **THEN** the per-class table shows fact 0.500 and topic-current 1.000 for that arm, and the overall nDCG is the mean over all queries, not over classes
 
 #### Scenario: Type-stratified recall
 - **WHEN** a relevant procedural memory is returned in 9 of 10 queries whose relevant set contains it
