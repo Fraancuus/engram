@@ -86,14 +86,15 @@ func TestTopicComposition(t *testing.T) {
 		t.Fatalf("got %d memories, %d queries", len(d.Memories), len(d.Queries))
 	}
 	type topic struct {
-		ns              engram.Namespace
-		std, facts, eps []Memory
+		ns       engram.Namespace
+		std, eps []Memory
+		chains   map[int][]Memory
 	}
 	topics := map[int]*topic{}
 	for _, m := range d.Memories {
 		tp := topics[m.Topic]
 		if tp == nil {
-			tp = &topic{ns: m.Namespace}
+			tp = &topic{ns: m.Namespace, chains: map[int][]Memory{}}
 			topics[m.Topic] = tp
 		}
 		if m.Namespace != tp.ns {
@@ -106,9 +107,9 @@ func TestTopicComposition(t *testing.T) {
 				t.Fatalf("%s: type/importance", m.GID)
 			}
 		case KindFact:
-			tp.facts = append(tp.facts, m)
-			if m.Type != engram.Semantic || m.Importance != 0.5 {
-				t.Fatalf("%s: type/importance", m.GID)
+			tp.chains[m.Chain] = append(tp.chains[m.Chain], m)
+			if m.Type != engram.Semantic || m.Importance != 0.5 || m.Supersedes != "" {
+				t.Fatalf("%s: type/importance/supersedes", m.GID)
 			}
 		case KindEpisode:
 			tp.eps = append(tp.eps, m)
@@ -124,8 +125,18 @@ func TestTopicComposition(t *testing.T) {
 		if n := len(tp.std); n < 1 || n > 3 {
 			t.Fatalf("topic %d: %d standard versions", id, n)
 		}
-		if n := len(tp.facts); n < 2 || n > 4 {
-			t.Fatalf("topic %d: %d facts", id, n)
+		if n := len(tp.chains); n < 1 || n > 2 {
+			t.Fatalf("topic %d: %d fact chains", id, n)
+		}
+		for c, ch := range tp.chains {
+			if c < 1 || len(ch) < 2 || len(ch) > 4 {
+				t.Fatalf("topic %d chain %d: %d versions", id, c, len(ch))
+			}
+			for i, f := range ch {
+				if f.Version != i+1 {
+					t.Fatalf("%s: version %d, want %d", f.GID, f.Version, i+1)
+				}
+			}
 		}
 		if len(tp.eps) < 1 {
 			t.Fatalf("topic %d: no episodes", id)
@@ -140,6 +151,48 @@ func TestTopicComposition(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestFactChainCosine(t *testing.T) {
+	t.Parallel()
+	d := floorDS(t)
+	chains := factChains(d)
+	if len(chains) == 0 {
+		t.Fatal("no fact chains")
+	}
+	lo, hi := 2.0, -2.0
+	for _, ch := range chains {
+		for a := 0; a < len(ch); a++ {
+			for b := a + 1; b < len(ch); b++ {
+				c := mock.Cosine(ch[a].Vec, ch[b].Vec)
+				lo, hi = min(lo, c), max(hi, c)
+			}
+		}
+	}
+	t.Logf("within-chain cosine range [%.4f, %.4f]", lo, hi)
+	if lo < 0.86 || hi >= 0.94 {
+		t.Fatalf("within-chain cosine range [%.4f, %.4f] outside [0.86, 0.94)", lo, hi)
+	}
+}
+
+// factChains groups fact memories by (topic, chain), in version order.
+func factChains(d *Dataset) [][]Memory {
+	idx := map[[2]int]int{}
+	var out [][]Memory
+	for _, m := range d.Memories {
+		if m.Kind != KindFact {
+			continue
+		}
+		k := [2]int{m.Topic, m.Chain}
+		i, ok := idx[k]
+		if !ok {
+			i = len(out)
+			idx[k] = i
+			out = append(out, nil)
+		}
+		out[i] = append(out[i], m)
+	}
+	return out
 }
 
 // inTopicAndNamespace groups memory indices by topic and by namespace.

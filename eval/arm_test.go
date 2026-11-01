@@ -11,7 +11,7 @@ import (
 )
 
 func tinyParams() Params {
-	return Params{Namespaces: 2, Topics: 4, Memories: 120, Entities: 12, Queries: 40, Days: 180, Dim: 16, Seed: 7}
+	return Params{Namespaces: 2, Topics: 4, Memories: 120, Entities: 12, Queries: 40, Days: 180, Dim: 16, Seed: 6}
 }
 
 func tinyDataset(t *testing.T) *Dataset {

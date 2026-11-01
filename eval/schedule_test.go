@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/Fraancuus/engram"
+	"github.com/Fraancuus/engram/mock"
 )
 
 func TestNoAccessBeforeWrite(t *testing.T) {
@@ -62,7 +63,7 @@ func TestScheduleWindows(t *testing.T) {
 				t.Fatalf("%s: later version day %d", m.GID, m.WriteDay)
 			}
 		case m.Kind == KindFact:
-			if m.WriteDay < 0 || m.WriteDay > 60 {
+			if m.WriteDay < 0 || m.WriteDay > 120 {
 				t.Fatalf("%s: fact day %d", m.GID, m.WriteDay)
 			}
 		}
@@ -116,6 +117,42 @@ func TestTopicCurrentPicksCurrentVersion(t *testing.T) {
 	}
 	if n == 0 {
 		t.Fatal("no topic-current queries")
+	}
+}
+
+func TestFactQueryPicksLatestVersion(t *testing.T) {
+	t.Parallel()
+	d := floorDS(t)
+	n := 0
+	for _, q := range d.Queries {
+		if q.Class != QFact {
+			continue
+		}
+		n++
+		if len(q.Relevant) != 1 {
+			t.Fatalf("%s: relevant %v", q.ID, q.Relevant)
+		}
+		rel, _ := d.Lookup(q.Relevant[0])
+		var want Memory
+		for _, m := range d.Memories {
+			if m.Kind == KindFact && m.Topic == rel.Topic && m.Chain == rel.Chain && m.WriteDay <= q.Day && m.Version > want.Version {
+				want = m
+			}
+		}
+		if rel.GID != want.GID {
+			t.Fatalf("%s day %d: relevant %s, want latest written %s", q.ID, q.Day, rel.GID, want.GID)
+		}
+		for _, m := range d.Memories {
+			if m.Kind != KindFact || m.Topic != rel.Topic || m.Chain != rel.Chain || m.GID == rel.GID {
+				continue
+			}
+			if c := mock.Cosine(q.Vec, m.Vec); c < 0.80 {
+				t.Fatalf("%s: cos(query, %s) = %.4f < 0.80", q.ID, m.GID, c)
+			}
+		}
+	}
+	if n == 0 {
+		t.Fatal("no fact queries")
 	}
 }
 

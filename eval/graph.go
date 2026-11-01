@@ -37,14 +37,21 @@ func (d *Dataset) buildGraph(r *rand.Rand) *graphInfo {
 	return g
 }
 
-// linkChains links each standard version to its predecessor and each fact to
-// the standard current at its write time. A link is stored on the later-written
+// linkChains links each standard version to its predecessor, each fact version
+// to its chain predecessor, and each fact to the standard current at its write
+// time. A link is stored on the later-written
 // end, since a remember can only reference what already exists.
 func (d *Dataset) linkChains() {
 	for _, ts := range d.topics {
 		for i := 1; i < len(ts.std); i++ {
 			m := &d.Memories[ts.std[i]]
 			m.Links = append(m.Links, d.Memories[ts.std[i-1]].GID)
+		}
+		for _, chain := range ts.chains {
+			for i := 1; i < len(chain); i++ {
+				m := &d.Memories[chain[i]]
+				m.Links = append(m.Links, d.Memories[chain[i-1]].GID)
+			}
 		}
 		for _, f := range ts.facts {
 			cur := ts.std[0]

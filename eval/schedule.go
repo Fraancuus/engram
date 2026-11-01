@@ -14,7 +14,7 @@ import (
 var (
 	standardWriteDays     = [2]int{0, 10}
 	laterVersionDays      = [2]int{30, 90}
-	factWriteDays         = [2]int{0, 60}
+	factWriteDays         = [2]int{0, 120}
 	topicCurrentQueryDays = [2]int{150, 179}
 	recentGapDays         = [2]int{1, 3}
 	oldGapDays            = [2]int{60, 120}
@@ -46,10 +46,16 @@ func (d *Dataset) assignWriteDays(r *rand.Rand) {
 			prev = dayIn(r, prev+1, hi)
 			d.Memories[ts.std[i]].WriteDay = min(prev, last)
 		}
-		for _, i := range ts.facts {
-			// A fact links to the standard current at its write time, so it cannot
-			// precede v1.
-			d.Memories[i].WriteDay = min(max(dayIn(r, factWriteDays[0], factWriteDays[1]), v1), last)
+		for _, chain := range ts.chains {
+			// Versions get distinct sorted days from [v1, 120]: a fact links to the
+			// standard current at its write time, so it cannot precede v1. Only a
+			// run too short to hold the chain loses strictness (days clamp).
+			lo := max(factWriteDays[0], v1)
+			days := r.Perm(max(min(factWriteDays[1], last)-lo+1, len(chain)))[:len(chain)]
+			sort.Ints(days)
+			for k, i := range chain {
+				d.Memories[i].WriteDay = min(lo+days[k], last)
+			}
 		}
 		for _, i := range ts.eps {
 			d.Memories[i].WriteDay = r.IntN(d.Params.Days)
@@ -87,9 +93,8 @@ func (d *Dataset) buildQueries(r *rand.Rand, g *graphInfo) error {
 	nBridge := p.Queries - nTopic - nFact - nRecent - nOld
 	nLink := nBridge / 2
 
-	var facts, eps []int
+	var eps []int
 	for _, ts := range d.topics {
-		facts = append(facts, ts.facts...)
 		eps = append(eps, ts.eps...)
 	}
 	eligible := func(maxWrite int) []int {
@@ -125,8 +130,17 @@ func (d *Dataset) buildQueries(r *rand.Rand, g *graphInfo) error {
 		add(QTopicCurrent, day, d.Memories[cur].Vec, []engram.Namespace{ts.ns}, d.Memories[cur].GID)
 	}
 	for ; nFact > 0; nFact-- {
-		m := d.Memories[facts[r.IntN(len(facts))]]
-		add(QFact, min(m.WriteDay+dayIn(r, oldGapDays[0], oldGapDays[1]), last), m.Vec, []engram.Namespace{m.Namespace}, m.GID)
+		ts := d.topics[r.IntN(len(d.topics))]
+		c := r.IntN(len(ts.chains))
+		chain := ts.chains[c]
+		day := min(d.Memories[chain[len(chain)-1]].WriteDay+dayIn(r, oldGapDays[0], oldGapDays[1]), last)
+		latest := chain[0]
+		for _, i := range chain {
+			if d.Memories[i].WriteDay <= day {
+				latest = i
+			}
+		}
+		add(QFact, day, ts.chainCents[c], []engram.Namespace{ts.ns}, d.Memories[latest].GID)
 	}
 	for ; nRecent > 0; nRecent-- {
 		m := d.Memories[recent[r.IntN(len(recent))]]

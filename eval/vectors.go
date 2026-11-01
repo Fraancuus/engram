@@ -24,9 +24,19 @@ const (
 	// noiseLeakMax caps |noise . otherCentroid|; noise that leaks more is redrawn
 	// so cross-topic cosine stays under 0.30.
 	noiseLeakMax = 0.25
+	// sigmaFactVersion is the weight of per-version noise on a fact chain's
+	// centroid; versions then sit near cosine 1/(1+sigma^2) = 0.90 of each other.
+	sigmaFactVersion = 0.33
+	// minChainCos is the floor on cosine between versions of one fact chain, the
+	// auto-link threshold.
+	minChainCos = 0.86
+	// minInTopicCos is the rejection floor on same-topic pairs.
+	minInTopicCos = 0.70
 	// maxInTopicCos is the rejection bound on same-topic pairs, a margin under
 	// the dedup threshold of 0.95.
 	maxInTopicCos = 0.94
+	// maxChainTries bounds fresh chain centroids per fact chain.
+	maxChainTries = 20
 	// maxNoiseTries bounds the rejection loop in vector assignment.
 	maxNoiseTries = 2000
 )

@@ -45,7 +45,8 @@ type Memory struct {
 	Namespace  engram.Namespace
 	Type       engram.MemoryType
 	Kind       Kind
-	Version    int // standards only, 1-based
+	Version    int // standards and fact versions, 1-based
+	Chain      int // fact chain within the topic, 1-based; 0 for non-facts
 	Content    string
 	Vec        engram.Vector
 	Importance float64
@@ -94,7 +95,9 @@ type Dataset struct {
 // topicSpan indexes one topic's memories in Dataset.Memories.
 type topicSpan struct {
 	ns              engram.Namespace
-	std, facts, eps []int
+	std, facts, eps []int // facts is every chain's versions, chain by chain
+	chains          [][]int
+	chainCents      []engram.Vector // chain centroids, parallel to chains
 }
 
 // Generate builds the dataset for p, rejecting params below the floor.
@@ -136,7 +139,13 @@ func (d *Dataset) buildMemories(r *rand.Rand) {
 			share = p.Memories - per*(p.Topics-1)
 		}
 		ns := engram.Namespace(fmt.Sprintf("ns%d", t%p.Namespaces))
-		nStd, nFact := 1+r.IntN(3), 2+r.IntN(3)
+		nStd := 1 + r.IntN(3)
+		sizes := make([]int, 1+r.IntN(2))
+		nFact := 0
+		for c := range sizes {
+			sizes[c] = 2 + r.IntN(3)
+			nFact += sizes[c]
+		}
 		nEp := max(share-nStd-nFact, 1)
 		ts := topicSpan{ns: ns}
 		add := func(m Memory) int {
@@ -152,8 +161,14 @@ func (d *Dataset) buildMemories(r *rand.Rand) {
 			}
 			ts.std = append(ts.std, add(m))
 		}
-		for f := 0; f < nFact; f++ {
-			ts.facts = append(ts.facts, add(Memory{GID: fmt.Sprintf("t%03d/fact/%d", t, f), Type: engram.Semantic, Kind: KindFact, Importance: 0.5}))
+		for c, n := range sizes {
+			var chain []int
+			for v := 1; v <= n; v++ {
+				m := Memory{GID: fmt.Sprintf("t%03d/fact/c%d/v%d", t, c+1, v), Type: engram.Semantic, Kind: KindFact, Version: v, Chain: c + 1, Importance: 0.5}
+				chain = append(chain, add(m))
+			}
+			ts.facts = append(ts.facts, chain...)
+			ts.chains = append(ts.chains, chain)
 		}
 		for e := 0; e < nEp; e++ {
 			m := Memory{GID: fmt.Sprintf("t%03d/ep/%04d", t, e), Type: engram.Episodic, Kind: KindEpisode, Importance: 0.3 + 0.2*r.Float64()}
@@ -168,18 +183,20 @@ func (d *Dataset) buildMemories(r *rand.Rand) {
 
 // assignVectors gives every memory its vector. Offsets and noise are orthogonal
 // to the centroid and to each other, so in-topic cosine depends only on the
-// noise overlap; a twin shares most of its sibling's noise.
+// noise overlap; a twin shares most of its sibling's noise, and a fact version
+// is its chain's centroid plus small orthogonal version noise.
 func (d *Dataset) assignVectors(r *rand.Rand) error {
 	dim := d.Params.Dim
 	cents := centroids(r, d.Params.Topics, dim)
 	noise := make([]engram.Vector, len(d.Memories))
-	for t, ts := range d.topics {
+	for t := range d.topics {
+		ts := &d.topics[t]
 		basis := []engram.Vector{cents[t]}
 		for k := 0; k < 3; k++ {
 			basis = append(basis, unitOrtho(r, dim, basis...))
 		}
 		offs := basis[1:]
-		for _, group := range [][]int{ts.std, ts.facts, ts.eps} {
+		plain := func(group []int) error {
 			for _, i := range group {
 				m := &d.Memories[i]
 				ok := false
@@ -191,29 +208,89 @@ func (d *Dataset) assignVectors(r *rand.Rand) error {
 						noise[i] = mix(sib, nil, 0, unitOrtho(r, dim, append(basis[:4:4], sib)...), sigmaTwin)
 					}
 					m.Vec = mix(cents[t], offs[m.Kind], kindOffsetScale, noise[i], sigmaInTopic)
-					ok = noiseIsClean(noise[i], cents, t) && d.farFromTopicMates(i, ts)
+					ok = noiseIsClean(noise[i], cents, t) && d.withinTopicBand(i, *ts)
 				}
 				if !ok {
 					return fmt.Errorf("assign vector for %s (topic %d): no noise draw satisfies the cosine bounds in %d tries", m.GID, t, maxNoiseTries)
 				}
 			}
+			return nil
+		}
+		if err := plain(ts.std); err != nil {
+			return err
+		}
+		for _, chain := range ts.chains {
+			var cc engram.Vector
+			var err error
+			// A chain whose centroid sits badly among the topic's other members
+			// gets a fresh centroid instead of failing the whole dataset.
+			for try := 0; try < maxChainTries; try++ {
+				if cc, err = d.assignChain(r, chain, basis, cents, t, *ts); err == nil {
+					break
+				}
+			}
+			if err != nil {
+				return err
+			}
+			ts.chainCents = append(ts.chainCents, cc)
+		}
+		if err := plain(ts.eps); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-// farFromTopicMates reports whether memory i, already holding a candidate
-// vector, stays under maxInTopicCos with every earlier-assigned memory of its
-// topic. This enforces the dedup bound (0.95) by construction.
-func (d *Dataset) farFromTopicMates(i int, ts topicSpan) bool {
+// assignChain draws a chain centroid and gives every version of the chain a
+// vector near it, returning the centroid. basis is the topic's orthonormal
+// (centroid, offsets) frame.
+func (d *Dataset) assignChain(r *rand.Rand, chain []int, basis []engram.Vector, cents []engram.Vector, t int, ts topicSpan) (engram.Vector, error) {
+	dim := d.Params.Dim
+	cn := unitOrtho(r, dim, basis...)
+	for try := 0; try < maxNoiseTries && !noiseIsClean(cn, cents, t); try++ {
+		cn = unitOrtho(r, dim, basis...)
+	}
+	cc := mix(cents[t], basis[1+int(KindFact)], kindOffsetScale, cn, sigmaInTopic)
+	for k, i := range chain {
+		m := &d.Memories[i]
+		ok := false
+		for try := 0; try < maxNoiseTries && !ok; try++ {
+			vn := unitOrtho(r, dim, append(basis[:4:4], cn)...)
+			m.Vec = mix(cc, nil, 0, vn, sigmaFactVersion)
+			ok = noiseIsClean(vn, cents, t) && d.withinTopicBand(i, ts) && d.inChainBand(chain[:k], m.Vec)
+		}
+		if !ok {
+			return nil, fmt.Errorf("assign vector for %s (topic %d): no version noise satisfies the cosine bounds in %d tries", m.GID, t, maxNoiseTries)
+		}
+	}
+	return cc, nil
+}
+
+// withinTopicBand reports whether memory i, already holding a candidate
+// vector, has cosine in [minInTopicCos, maxInTopicCos) with every
+// earlier-assigned memory of its topic. This enforces the dedup bound (0.95) and
+// the in-topic floor by construction, which fact versions need because their
+// extra version noise lowers their cosine to the rest of the topic.
+func (d *Dataset) withinTopicBand(i int, ts topicSpan) bool {
 	for _, group := range [][]int{ts.std, ts.facts, ts.eps} {
 		for _, j := range group {
 			if j == i {
 				return true // memories are assigned in std, facts, eps order
 			}
-			if mock.Cosine(d.Memories[i].Vec, d.Memories[j].Vec) >= maxInTopicCos {
+			if c := mock.Cosine(d.Memories[i].Vec, d.Memories[j].Vec); c < minInTopicCos || c >= maxInTopicCos {
 				return false
 			}
+		}
+	}
+	return true
+}
+
+// inChainBand reports whether v has cosine in [minChainCos, maxInTopicCos) with
+// every earlier version in the chain.
+func (d *Dataset) inChainBand(earlier []int, v engram.Vector) bool {
+	for _, j := range earlier {
+		if c := mock.Cosine(v, d.Memories[j].Vec); c < minChainCos || c >= maxInTopicCos {
+			return false
 		}
 	}
 	return true
@@ -271,6 +348,7 @@ func (d *Dataset) Hash() string {
 		str(string(m.Namespace))
 		putInt(h, int64(m.WriteDay))
 		putInt(h, int64(math.Round(m.Importance*1e6)))
+		putInt(h, int64(m.Chain))
 		str(m.Supersedes)
 		str(m.Twin)
 		strs(m.Entities)

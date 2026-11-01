@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/Fraancuus/engram"
@@ -148,8 +149,8 @@ func TestFactLinksCurrentStandard(t *testing.T) {
 				cur = s // chain is in version order, so the last match is current
 			}
 		}
-		if cur.GID == "" || len(f.Links) != 1 || f.Links[0] != cur.GID {
-			t.Fatalf("%s (day %d): links %v, want [%s]", f.GID, f.WriteDay, f.Links, cur.GID)
+		if cur.GID == "" || !slices.Contains(f.Links, cur.GID) {
+			t.Fatalf("%s (day %d): links %v, want to contain %s", f.GID, f.WriteDay, f.Links, cur.GID)
 		}
 	}
 	crossTopic := 0
@@ -165,6 +166,24 @@ func TestFactLinksCurrentStandard(t *testing.T) {
 	}
 	if crossTopic < 50 {
 		t.Fatalf("only %d cross-topic episode links", crossTopic)
+	}
+}
+
+func TestFactChainLinks(t *testing.T) {
+	t.Parallel()
+	d := floorDS(t)
+	for _, ch := range factChains(d) {
+		for i, f := range ch {
+			if i == 0 {
+				continue
+			}
+			if len(f.Links) < 2 || !slices.Contains(f.Links, ch[i-1].GID) {
+				t.Fatalf("%s: links %v, want predecessor %s plus the current standard", f.GID, f.Links, ch[i-1].GID)
+			}
+			if f.WriteDay <= ch[i-1].WriteDay {
+				t.Fatalf("%s: day %d not after predecessor day %d", f.GID, f.WriteDay, ch[i-1].WriteDay)
+			}
+		}
 	}
 }
 
