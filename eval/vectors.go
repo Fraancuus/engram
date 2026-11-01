@@ -8,37 +8,54 @@ import (
 )
 
 // dimDefault is the vector dimension at the floor.
-const dimDefault = 64
+const dimDefault = 128
 
-// Geometry constants, tuned once (6 attempts) against TestNoDedupCollisions,
-// TestTwinRange and TestCrossTopicLow on seeds 42, 1 and 7, and now frozen: change
-// them and the eval's ground-truth geometry changes with them.
+// Geometry constants, tuned against the dataset tests (seed 42; dedup bound also on
+// seeds 1, 2, 5 and 9) at dim 128 and frozen. Cross-topic cosine < 0.30 is not
+// reachable at dim 64 with in-topic cosines this low (the noise leaks onto the
+// other 49 centroids), hence the floor dimension of 128: change them and the eval's ground-truth geometry
+// changes with them.
+//
+// All bounds are raw cosines. The vector index scores (1+cos)/2 and the pipeline
+// thresholds (dedup 0.95, auto-link 0.85) apply to that scale, so in raw cosine the
+// dedup point is 0.90 and the auto-link point is 0.70 (design D3b). Hence: ordinary
+// pairs stay below the link point, twins and chain versions sit between the link
+// and dedup points, and nothing reaches the dedup point.
 const (
 	// sigmaInTopic scales the per-memory noise added to a topic centroid.
-	sigmaInTopic = 0.42
+	sigmaInTopic = 0.97
 	// sigmaTwin is the weight of fresh noise relative to the sibling's noise
-	// (weight 1) in a twin's noise; it sets cosine(twin, sibling) = 0.90.
-	sigmaTwin = 3.6
+	// (weight 1) in a twin's noise; it sets cosine(twin, sibling).
+	sigmaTwin = 1.5
 	// kindOffsetScale scales the per-kind offset added to a topic centroid.
 	kindOffsetScale = 0.35
 	// noiseLeakMax caps |noise . otherCentroid|; noise that leaks more is redrawn
 	// so cross-topic cosine stays under 0.30.
 	noiseLeakMax = 0.25
+	// sigmaChain scales the noise on a fact chain's centroid. It is smaller than
+	// sigmaInTopic because each version adds its own noise on top, which lowers its
+	// cosine to the rest of the topic; the chain centroid compensates.
+	sigmaChain = 0.57
 	// sigmaFactVersion is the weight of per-version noise on a fact chain's
-	// centroid; versions then sit near cosine 1/(1+sigma^2) = 0.90 of each other.
-	sigmaFactVersion = 0.33
-	// minChainCos is the floor on cosine between versions of one fact chain, the
-	// auto-link threshold.
-	minChainCos = 0.86
-	// minInTopicCos is the rejection floor on same-topic pairs.
-	minInTopicCos = 0.70
-	// maxInTopicCos is the rejection bound on same-topic pairs, a margin under
-	// the dedup threshold of 0.95.
-	maxInTopicCos = 0.94
+	// centroid; versions of one chain then sit near cosine 1/(1+sigma^2).
+	sigmaFactVersion = 0.5
+	// minOrdinaryCos and maxOrdinaryCos bound a same-topic pair that is neither a
+	// twin pair nor two versions of one chain; the ceiling is under the auto-link
+	// point (raw cosine 0.70) with a 0.04 margin, because the mock does not model the
+	// index's quantization noise.
+	minOrdinaryCos = 0.40
+	maxOrdinaryCos = 0.66
+	// minLinkedCos and maxLinkedCos bound twin pairs and versions of one chain:
+	// above the auto-link point, with maxLinkedCos a margin under the dedup point
+	// (raw cosine 0.90), so no two memories of a namespace ever dedup.
+	minLinkedCos = 0.74
+	maxLinkedCos = 0.88
 	// maxChainTries bounds fresh chain centroids per fact chain.
 	maxChainTries = 20
-	// maxNoiseTries bounds the rejection loop in vector assignment.
-	maxNoiseTries = 2000
+	// maxNoiseTries bounds the candidates drawn per vector assignment, drawBatch
+	// at a time.
+	maxNoiseTries = 2048
+	drawBatch     = 32
 )
 
 // newRNG returns a deterministic generator for seed.

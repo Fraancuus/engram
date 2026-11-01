@@ -221,17 +221,17 @@ func (d *Dataset) assignVectors(r *rand.Rand) error {
 		plain := func(group []int) error {
 			for _, i := range group {
 				m := &d.Memories[i]
-				ok := false
-				for try := 0; try < maxNoiseTries && !ok; try++ {
+				n, ok := d.bestDraw(i, *ts, cents, func() (engram.Vector, engram.Vector) {
+					var n engram.Vector
 					if m.Twin == "" {
-						noise[i] = unitOrtho(r, dim, basis...)
+						n = unitOrtho(r, dim, basis...)
 					} else {
 						sib := noise[d.byGID[m.Twin]]
-						noise[i] = mix(sib, nil, 0, unitOrtho(r, dim, append(basis[:4:4], sib)...), sigmaTwin)
+						n = mix(sib, nil, 0, unitOrtho(r, dim, append(basis[:4:4], sib)...), sigmaTwin)
 					}
-					m.Vec = mix(cents[t], offs[m.Kind], kindOffsetScale, noise[i], sigmaInTopic)
-					ok = noiseIsClean(noise[i], cents, t) && d.withinTopicBand(i, *ts)
-				}
+					return n, mix(cents[t], offs[m.Kind], kindOffsetScale, n, sigmaInTopic)
+				})
+				noise[i] = n
 				if !ok {
 					return fmt.Errorf("assign vector for %s (topic %d): no noise draw satisfies the cosine bounds in %d tries", m.GID, t, maxNoiseTries)
 				}
@@ -277,15 +277,13 @@ func (d *Dataset) assignChain(r *rand.Rand, chain []int, basis []engram.Vector, 
 	if !clean {
 		return nil, fmt.Errorf("assign chain centroid for topic %d chain %d: no clean noise draw in %d tries", t, d.Memories[chain[0]].Chain, maxNoiseTries)
 	}
-	cc := mix(cents[t], basis[1+int(KindFact)], kindOffsetScale, cn, sigmaInTopic)
-	for k, i := range chain {
+	cc := mix(cents[t], basis[1+int(KindFact)], kindOffsetScale, cn, sigmaChain)
+	for _, i := range chain {
 		m := &d.Memories[i]
-		ok := false
-		for try := 0; try < maxNoiseTries && !ok; try++ {
+		_, ok := d.bestDraw(i, ts, cents, func() (engram.Vector, engram.Vector) {
 			vn := unitOrtho(r, dim, append(basis[:4:4], cn)...)
-			m.Vec = mix(cc, nil, 0, vn, sigmaFactVersion)
-			ok = noiseIsClean(vn, cents, t) && d.withinTopicBand(i, ts) && d.inChainBand(chain[:k], m.Vec)
-		}
+			return vn, mix(cc, nil, 0, vn, sigmaFactVersion)
+		})
 		if !ok {
 			return nil, fmt.Errorf("assign vector for %s (topic %d): no version noise satisfies the cosine bounds in %d tries", m.GID, t, maxNoiseTries)
 		}
@@ -293,34 +291,59 @@ func (d *Dataset) assignChain(r *rand.Rand, chain []int, basis []engram.Vector, 
 	return cc, nil
 }
 
-// withinTopicBand reports whether memory i, already holding a candidate
-// vector, has cosine in [minInTopicCos, maxInTopicCos) with every
-// earlier-assigned memory of its topic. This enforces the dedup bound (0.95) and
-// the in-topic floor by construction, which fact versions need because their
-// extra version noise lowers their cosine to the rest of the topic.
-func (d *Dataset) withinTopicBand(i int, ts topicSpan) bool {
+// bestDraw sets memory i's vector from draw, which returns a (noise, vector)
+// candidate. It takes the cleanest candidate of each batch of drawBatch (clean
+// noise, smallest bandScore) and accepts the first batch whose best candidate is
+// inside its bands. Plain first-fit rejection cannot place the late members of a
+// ~100-member topic in a 0.29-wide cosine band, so the draw is a best-of-batch
+// pick. It reports false after maxNoiseTries candidates.
+func (d *Dataset) bestDraw(i int, ts topicSpan, cents []engram.Vector, draw func() (noise, vec engram.Vector)) (engram.Vector, bool) {
+	own := d.Memories[i].Topic
+	for tried := 0; tried < maxNoiseTries; tried += drawBatch {
+		best := math.Inf(1)
+		var bestNoise, bestVec engram.Vector
+		for b := 0; b < drawBatch; b++ {
+			n, v := draw()
+			if !noiseIsClean(n, cents, own) {
+				continue
+			}
+			d.Memories[i].Vec = v
+			if sc := d.bandScore(i, ts); sc < best {
+				best, bestNoise, bestVec = sc, n, v
+			}
+		}
+		if best <= 1 {
+			d.Memories[i].Vec = bestVec
+			return bestNoise, true
+		}
+	}
+	return nil, false
+}
+
+// bandScore returns how far memory i, already holding a candidate vector, sits
+// from the middle of its band against every earlier-assigned memory of its topic,
+// as a fraction of the band's half-width: at most 1 means every pair is inside
+// its band. The band is [minLinkedCos, maxLinkedCos] for a twin pair or two
+// versions of one fact chain and [minOrdinaryCos, maxOrdinaryCos] for any other
+// pair. This enforces the auto-link and dedup scales (see vectors.go) by
+// construction.
+func (d *Dataset) bandScore(i int, ts topicSpan) float64 {
+	mi := d.Memories[i]
+	worst := 0.0
 	for _, group := range [][]int{ts.std, ts.facts, ts.eps} {
 		for _, j := range group {
 			if j == i {
-				return true // memories are assigned in std, facts, eps order
+				return worst // memories are assigned in std, facts, eps order
 			}
-			if c := mock.Cosine(d.Memories[i].Vec, d.Memories[j].Vec); c < minInTopicCos || c >= maxInTopicCos {
-				return false
+			mj := d.Memories[j]
+			lo, hi := minOrdinaryCos, maxOrdinaryCos
+			if mi.Twin == mj.GID || mj.Twin == mi.GID || (mi.Kind == KindFact && mj.Kind == KindFact && mi.Chain == mj.Chain) {
+				lo, hi = minLinkedCos, maxLinkedCos
 			}
+			worst = max(worst, math.Abs(mock.Cosine(mi.Vec, mj.Vec)-(lo+hi)/2)/((hi-lo)/2))
 		}
 	}
-	return true
-}
-
-// inChainBand reports whether v has cosine in [minChainCos, maxInTopicCos) with
-// every earlier version in the chain.
-func (d *Dataset) inChainBand(earlier []int, v engram.Vector) bool {
-	for _, j := range earlier {
-		if c := mock.Cosine(v, d.Memories[j].Vec); c < minChainCos || c >= maxInTopicCos {
-			return false
-		}
-	}
-	return true
+	return worst
 }
 
 // noiseIsClean reports whether noise correlates at most noiseLeakMax with every

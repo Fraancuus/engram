@@ -11,8 +11,8 @@
     "entities": 1200,
     "queries": 500,
     "days": 180,
-    "dim": 64
+    "dim": 128
   },
-  "precision_at_k": 0.1544,
-  "ndcg_at_k": 0.5868
+  "precision_at_k": 0.1268,
+  "ndcg_at_k": 0.5135
 }

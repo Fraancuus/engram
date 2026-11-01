@@ -65,9 +65,11 @@ func (s *MemStore) Put(_ context.Context, m engram.Memory) error {
 	return nil
 }
 
-// Search returns the top k memories by cosine similarity (score descending, insertion
-// order on ties), restricted to namespaces when non-empty. Like Neo4j it does not filter
-// forgotten or superseded memories; k < 1 is treated as 1.
+// Search returns the top k memories by similarity (score descending, insertion order on
+// ties), restricted to namespaces when non-empty. Score is (1 + cosine) / 2, the scale
+// Neo4j's cosine vector index returns (orthogonal vectors score 0.5); the index's
+// quantization noise is not modelled. Like Neo4j it does not filter forgotten or
+// superseded memories; k < 1 is treated as 1.
 func (s *MemStore) Search(_ context.Context, namespaces []engram.Namespace, vec engram.Vector, k int) ([]engram.RecallResult, error) {
 	if k < 1 {
 		k = 1
@@ -80,7 +82,7 @@ func (s *MemStore) Search(_ context.Context, namespaces []engram.Namespace, vec 
 		if len(namespaces) > 0 && !slices.Contains(namespaces, m.Namespace) {
 			continue
 		}
-		out = append(out, engram.RecallResult{Memory: project(m), Score: Cosine(vec, m.Embedding)})
+		out = append(out, engram.RecallResult{Memory: project(m), Score: (1 + Cosine(vec, m.Embedding)) / 2})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 	if len(out) > k {

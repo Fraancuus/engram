@@ -48,6 +48,7 @@ func TestMemStoreSearchOrderAndScope(t *testing.T) {
 	t.Parallel()
 	s := NewMemStore()
 	mustPut(t, s, mem("m1", "a", 0.9), mem("m2", "b", 0.95), mem("m3", "a", 0.8))
+	cosByID := map[engram.MemoryID]float64{"m1": 0.9, "m2": 0.95, "m3": 0.8}
 	tests := []struct {
 		name string
 		ns   []engram.Namespace
@@ -69,7 +70,36 @@ func TestMemStoreSearchOrderAndScope(t *testing.T) {
 			if fmt.Sprint(ids(got)) != fmt.Sprint(tt.want) {
 				t.Fatalf("got %v want %v", ids(got), tt.want)
 			}
+			for _, r := range got {
+				want := (1 + cosByID[r.ID]) / 2
+				if math.Abs(r.Score-want) > 1e-6 {
+					t.Fatalf("%s: score %v, want normalized %v", r.ID, r.Score, want)
+				}
+			}
 		})
+	}
+}
+
+// TestMemStoreSearchNormalizedScore pins the Neo4j cosine index scale (1+cos)/2.
+func TestMemStoreSearchNormalizedScore(t *testing.T) {
+	t.Parallel()
+	s := NewMemStore()
+	mustPut(t, s,
+		engram.Memory{ID: "same", Namespace: "a", Embedding: engram.Vector{1, 0}, LastAccessed: t0},
+		engram.Memory{ID: "ortho", Namespace: "a", Embedding: engram.Vector{0, 1}, LastAccessed: t0},
+		engram.Memory{ID: "opposite", Namespace: "a", Embedding: engram.Vector{-1, 0}, LastAccessed: t0})
+	got, err := s.Search(ctx, nil, q, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[engram.MemoryID]float64{"same": 1, "ortho": 0.5, "opposite": 0}
+	if len(got) != len(want) {
+		t.Fatalf("got %d results, want %d", len(got), len(want))
+	}
+	for _, r := range got {
+		if math.Abs(r.Score-want[r.ID]) > 1e-6 {
+			t.Fatalf("%s: score %v, want %v", r.ID, r.Score, want[r.ID])
+		}
 	}
 }
 

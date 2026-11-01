@@ -69,7 +69,7 @@ func TestGenerateRejectsBelowFloor(t *testing.T) {
 
 func TestGenerateUncheckedSmall(t *testing.T) {
 	t.Parallel()
-	p := Params{Seed: 5, Namespaces: 2, Topics: 6, Memories: 120, Entities: 12, Queries: 40, Days: 180, Dim: 16}
+	p := Params{Seed: 5, Namespaces: 2, Topics: 6, Memories: 120, Entities: 12, Queries: 40, Days: 180, Dim: 32}
 	d, err := generateUnchecked(p)
 	if err != nil {
 		t.Fatal(err)
@@ -170,8 +170,8 @@ func TestFactChainCosine(t *testing.T) {
 		}
 	}
 	t.Logf("within-chain cosine range [%.4f, %.4f]", lo, hi)
-	if lo < 0.86 || hi >= 0.94 {
-		t.Fatalf("within-chain cosine range [%.4f, %.4f] outside [0.86, 0.94)", lo, hi)
+	if lo < 0.74 || hi > 0.88 {
+		t.Fatalf("within-chain cosine range [%.4f, %.4f] outside [0.74, 0.88]", lo, hi)
 	}
 }
 
@@ -235,8 +235,8 @@ func TestNoDedupCollisions(t *testing.T) {
 		}
 	}
 	t.Logf("max in-namespace cosine %.4f", maxCos)
-	if maxCos >= 0.95 {
-		t.Fatalf("max in-namespace cosine %.4f >= 0.95", maxCos)
+	if maxCos >= 0.90 {
+		t.Fatalf("max in-namespace cosine %.4f >= 0.90", maxCos)
 	}
 }
 
@@ -253,8 +253,8 @@ func TestTwinRange(t *testing.T) {
 			t.Fatalf("%s: twin %s missing", m.GID, m.Twin)
 		}
 		c := mock.Cosine(m.Vec, sib.Vec)
-		if c < 0.86 || c > 0.94 {
-			t.Fatalf("%s/%s: twin cosine %.4f outside [0.86, 0.94]", m.GID, sib.GID, c)
+		if c < 0.74 || c > 0.88 {
+			t.Fatalf("%s/%s: twin cosine %.4f outside [0.74, 0.88]", m.GID, sib.GID, c)
 		}
 		n++
 	}
@@ -287,14 +287,18 @@ func TestInTopicRange(t *testing.T) {
 	for _, idx := range byTopic {
 		for a := 0; a < len(idx); a++ {
 			for b := a + 1; b < len(idx); b++ {
-				c := mock.Cosine(d.Memories[idx[a]].Vec, d.Memories[idx[b]].Vec)
+				ma, mb := d.Memories[idx[a]], d.Memories[idx[b]]
+				if ma.Twin == mb.GID || mb.Twin == ma.GID || (ma.Kind == KindFact && mb.Kind == KindFact && ma.Chain == mb.Chain) {
+					continue // twins and chain mates have their own band
+				}
+				c := mock.Cosine(ma.Vec, mb.Vec)
 				lo, hi = min(lo, c), max(hi, c)
 			}
 		}
 	}
-	t.Logf("in-topic cosine range [%.4f, %.4f]", lo, hi)
-	if lo < 0.70 || hi > 0.94 {
-		t.Fatalf("in-topic cosine range [%.4f, %.4f] outside [0.70, 0.94]", lo, hi)
+	t.Logf("ordinary in-topic cosine range [%.4f, %.4f]", lo, hi)
+	if lo < 0.40 || hi > 0.66 {
+		t.Fatalf("ordinary in-topic cosine range [%.4f, %.4f] outside [0.40, 0.66]", lo, hi)
 	}
 }
 
@@ -320,8 +324,8 @@ func TestNoDedupCollisionsSeeds(t *testing.T) {
 			}
 		}
 		t.Logf("seed %d max in-namespace cosine %.4f", seed, mx)
-		if mx >= 0.95 {
-			t.Fatalf("seed %d: max %.4f >= 0.95", seed, mx)
+		if mx >= 0.90 {
+			t.Fatalf("seed %d: max %.4f >= 0.90", seed, mx)
 		}
 	}
 }

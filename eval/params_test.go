@@ -25,7 +25,7 @@ func TestParamsScale(t *testing.T) {
 			t.Errorf("Scaled(%d) = %+v, want floor", n, got)
 		}
 	}
-	want := Params{Namespaces: 3, Topics: 100, Memories: 10000, Entities: 2400, Queries: 1000, Days: 180, Dim: 64}
+	want := Params{Namespaces: 3, Topics: 100, Memories: 10000, Entities: 2400, Queries: 1000, Days: 180, Dim: 128}
 	if got := Floor().Scaled(2); got != want {
 		t.Fatalf("Scaled(2) = %+v, want %+v", got, want)
 	}

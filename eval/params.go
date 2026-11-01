@@ -21,7 +21,7 @@ type Params struct {
 func Floor() Params {
 	return Params{
 		Namespaces: 3, Topics: 50, Memories: 5000, Entities: 1200,
-		Queries: 500, Days: 180, Dim: 64,
+		Queries: 500, Days: 180, Dim: 128,
 	}
 }
 
