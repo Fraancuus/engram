@@ -36,13 +36,14 @@ unchanged.
 ### Requirement: Typed memory mix per topic
 Each topic MUST belong to exactly one namespace and MUST contain: one procedural standard
 with 1–3 versions where each version after the first carries `Supersedes` = the previous
-version's generator id; 2–4 write-once semantic facts; and episodic events that fill the
-topic's share of the memory budget. Importance MUST be 0.7 for standards, 0.5 for facts,
+version's generator id; 1–2 semantic fact chains of 2–4 versions each, whose versions carry
+NO `Supersedes` (`remember` only supersedes procedural writes, so an older version is
+implicitly stale); and episodic events that fill the topic's share of the memory budget. Importance MUST be 0.7 for standards, 0.5 for facts,
 and in [0.3, 0.5] for episodes.
 
 #### Scenario: Topic composition
 - **WHEN** a dataset is generated at the floor
-- **THEN** every topic has exactly one standard chain of length 1–3, 2–4 facts, and at least one episode, all in the topic's namespace
+- **THEN** every topic has exactly one standard chain of length 1–3, 1–2 fact chains of 2–4 versions with `Supersedes == ""`, and at least one episode, all in the topic's namespace
 
 ### Requirement: Vector geometry
 Memory vectors MUST be unit vectors of the configured dimension built as
@@ -50,7 +51,8 @@ normalize(topic centroid + 0.35·kind offset + σ·noise) with frozen named σ c
 Topic centroids MUST be mutually orthonormal whenever `Topics ≤ Dim`. On the CI seed at the
 floor: in-topic pairwise cosine lies in [0.70, 0.94]; cross-topic cosine has absolute value
 below 0.30 over a seeded sample of 2,000 pairs (the all-pairs maximum is reported in the
-design, not bounded); designated "twin" episode pairs have cosine in [0.86, 0.94]; and no two
+design, not bounded); designated "twin" episode pairs have cosine in [0.86, 0.94]; versions of one fact chain
+have pairwise cosine in [0.86, 0.94) (near-copies that auto-link, never dedup); and no two
 memories in the same namespace have cosine ≥ 0.95 (the dedup threshold). The dedup bound
 MUST hold on every seed; the other ranges are asserted on the CI seed.
 
@@ -68,7 +70,8 @@ MUST hold on every seed; the other ranges are asserted on the CI seed.
 
 ### Requirement: Deliberate interconnection
 The generator MUST emit: explicit links from each standard version to the next, from every
-fact to the standard version current at the fact's write time, and from 2% of episodes to
+fact version to the next in its chain, from every fact version to the standard version
+current at its write time, and from 2% of episodes to
 one memory in another topic; 1–3 entity mentions per memory; hub entities (5% of the pool)
 mentioned from at least 3 topics spanning at least 2 namespaces; and bridge-only pairs (X,
 Y) where cos(query, Y) < 0.30 and Y is reachable from X by exactly one link or one shared
@@ -90,9 +93,10 @@ memories per entity so `neighborCapPerSeed` never truncates a bridge.
 ### Requirement: Event schedule over virtual days
 The schedule MUST place events on integer days in [0, days): standard v1 writes on days
 0–10, later versions on days 30–90, standard accesses every ~7 days until day 60 and none
-after; fact writes on days 0–60 with 1–3 accesses in the following 30 days; episode writes
+after; fact-chain versions written in order on days 0–120 (each later than the previous)
+with 1–3 accesses in the 30 days after each version's write; episode writes
 uniformly over the run with 0–2 accesses within 3 days; queries as the mix 25%
-topic-current (days 150–179), 15% fact (t+60..120), 20% episode-recent (t+1..3), 15%
+topic-current (days 150–179), 15% fact (t+60..120 after the chain's latest version, clamped to the run), 20% episode-recent (t+1..3), 15%
 episode-old (t+60..120), 25% bridge (half link, half entity, any day after both X and Y
 exist). An event MUST never reference a memory before its write day.
 
@@ -106,13 +110,19 @@ exist). An event MUST never reference a memory before its write day.
 
 ### Requirement: Generator-owned ground truth
 Each query MUST carry its relevant set from the generator: topic-current → {standard
-version current on the query day}; fact → {that fact}; episode → {that episode} at any
+version current on the query day}; fact → {the chain's latest version written on or before
+the query day}, with the query vector built from the chain centroid (version-agnostic) so
+older versions are high-similarity distractors; episode → {that episode} at any
 age; bridge → {X, Y}. Queries MUST be scoped to the topic's namespace, except entity-bridge
 queries which pass both namespaces involved. Labels MUST NOT depend on any pipeline output.
 
 #### Scenario: Topic-current picks the current version
 - **WHEN** a topic has versions v1 (day 5) and v2 (day 40) and a topic-current query on day 160
 - **THEN** the relevant set is {v2}
+
+#### Scenario: Fact query picks the latest version
+- **WHEN** a chain has v1 (day 10), v2 (day 70), v3 (day 130) and a fact query on day 100
+- **THEN** the relevant set is {v2} and cos(query, v1) and cos(query, v3) are each ≥ 0.80
 
 #### Scenario: Entity-bridge query scope
 - **WHEN** a bridge query's X and Y are in namespaces n1 and n2

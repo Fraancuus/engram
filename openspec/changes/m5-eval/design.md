@@ -131,8 +131,11 @@ multiplies topics, memories, entities, queries by n):
 Per topic (assigned to one namespace): procedural standard** with 1–3 versions
 (importance 0.7; each new version is written with `Supersedes: [previous]` in every arm,
 which is the only path `remember` applies supersession on — it is procedural-only by
-design, `mcp/remember.go`), 2–4 write-once **semantic facts** (importance 0.5, slowly aging: S₀ =
-60 d under C, 14 d under B), and **episodic events** filling the remainder (importance
+design, `mcp/remember.go`), 1–2 **semantic fact chains** of 2–4 versions (importance 0.5,
+slowly aging: S₀ = 60 d under C, 14 d under B; versions are NOT superseded because `remember`
+only supersedes procedural writes — implicit staleness is the realistic case and the only
+place forgetting can buy precision: a never-forgetting store returns every version of a fact
+while only the latest is right), and **episodic events** filling the remainder (importance
 0.3–0.5). Vector of a
 memory = normalize(topic centroid + 0.35·kind offset + σ·noise), with σ chosen so in-topic
 cosine lands in roughly 0.75–0.93 and cross-topic cosine near 0. "Twin" episodes are
@@ -188,6 +191,13 @@ and bridge queries two (0.4); the table reports it because the PRD gate names it
 and MRR carry the ranking signal. The smoke test at the floor is opt-in
 (`ENGRAM_EVAL_SMOKE=1`) because it takes minutes under `-race`.
 
+First floor result that forced this (2026-11-02, rerank none, seed 42): none nDCG .943 / store
+5000; uniform .633 / 4873; type-aware .622 / 2967. With write-once facts the never-forgetting
+arm had no distractor that could hurt it, so the PRD's Q1 premise was untestable; fact chains
+with implicit staleness restore it. Entity bridges (`via-entity` = 0, bridge-entity recall
+0.5 = hop node only) do not surface in the top 5 without the cross-encoder because the
+blend scores them at sim × 0.5; that is reported as a finding, not tuned away.
+
 ### D6. Event schedule and virtual time
 `eval.Clock` is a settable `engram.Clock`. One simulation day per loop iteration:
 1. set clock to day start; 2. writes (`Remember` with entities/links/supersedes, identical in
@@ -207,7 +217,8 @@ entity). Queries are scoped to the topic's namespace, except entity-bridge queri
 pass both namespaces involved (the recall scoping rule requires it).
 
 ### D7. Ground truth
-Topic-current: {current standard version}. Fact: {that fact}. Episode queries: {that
+Topic-current: {current standard version}. Fact: {latest chain version written on or before
+the query day}, queried from the chain centroid so all versions compete. Episode queries: {that
 episode}, at any age. Bridge: {hop node X, bridge-only Y}. Superseded standard versions
 are excluded from recall in every arm but only ever pruned by B and C; in-topic episodes
 and older semantic facts are the live distractors. An old episode counts as relevant on
