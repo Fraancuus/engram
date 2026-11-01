@@ -6,7 +6,7 @@ description: >
   port/adapter boundary, or judging whether an abstraction is justified.
   Use proactively before introducing new packages.
 tools: Read, Grep, Glob
-model: opus
+model: fable
 ---
 You are a senior Go architect for Engram, a long-term memory service.
 

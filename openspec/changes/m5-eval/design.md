@@ -166,10 +166,32 @@ Interconnection, built on purpose:
   link or a shared entity from a hop node X that is near the query. Hop nodes are episodic
   in at least half the pairs, so decay can cut the path.
 
+### D3a. Reranker stage in the eval (settled 2026-11-01 after the first floor run)
+With a cosine reranker, graph expansion can never surface a result: a bridge-only memory Y
+has cos(query, Y) < 0.30 by construction, so the reranker sorts it below every in-topic
+distractor and `via-link`/`via-entity` are 0 in all arms. A synthetic stand-in for the
+cross-encoder would either leak labels or (cosine) nullify expansion. Ruling: the eval runs
+the pipeline with the cross-encoder stage **disabled** by default (`mcp.WithoutRerank()`),
+so the final order is the blend order (vector similarity + propagated link/bridge scores +
+importance + retrievability), which is exactly the candidate selection that decay changes.
+`-rerank cosine` re-enables `mock.CosineReranker` for comparison. The report states which
+mode produced the table. Production still re-sorts the same candidate pool with the real
+cross-encoder; the eval measures what that stage receives.
+
+Accesses in the schedule call `Recall` with k = 1, not 5: an "access" models the agent
+recalling that one memory. With k = 5 every access also reinforced four in-topic neighbours
+and propagated to strong-edge neighbours, so ~5,000 accesses produced ~25,000
+reinforcements and almost nothing ever decayed (store 4,831 of 5,000 under C at day 180).
+
+Precision@5 has a low ceiling here because most queries have one relevant memory (max 0.2)
+and bridge queries two (0.4); the table reports it because the PRD gate names it, but nDCG
+and MRR carry the ranking signal. The smoke test at the floor is opt-in
+(`ENGRAM_EVAL_SMOKE=1`) because it takes minutes under `-race`.
+
 ### D6. Event schedule and virtual time
 `eval.Clock` is a settable `engram.Clock`. One simulation day per loop iteration:
 1. set clock to day start; 2. writes (`Remember` with entities/links/supersedes, identical in
-all arms); 3. accesses (a `Recall` with the memory's own vector, k=5, which
+all arms); 3. accesses (a `Recall` with the memory's own vector, k=1, which
 reinforces through the real path); 4. queries (a `Recall` scored against truth, latency
 timed); 5. `SweepOnce(now)` with grace 30 d, floor 0.02, batch = current store size (one
 sweep per day stands in for engramd's 24 hourly ticks of 500); 6. record store size, edge
