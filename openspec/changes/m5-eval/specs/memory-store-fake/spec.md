@@ -17,11 +17,18 @@ use, and pass `go test -race`.
 `Search(ctx, namespaces, vec, k)` MUST return the top-k memories by cosine similarity among
 those whose namespace is in `namespaces` (all memories when the list is empty), ordered by
 score descending with insertion order as the tie-break, including forgotten and
-superseded memories, with `Score` set to the cosine. `k < 1` MUST behave as `k = 1`.
+superseded memories, with `Score` set to the NORMALIZED similarity `(1 + cos) / 2` — the
+scale Neo4j's cosine vector index returns (measured on Neo4j 5.26: orthogonal vectors score
+0.5), which is the scale every pipeline threshold (dedup 0.95, auto-link 0.85, blend) is
+applied to. The mock does not model the index's quantization noise. `k < 1` MUST behave as `k = 1`.
 
 #### Scenario: Namespace filter and order
 - **WHEN** memories m1 (ns a, cos 0.9), m2 (ns b, cos 0.95), m3 (ns a, cos 0.8) exist and `Search([a], q, 10)` runs
 - **THEN** the result is [m1, m3]
+
+#### Scenario: Normalized score
+- **WHEN** a memory with an embedding orthogonal to the query is searched
+- **THEN** its `Score` is 0.5, and an identical embedding scores 1.0
 
 #### Scenario: Forgotten still searchable
 - **WHEN** a memory is `Forgotten`

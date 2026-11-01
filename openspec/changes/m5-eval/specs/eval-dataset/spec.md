@@ -48,17 +48,20 @@ and in [0.3, 0.5] for episodes.
 ### Requirement: Vector geometry
 Memory vectors MUST be unit vectors of the configured dimension built as
 normalize(topic centroid + 0.35·kind offset + σ·noise) with frozen named σ constants.
-Topic centroids MUST be mutually orthonormal whenever `Topics ≤ Dim`. On the CI seed at the
-floor: in-topic pairwise cosine lies in [0.70, 0.94]; cross-topic cosine has absolute value
+Topic centroids MUST be mutually orthonormal whenever `Topics ≤ Dim`. All bounds below are
+RAW cosines; the store reports `(1 + cos) / 2`, so the pipeline's dedup threshold 0.95 is
+raw cos 0.90 and its auto-link threshold 0.85 is raw cos 0.70. On the CI seed at the floor:
+ordinary in-topic pairs (not twins, not chain mates) have cosine in [0.40, 0.69], below the
+auto-link point, so general chatter does not link; cross-topic cosine has absolute value
 below 0.30 over a seeded sample of 2,000 pairs (the all-pairs maximum is reported in the
-design, not bounded); designated "twin" episode pairs have cosine in [0.86, 0.94]; versions of one fact chain
-have pairwise cosine in [0.86, 0.94) (near-copies that auto-link, never dedup); and no two
-memories in the same namespace have cosine ≥ 0.95 (the dedup threshold). The dedup bound
-MUST hold on every seed; the other ranges are asserted on the CI seed.
+design, not bounded); designated "twin" episode pairs and versions of one fact chain have
+pairwise cosine in [0.72, 0.88] (they auto-link, they never dedup); and no two memories in
+the same namespace have cosine ≥ 0.90 (the dedup point). The dedup bound MUST hold on every
+seed by construction; the other ranges are asserted on the CI seed.
 
 #### Scenario: No dedup collisions
 - **WHEN** a dataset is generated at the floor
-- **THEN** the maximum pairwise cosine among memories sharing a namespace is below 0.95
+- **THEN** the maximum pairwise cosine among memories sharing a namespace is below 0.90
 
 #### Scenario: Orthonormal centroids at the floor
 - **WHEN** a dataset is generated with Topics ≤ Dim
@@ -66,7 +69,7 @@ MUST hold on every seed; the other ranges are asserted on the CI seed.
 
 #### Scenario: Twins cross the auto-link threshold
 - **WHEN** a twin pair is generated
-- **THEN** its cosine is ≥ 0.86 and ≤ 0.94
+- **THEN** its cosine is ≥ 0.72 and ≤ 0.88
 
 ### Requirement: Deliberate interconnection
 The generator MUST emit: explicit links from each standard version to the next, from every

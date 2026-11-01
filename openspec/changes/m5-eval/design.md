@@ -169,6 +169,19 @@ Interconnection, built on purpose:
   link or a shared entity from a hop node X that is near the query. Hop nodes are episodic
   in at least half the pairs, so decay can cut the path.
 
+### D3b. Similarity scale (settled 2026-11-01, measured on Neo4j 5.26)
+`db.index.vector.queryNodes` with `cosine` returns `(1 + cos) / 2`, not the raw cosine:
+orthogonal vectors score 0.5. Every pipeline threshold is applied to that scale, so in raw
+cosine the dedup point is 0.90 and the auto-link point is 0.70. `mock.MemStore.Search`
+mirrors the normalized score; the generator's bounds are stated in raw cosine and mapped
+through it: ordinary in-topic pairs [0.40, 0.69] (no auto-link), twins and chain versions
+[0.72, 0.88] (auto-link, no dedup), dedup bound < 0.90 by construction, bridge-only
+cos(query, Y) < 0.30. The quantized index also adds score noise (a few hundredths on dense
+vectors; up to 0.5 on degenerate sparse ones), which the mock does not model. Product
+finding for a follow-up change, not this one: the M1/M2 constants `defaultDedupThreshold`
+0.95 and `linkThreshold` 0.85 were chosen as if they were raw cosines; in production they
+mean cos 0.90 and cos 0.70.
+
 ### D3a. Reranker stage in the eval (settled 2026-11-01 after the first floor run)
 With a cosine reranker, graph expansion can never surface a result: a bridge-only memory Y
 has cos(query, Y) < 0.30 by construction, so the reranker sorts it below every in-topic
