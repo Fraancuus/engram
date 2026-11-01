@@ -85,6 +85,18 @@ func (d *Dataset) buildAccesses(r *rand.Rand) {
 	sort.SliceStable(d.Accesses, func(a, b int) bool { return d.Accesses[a].Day < d.Accesses[b].Day })
 }
 
+// latestAt returns the position in chain of the latest version written on or
+// before day, or 0 when none was.
+func (d *Dataset) latestAt(chain []int, day int) int {
+	latest := 0
+	for k, i := range chain {
+		if d.Memories[i].WriteDay <= day {
+			latest = k
+		}
+	}
+	return latest
+}
+
 // buildQueries emits the query mix with generator-owned relevant sets.
 func (d *Dataset) buildQueries(r *rand.Rand, g *graphInfo) error {
 	p := d.Params
@@ -134,13 +146,7 @@ func (d *Dataset) buildQueries(r *rand.Rand, g *graphInfo) error {
 		c := r.IntN(len(ts.chains))
 		chain := ts.chains[c]
 		day := min(d.Memories[chain[len(chain)-1]].WriteDay+dayIn(r, oldGapDays[0], oldGapDays[1]), last)
-		latest := chain[0]
-		for _, i := range chain {
-			if d.Memories[i].WriteDay <= day {
-				latest = i
-			}
-		}
-		add(QFact, day, ts.chainCents[c], []engram.Namespace{ts.ns}, d.Memories[latest].GID)
+		add(QFact, day, ts.chainCents[c], []engram.Namespace{ts.ns}, d.Memories[chain[d.latestAt(chain, day)]].GID)
 	}
 	for ; nRecent > 0; nRecent-- {
 		m := d.Memories[recent[r.IntN(len(recent))]]

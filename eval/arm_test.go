@@ -11,7 +11,14 @@ import (
 )
 
 func tinyParams() Params {
-	return Params{Namespaces: 2, Topics: 4, Memories: 120, Entities: 12, Queries: 40, Days: 180, Dim: 16, Seed: 6}
+	return Params{Namespaces: 2, Topics: 4, Memories: 120, Entities: 12, Queries: 40, Days: 180, Dim: 16, Seed: 7}
+}
+
+func TestTinyParamsGenerates(t *testing.T) {
+	t.Parallel()
+	if _, err := generateUnchecked(tinyParams()); err != nil {
+		t.Fatalf("tiny fixture does not generate (try another seed): %v", err)
+	}
 }
 
 func tinyDataset(t *testing.T) *Dataset {
@@ -87,26 +94,33 @@ func TestArmBPrunesStaleStandard(t *testing.T) {
 	ds := tinyDataset(t)
 	a := newArm(engram.UniformDecay{}, ds, RerankNone)
 	acc := newAcc()
-	for d := 0; d <= 150; d++ {
-		if err := a.day(context.Background(), ds, d, 5, acc); err != nil {
-			t.Fatalf("day %d: %v", d, err)
-		}
-	}
-	lastAccess := map[string]int{}
-	for _, ac := range ds.Accesses {
-		lastAccess[ac.GID] = max(lastAccess[ac.GID], ac.Day)
-	}
-	// A non-current standard never gets recalled by queries, so it must be
-	// gone by day 150 once its accesses stop at day 60.
 	superseded := map[string]bool{}
 	for _, m := range ds.Memories {
 		if m.Supersedes != "" {
 			superseded[m.Supersedes] = true
 		}
 	}
+	// A recall (query or access) reinforces what it returns, so a stale
+	// standard that was recalled after its own accesses stopped at day 60 may
+	// legitimately survive. Track those via LastAccessed and exempt them.
+	recalled := map[string]bool{}
+	for d := 0; d <= 150; d++ {
+		if err := a.day(context.Background(), ds, d, 5, acc); err != nil {
+			t.Fatalf("day %d: %v", d, err)
+		}
+		for gid := range superseded {
+			if snap, ok := a.store.Snapshot(engram.MemoryID(a.ids[gid])); ok && snap.LastAccessed.After(dayTime(60)) {
+				recalled[gid] = true
+			}
+		}
+	}
+	lastAccess := map[string]int{}
+	for _, ac := range ds.Accesses {
+		lastAccess[ac.GID] = max(lastAccess[ac.GID], ac.Day)
+	}
 	checked := 0
 	for _, m := range ds.Memories {
-		if m.Kind != KindStandard || !superseded[m.GID] || lastAccess[m.GID] > 60 {
+		if m.Kind != KindStandard || !superseded[m.GID] || lastAccess[m.GID] > 60 || recalled[m.GID] {
 			continue
 		}
 		checked++
@@ -115,7 +129,7 @@ func TestArmBPrunesStaleStandard(t *testing.T) {
 		}
 	}
 	if checked == 0 {
-		t.Fatal("no stale standard to check")
+		t.Fatal("no unrecalled stale standard to check")
 	}
 }
 

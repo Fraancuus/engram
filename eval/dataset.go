@@ -272,6 +272,9 @@ func (d *Dataset) assignChain(r *rand.Rand, chain []int, basis []engram.Vector, 
 	for try := 0; try < maxNoiseTries && !noiseIsClean(cn, cents, t); try++ {
 		cn = unitOrtho(r, dim, basis...)
 	}
+	if !noiseIsClean(cn, cents, t) {
+		return nil, fmt.Errorf("assign chain centroid for topic %d chain %d: no clean noise draw in %d tries", t, d.Memories[chain[0]].Chain, maxNoiseTries)
+	}
 	cc := mix(cents[t], basis[1+int(KindFact)], kindOffsetScale, cn, sigmaInTopic)
 	for k, i := range chain {
 		m := &d.Memories[i]
