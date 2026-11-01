@@ -282,3 +282,31 @@ func TestRunFloorSmoke(t *testing.T) {
 		t.Logf("wall %s\n%s", time.Since(start), buf.String())
 	}
 }
+
+func TestAccessHitSummaryAndTable(t *testing.T) {
+	t.Parallel()
+	a1, a2 := fakeArm(engram.DecayNone, 0.5, 10), fakeArm(engram.DecayNone, 0.5, 10)
+	a1.AccessHit = map[Kind]float64{KindStandard: 1, KindFact: 0.5, KindEpisode: 0.25}
+	a2.AccessHit = map[Kind]float64{KindStandard: 0.5, KindFact: 0.5} // no episode accesses this seed
+	r := &Results{K: 5, Rerank: "none", Seeds: []int64{1, 2}, Arms: map[string][]ArmResult{engram.DecayNone: {a1, a2}}}
+	s := r.Summary(engram.DecayNone)
+	if got := s.AccessHit[KindStandard].Mean; got != 0.75 {
+		t.Errorf("standard mean = %v, want 0.75", got)
+	}
+	if got := s.AccessHit[KindEpisode]; got.Mean != 0.25 || got.Std != 0 {
+		t.Errorf("episode with one seed missing = %+v, want mean 0.25 over the one seed", got)
+	}
+	var buf bytes.Buffer
+	WriteTable(&buf, r)
+	lines := strings.Split(buf.String(), "\n")
+	_, title := lineFields(buf.String(), "access hit rate (target ranked first)")
+	if title < 0 {
+		t.Fatalf("missing access table in:\n%s", buf.String())
+	}
+	if got, want := strings.Fields(lines[title+1]), []string{"arm", "standard", "fact", "episode"}; !slices.Equal(got, want) {
+		t.Errorf("access header = %v want %v", got, want)
+	}
+	if got := strings.Fields(lines[title+2]); len(got) != 4 || got[0] != "none" || got[1] != "0.750±0.354" || got[3] != "0.250±0.000" {
+		t.Errorf("access row = %v", got)
+	}
+}

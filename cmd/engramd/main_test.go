@@ -17,6 +17,7 @@ func TestDecayFromEnv(t *testing.T) {
 	}{
 		{name: "unset defaults to type-aware", env: nil, want: engram.TypeAwareDecay{}, wantName: "type-aware"},
 		{name: "empty defaults to type-aware", env: map[string]string{"ENGRAM_DECAY": ""}, want: engram.TypeAwareDecay{}, wantName: "type-aware"},
+		{name: "none", env: map[string]string{"ENGRAM_DECAY": "none"}, want: engram.NullDecay{}, wantName: "none"},
 		{name: "uniform", env: map[string]string{"ENGRAM_DECAY": "uniform"}, want: engram.UniformDecay{}, wantName: "uniform"},
 		{name: "unknown errors", env: map[string]string{"ENGRAM_DECAY": "linear"}, wantErr: true},
 	}

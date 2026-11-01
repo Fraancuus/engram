@@ -208,7 +208,7 @@ and bridge queries two (0.4); the table reports it because the PRD gate names it
 and MRR carry the ranking signal. The smoke test at the floor is opt-in
 (`ENGRAM_EVAL_SMOKE=1`) because it takes minutes under `-race`.
 
-First floor result that forced this (2026-11-02, rerank none, seed 42): none nDCG .943 / store
+First floor result that forced this (2026-11-01, rerank none, seed 42): none nDCG .943 / store
 5000; uniform .633 / 4873; type-aware .622 / 2967. With write-once facts the never-forgetting
 arm had no distractor that could hurt it, so the PRD's Q1 premise was untestable; fact chains
 with implicit staleness restore it. Entity bridges (`via-entity` = 0, bridge-entity recall
@@ -227,7 +227,7 @@ count, bridge count.
 Schedule: standard v1 written days 0–10, accessed every ~7 days until day 60, then silent
 until queried on days 150–180 (the window where uniform decay, S₀ = 14 d, forgets them);
 later standard versions land at days 30–90 and inherit the access pattern. Facts are
-written in days 0–60 and accessed 1–3 times in their first 30 days, then only queried. Episodes arrive uniformly; each gets 0–2
+written in days 0–120 and accessed 1–3 times in their first 30 days, then only queried. Episodes arrive uniformly; each gets 0–2
 follow-up accesses within 3 days. Query mix: 25% topic-current (late), 15% fact (late, t+60..120),
 20% episode-recent (t+1..3), 15% episode-old (t+60..120), 25% bridge (half link, half
 entity). Queries are scoped to the topic's namespace, except entity-bridge queries which
@@ -255,9 +255,11 @@ smaller final store. Printed as `recommended: type-aware (ENGRAM_DECAY=type-awar
 `eval/baseline.json` records k, seed, params, and arm C's precision@k and nDCG@k.
 `--ci`: run the floor size with the baseline's seed; fail (exit 1) if arm C precision@k is
 below baseline − 0.02 absolute, or if the dataset is below the floor. Metrics are rounded to
-4 decimals before comparison and the baseline is produced on amd64 (Go does not fuse
-multiply-adds on amd64, so Windows and Linux CI agree bit for bit; arm64 is not a supported
-baseline producer and the file records `GOARCH`). `--update-baseline`
+4 decimals before comparison and the baseline is produced on amd64 (Go's amd64 `math.Exp`
+selects an FMA path at runtime, so last-bit differences across CPUs are possible; the
+4-decimal rounding and the 0.02 tolerance absorb them, and the first Linux CI run is the
+real check. Other architectures are not a supported baseline producer and the file records
+`GOARCH`). `--update-baseline`
 rewrites the file; a PR that changes the baseline shows the number in the diff. The gate
 compares C to its own past, never C to B or A: a null result is a finding, not a failure.
 
@@ -324,7 +326,7 @@ Final frozen generator constants (`eval/vectors.go`, `eval/schedule.go`):
 | `maxChainTries` | 20 |
 | `queryNoise` | 0.15 |
 
-Floor run (`go run ./cmd/eval --ci`, seed 42, k=5, rerank none, dim 128):
+Floor run (`go run ./cmd/eval --ci`, seed 42, k=5, rerank none, dim 128). The table is the `--ci` output shortened: the ±std and latency columns are omitted.
 
 ```
 rerank: none, seed 42
@@ -348,5 +350,14 @@ Baseline (`eval/baseline.json`): k 5, seed 42, goarch amd64, rerank none, dim 12
 Findings:
 
 - Under TypeAwareDecay, 1-3-day-old episodes drop out of the top 5 because the blend adds w_ret*R with w_ret 0.5. This is an M4 blend property, not tuned here.
-- Semantic fact versions never decay within 180 d at the shipped constants, so implicit staleness is not cleared.
+- Semantic fact versions never decay within 180 d at the shipped constants, so implicit staleness is not cleared. Second cause: fact versions link to their predecessor and to the current standard at weight 1.0, above `propagateThreshold` 0.85, and retrievability is measured from `LastAccessed`, so any recall of a chain-mate or of the standard resets a stale version's decay clock in every decaying arm.
+- Access hit rate (an access is `Recall` k=1 on the memory's own content; hit = the target ranked first; seed 42, rerank none, 5000 memories):
+
+  | arm | standard | fact | episode |
+  |---|---|---|---|
+  | none | 0.876 | 0.959 | 0.989 |
+  | uniform | 0.876 | 0.853 | 0.996 |
+  | type-aware | 0.876 | 1.000 | 0.412 |
+
+  The blend adds w_ret*R and w_imp*importance to similarity. Under type-aware a fresh episode (R about 0.7) loses to the permanent in-topic standard (R about 1), so accessing an episode mostly reinforces the standard instead of the target (episode hit rate 0.412). Standards miss in every arm (0.876) because superseded versions are demoted: accessing v1 after v2 exists reinforces v2. Under none the misses are exactly those superseded targets. This is a hidden asymmetry between the arms' reinforcement, measured and left unchanged (no constants touched).
 - Entity bridges never surface without the cross-encoder (blend sim x 0.5).

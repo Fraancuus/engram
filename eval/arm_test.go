@@ -249,3 +249,50 @@ func TestArmRerankModes(t *testing.T) {
 		})
 	}
 }
+
+func TestAccessHitRate(t *testing.T) {
+	t.Parallel()
+	ds := tinyDataset(t)
+	// Under none (R=1 everywhere) the target at cos~1 wins unless a newer version
+	// already superseded it: superseded memories are demoted, so that access
+	// reinforces the successor. Everything else must be a hit.
+	superseded := map[string]int{} // GID -> write day of its successor
+	for _, m := range ds.Memories {
+		if m.Supersedes != "" {
+			superseded[m.Supersedes] = m.WriteDay
+		}
+	}
+	wantN, wantHit := map[Kind]int{}, map[Kind]int{}
+	for _, ac := range ds.Accesses {
+		m, _ := ds.Lookup(ac.GID)
+		wantN[m.Kind]++
+		if day, ok := superseded[ac.GID]; !ok || day > ac.Day {
+			wantHit[m.Kind]++
+		}
+	}
+	for _, name := range armOrder {
+		dm, err := engram.DecayByName(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := runArm(context.Background(), name, dm, ds, 5, RerankNone)
+		if err != nil {
+			t.Fatalf("runArm %s: %v", name, err)
+		}
+		for _, kd := range kinds {
+			if res.AccessN[kd] != wantN[kd] {
+				t.Errorf("%s %v: AccessN = %d, want %d", name, kd, res.AccessN[kd], wantN[kd])
+			}
+			if wantN[kd] == 0 {
+				continue
+			}
+			h, ok := res.AccessHit[kd]
+			if !ok || h < 0 || h > 1 {
+				t.Errorf("%s %v: hit rate %v (present %v), want in [0,1]", name, kd, h, ok)
+			}
+			if want := float64(wantHit[kd]) / float64(wantN[kd]); name == engram.DecayNone && h != want {
+				t.Errorf("none %v: hit rate %v, want %v (1.000 unless superseded)", kd, h, want)
+			}
+		}
+	}
+}

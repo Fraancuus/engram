@@ -25,7 +25,7 @@ func precResults(a, b, c float64) *Results {
 
 // baseAt is a baseline matching precResults' k, rerank and params.
 func baseAt(p float64) Baseline {
-	return Baseline{K: 5, Rerank: "none", Params: Floor(), PrecisionAtK: p}
+	return Baseline{K: 5, Seed: 42, Rerank: "none", Params: Floor(), PrecisionAtK: p}
 }
 
 func TestGateRegression(t *testing.T) {
@@ -66,6 +66,7 @@ func TestGateRejectsStaleParams(t *testing.T) {
 	for name, mut := range map[string]func(*Baseline){
 		"memories": func(b *Baseline) { b.Params.Memories++ },
 		"seed":     func(b *Baseline) { b.Params.Seed++ },
+		"b.seed":   func(b *Baseline) { b.Seed++ },
 		"dim":      func(b *Baseline) { b.Params.Dim++ },
 		"rerank":   func(b *Baseline) { b.Rerank = "cross" },
 		"k":        func(b *Baseline) { b.K = 10 },

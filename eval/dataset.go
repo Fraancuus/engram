@@ -24,6 +24,22 @@ const (
 	KindEpisode              // episodic
 )
 
+// String is the kind's name as printed in the report.
+func (k Kind) String() string {
+	switch k {
+	case KindStandard:
+		return "standard"
+	case KindFact:
+		return "fact"
+	case KindEpisode:
+		return "episode"
+	}
+	return fmt.Sprintf("kind(%d)", int(k))
+}
+
+// kinds is every kind in report order.
+var kinds = []Kind{KindStandard, KindFact, KindEpisode}
+
 // QueryClass labels how a query's relevant set was built.
 type QueryClass int
 

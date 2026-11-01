@@ -48,6 +48,10 @@ type ArmResult struct {
 	FinalBridges int
 	Series       []Point
 	ByClass      map[QueryClass]ClassStats
+	// AccessHit is the share of accesses per memory Kind whose top result was the
+	// accessed memory itself; AccessN is the number of accesses per Kind.
+	AccessHit map[Kind]float64
+	AccessN   map[Kind]int
 }
 
 // dedupError reports that Remember collapsed a generated memory into an
@@ -88,12 +92,14 @@ type armAcc struct {
 	classNDCG, classMRR  map[QueryClass][]float64
 	lat                  []time.Duration
 	series               []Point
+	accessN, accessHit   map[Kind]int
 }
 
 func newAcc() *armAcc {
 	return &armAcc{
 		byType: map[engram.MemoryType][]float64{}, bridge: map[string][]float64{}, via: map[string]int{},
 		classNDCG: map[QueryClass][]float64{}, classMRR: map[QueryClass][]float64{},
+		accessN: map[Kind]int{}, accessHit: map[Kind]int{},
 	}
 }
 
@@ -189,8 +195,13 @@ func (a *armState) day(ctx context.Context, ds *Dataset, d, k int, acc *armAcc) 
 			return fmt.Errorf("access of unknown gid %s", ac.GID)
 		}
 		in := mcp.RecallInput{Query: m.Content, Namespaces: []string{string(m.Namespace)}, K: &one}
-		if _, err := a.tools.Recall(ctx, in); err != nil {
+		out, err := a.tools.Recall(ctx, in)
+		if err != nil {
 			return fmt.Errorf("day %d access %s: %w", d, ac.GID, err)
+		}
+		acc.accessN[m.Kind]++
+		if len(out.Results) > 0 && out.Results[0].ID == a.ids[ac.GID] {
+			acc.accessHit[m.Kind]++
 		}
 	}
 	for _, q := range ds.Queries {
@@ -330,8 +341,12 @@ func runArm(ctx context.Context, name string, decay engram.DecayModel, ds *Datas
 		RecallByType: map[engram.MemoryType]float64{}, BridgeRecall: map[string]float64{}, ViaShare: map[string]float64{},
 		LatencyP50: percentile(acc.lat, 0.5), LatencyP95: percentile(acc.lat, 0.95),
 		FinalSize: a.store.Len(), FinalEdges: a.store.EdgeCount(), FinalBridges: a.store.BridgeCount(),
-		Series:  acc.series,
-		ByClass: map[QueryClass]ClassStats{},
+		Series:    acc.series,
+		ByClass:   map[QueryClass]ClassStats{},
+		AccessHit: map[Kind]float64{}, AccessN: acc.accessN,
+	}
+	for kd, n := range acc.accessN {
+		res.AccessHit[kd] = float64(acc.accessHit[kd]) / float64(n)
 	}
 	for c, xs := range acc.classNDCG {
 		res.ByClass[c] = ClassStats{NDCG: aggregate(xs).Mean, MRR: aggregate(acc.classMRR[c]).Mean, N: len(xs)}

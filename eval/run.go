@@ -60,10 +60,11 @@ type Summary struct {
 	LatencyP50, LatencyP95       Stats
 	FinalSize, FinalEdges        Stats
 	FinalBridges                 Stats
+	AccessHit                    map[Kind]Stats
 }
 
 // Summary aggregates the named arm across its seeds. RecallByType,
-// BridgeRecall and ByClass average only the seeds that have the key (a seed
+// BridgeRecall, ByClass and AccessHit average only the seeds that have the key (a seed
 // without e.g. bridge-entity queries says nothing about its recall); ViaShare
 // is a share of results, so an absent key is 0.
 func (r *Results) Summary(arm string) Summary {
@@ -96,6 +97,7 @@ func (r *Results) Summary(arm string) Summary {
 		BridgeRecall: map[string]Stats{},
 		ViaShare:     map[string]Stats{},
 		ByClass:      map[QueryClass]ClassSummary{},
+		AccessHit:    map[Kind]Stats{},
 		LatencyP50:   ms(func(a ArmResult) time.Duration { return a.LatencyP50 }),
 		LatencyP95:   ms(func(a ArmResult) time.Duration { return a.LatencyP95 }),
 		FinalSize:    col(func(a ArmResult) float64 { return float64(a.FinalSize) }),
@@ -110,6 +112,9 @@ func (r *Results) Summary(arm string) Summary {
 	}
 	for _, key := range []string{"vector", "link", "entity"} {
 		s.ViaShare[key] = col(func(a ArmResult) float64 { return a.ViaShare[key] })
+	}
+	for _, kd := range kinds {
+		s.AccessHit[kd] = present(func(a ArmResult) (float64, bool) { v, ok := a.AccessHit[kd]; return v, ok })
 	}
 	for _, c := range queryClasses {
 		s.ByClass[c] = ClassSummary{

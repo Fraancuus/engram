@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"os"
 
+	"github.com/Fraancuus/engram"
 	"github.com/Fraancuus/engram/eval"
 )
 
@@ -128,6 +129,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if err := eval.CheckGate(res, base, eval.GateTolerance); err != nil {
 			_, _ = fmt.Fprintf(stderr, "eval gate FAILED: %v\n", err)
 			return 1
+		}
+		if a := res.Arms[engram.DecayTypeAware]; len(a) > 0 && a[0].Precision > base.PrecisionAtK+eval.GateTolerance {
+			_, _ = fmt.Fprintf(stderr, "eval gate: type-aware precision %.4f beats baseline %.4f by more than %v; consider --update-baseline\n", a[0].Precision, base.PrecisionAtK, eval.GateTolerance)
 		}
 		_, _ = fmt.Fprintln(stdout, "eval gate passed")
 	}

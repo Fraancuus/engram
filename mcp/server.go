@@ -20,14 +20,13 @@ const (
 	serverVersion = "0.0.0-dev"
 )
 
-// ServerStore is the full persistence surface NewTools wires in; each handler field then
-// narrows to just what it uses (Store for remember/recall, forgetStore for forget).
+// ServerStore is the full persistence surface NewTools wires in: Store plus the forget
+// operations; each handler field then narrows to just what it uses.
 type ServerStore interface {
 	Store
 	SetForgotten(ctx context.Context, id engram.MemoryID) error
 	Pin(ctx context.Context, id engram.MemoryID) error
 	Delete(ctx context.Context, id engram.MemoryID) error
-	Supersede(ctx context.Context, ids []engram.MemoryID) error
 }
 
 // Option customises a Tools built by NewTools.

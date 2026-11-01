@@ -90,6 +90,26 @@ func WriteTable(w io.Writer, r *Results) {
 	}
 	_ = tw.Flush()
 
+	_, _ = fmt.Fprint(w, "\naccess hit rate (target ranked first)\n")
+	tw = tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprint(tw, "arm")
+	for _, kd := range kinds {
+		_, _ = fmt.Fprintf(tw, "\t%s", kd)
+	}
+	_, _ = fmt.Fprintln(tw)
+	for _, name := range armOrder {
+		if len(r.Arms[name]) == 0 {
+			continue
+		}
+		s := r.Summary(name)
+		_, _ = fmt.Fprint(tw, name)
+		for _, kd := range kinds {
+			_, _ = fmt.Fprintf(tw, "\t%s", meanStd(s.AccessHit[kd]))
+		}
+		_, _ = fmt.Fprintln(tw)
+	}
+	_ = tw.Flush()
+
 	rec := Recommend(r)
 	_, _ = fmt.Fprintf(w, "\nrecommended: %s (ENGRAM_DECAY=%s)\n", rec, rec)
 }

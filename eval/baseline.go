@@ -111,17 +111,17 @@ func WriteBaseline(path string, b Baseline) error {
 
 // CheckGate returns nil when r's type-aware precision@k (first seed, rounded to
 // 4 decimals) is no lower than b.PrecisionAtK - tol and r.Params meets the
-// floor and match b (params, rerank, k). It never compares arms: a null thesis result is not a failure.
+// floor and match b (seed, params, rerank, k). It never compares arms: a null thesis result is not a failure.
 func CheckGate(r *Results, b Baseline, tol float64) error {
 	if err := r.Params.Validate(); err != nil {
 		return fmt.Errorf("eval params: %w", err)
 	}
-	if b.Params != r.Params || b.Rerank != r.Rerank || b.K != r.K {
-		return errors.New("baseline stale: params or rerank differ; re-run --update-baseline")
+	if len(r.Seeds) == 0 || b.Seed != r.Seeds[0] || b.Params != r.Params || b.Rerank != r.Rerank || b.K != r.K {
+		return errors.New("baseline stale: seed, params or rerank differ; re-run --update-baseline")
 	}
 	a, err := typeAwareFirst(r)
 	if err != nil {
-		return err
+		return fmt.Errorf("check gate: %w", err)
 	}
 	got := round4(a.Precision)
 	// epsilon: a drop of exactly tol must pass despite float error.

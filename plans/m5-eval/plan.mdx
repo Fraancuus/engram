@@ -134,7 +134,7 @@ These shapes are consumed by later code or by CI, so changing them after merge i
 - **Generator floor constants.** 3 namespaces, 50 topics, 5,000 memories, 1,200 entities, 500 queries, 180 days, dim 128; the store scores (1+cos)/2 like Neo4j, so in raw cosine: dedup point 0.90, auto-link point 0.70, twins and fact-chain versions [0.74, 0.88], ordinary in-topic [0.40, 0.66], cross-topic under 0.30 (sampled), hub fan-out under 20, neighbor and propagate caps 20, sweep grace 30 d, hard floor 0.02. Frozen after one tuning pass.
 - **Supersession runs in all arms.** The arms differ by the decay curve and nothing else; under A a superseded standard is excluded by `scoreAndFilter` but never pruned.
 - **Old episodes count as relevant.** Forgetting an old episode is the price of a leaner store, and the table must show that loss.
-- **amd64-only baseline.** Go does not fuse multiply-adds on amd64, so Windows and Linux CI agree bit for bit; `WriteBaseline` returns `ErrUnsupportedArch` elsewhere.
+- **amd64-only baseline.** Go's amd64 `math.Exp` selects an FMA path at runtime, so last-bit differences across CPUs are possible and the 4-decimal rounding plus 0.02 tolerance absorb them (the first Linux CI run is the real check); `WriteBaseline` returns `ErrUnsupportedArch` elsewhere.
 
 </Callout>
 

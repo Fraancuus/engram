@@ -4,7 +4,7 @@
 > service over a graph + vector store, with **type-aware forgetting**, namespaced
 > "universes", and a rigorous eval proving the forgetting actually helps.
 
-**Status:** v1 in progress — **M4 type-aware decay landed** (per-type retrievability, reinforce-on-access, the decay sweep, supersession, and the `forget` tool). Next: M5 eval.
+**Status:** v1 in progress — **M4 type-aware decay landed** (per-type retrievability, reinforce-on-access, the decay sweep, supersession, and the `forget` tool). M5 eval landed; next: M6.
 **Module:** `github.com/Fraancuus/engram` · **Go:** 1.26
 
 Most "agent memory" projects are a vector store with `save()` and `search()`. They
@@ -65,11 +65,16 @@ scoring itself. The gate is live: `go run ./cmd/eval --ci` fails when arm
 `type-aware` precision@5 regresses more than 0.02 against `eval/baseline.json`.
 Run it locally with `go run ./cmd/eval` (flags `-seeds`, `-k`, `-scale`,
 `-rerank none|cosine`, `-json`, `--update-baseline`). The dataset is synthetic with
-generator-owned labels; see `openspec/changes/m5-eval/design.md`. The honest
-headline at seed 42: never-forget nDCG .901 (store 5000), uniform .668 (4016),
-type-aware .514 (1199), so the recommendation is `none` at the shipped blend
-weights. The per-class table shows type-aware winning on procedural and fact
-queries and losing on recent and old episodes and bridges. The full write-up is M6.
+generator-owned labels; see `openspec/changes/m5-eval/design.md`. Result at seed 42 (rerank none, k=5, nDCG):
+never-forget .901 with 5000 memories, uniform .668 with 4016, type-aware .514 with
+1199 (24% of the store). Type-aware does not beat never-forgetting on procedural or
+topic-current queries (both 1.000); its only win over `none` is fact queries (.722
+vs .673). It beats uniform on procedural and topic-current (1.000 vs .864 nDCG) and
+loses recent and old episodes and bridges. The eval prints `recommended: none`, but
+the shipped default stays `type-aware`; choosing the default is an M6 decision.
+Production finding (design D3b): the Neo4j index scores (1+cos)/2, so
+`defaultDedupThreshold` 0.95 is raw cosine 0.90 and `linkThreshold` 0.85 is raw
+cosine 0.70; a follow-up change will revisit them.
 
 ## Developing
 
