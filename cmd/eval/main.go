@@ -9,13 +9,18 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 
 	"github.com/Fraancuus/engram/eval"
 )
+
+// checkArch is eval.CheckBaselineArch, replaceable by tests.
+var checkArch = eval.CheckBaselineArch
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -35,19 +40,19 @@ func seedsFor(flagSeed int64, flagSeeds int, one bool) []int64 {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("eval", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	ci := fs.Bool("ci", false, "run the floor corpus and fail if type-aware precision@k regresses vs the baseline")
-	update := fs.Bool("update-baseline", false, "run the floor corpus and rewrite the baseline file (amd64 only)")
-	seed := fs.Int64("seed", 42, "first seed")
-	nSeeds := fs.Int("seeds", 3, "number of consecutive seeds (1 under --ci/--update-baseline)")
-	scale := fs.Int("scale", 1, "multiply corpus size (must be 1 under --ci/--update-baseline)")
-	k := fs.Int("k", 5, "results per query")
-	days := fs.Int("days", 180, "simulated days (must be the floor under --ci/--update-baseline)")
-	rerank := fs.String("rerank", "none", "rerank mode: none or cosine")
-	jsonPath := fs.String("json", "", "also write full results as JSON to this path")
-	basePath := fs.String("baseline", "eval/baseline.json", "baseline file")
-	if err := fs.Parse(args); err != nil {
+	flags := flag.NewFlagSet("eval", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	ci := flags.Bool("ci", false, "run the floor corpus and fail if type-aware precision@k regresses vs the baseline")
+	update := flags.Bool("update-baseline", false, "run the floor corpus and rewrite the baseline file (amd64 only)")
+	seed := flags.Int64("seed", 42, "first seed")
+	nSeeds := flags.Int("seeds", 3, "number of consecutive seeds (1 under --ci/--update-baseline)")
+	scale := flags.Int("scale", 1, "multiply corpus size (must be 1 under --ci/--update-baseline)")
+	k := flags.Int("k", 5, "results per query")
+	days := flags.Int("days", 180, "simulated days (must be the floor under --ci/--update-baseline)")
+	rerank := flags.String("rerank", "none", "rerank mode: none or cosine")
+	jsonPath := flags.String("json", "", "also write full results as JSON to this path")
+	basePath := flags.String("baseline", "eval/baseline.json", "baseline file")
+	if err := flags.Parse(args); err != nil {
 		return 2
 	}
 	mode, err := eval.ParseRerank(*rerank)
@@ -60,23 +65,37 @@ func run(args []string, stdout, stderr io.Writer) int {
 	gated := *ci || *update
 	if gated && (*scale != 1 || *days != eval.Floor().Days) {
 		_, _ = fmt.Fprintln(stderr, "--ci and --update-baseline run the floor corpus: omit -scale and -days")
-		return 2
+		return 1
 	}
 	if *ci && *update {
 		_, _ = fmt.Fprintln(stderr, "--ci and --update-baseline are mutually exclusive")
 		return 2
 	}
+	if *update {
+		if err := checkArch(); err != nil {
+			_, _ = fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
 
 	var base eval.Baseline
 	if *ci {
 		if base, err = eval.LoadBaseline(*basePath); err != nil {
-			_, _ = fmt.Fprintf(stderr, "%v\nrun `go run ./cmd/eval --update-baseline` to create it\n", err)
+			_, _ = fmt.Fprintln(stderr, err)
+			if errors.Is(err, fs.ErrNotExist) {
+				_, _ = fmt.Fprintln(stderr, "run `go run ./cmd/eval --update-baseline` to create it")
+			}
 			return 1
 		}
 		if mode, err = eval.ParseRerank(base.Rerank); err != nil {
 			_, _ = fmt.Fprintf(stderr, "baseline rerank: %v\n", err)
 			return 1
 		}
+		flags.Visit(func(f *flag.Flag) {
+			if f.Name == "seed" || f.Name == "k" || f.Name == "rerank" {
+				_, _ = fmt.Fprintf(stderr, "note: --ci uses the baseline's %s, ignoring -%s\n", f.Name, f.Name)
+			}
+		})
 		*seed, *k = base.Seed, base.K
 	}
 
@@ -95,7 +114,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	switch {
 	case *update:
-		if err := eval.WriteBaseline(*basePath, eval.NewBaseline(res)); err != nil {
+		nb, err := eval.NewBaseline(res)
+		if err != nil {
+			_, _ = fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if err := eval.WriteBaseline(*basePath, nb); err != nil {
 			_, _ = fmt.Fprintln(stderr, err)
 			return 1
 		}

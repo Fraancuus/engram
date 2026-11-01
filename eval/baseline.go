@@ -46,16 +46,16 @@ func typeAwareFirst(r *Results) (ArmResult, error) {
 }
 
 // NewBaseline captures arm type-aware's first-seed precision@k and nDCG@k from
-// r, rounded to 4 decimals. A Results without that arm yields zero metrics,
-// which CheckGate rejects.
-func NewBaseline(r *Results) Baseline {
-	b := Baseline{K: r.K, GOARCH: goarch, Rerank: r.Rerank, Params: r.Params}
-	if a, err := typeAwareFirst(r); err == nil {
-		b.Seed = a.Seed
-		b.PrecisionAtK = round4(a.Precision)
-		b.NDCGAtK = round4(a.NDCG)
+// r, rounded to 4 decimals. It errors when r has no type-aware result.
+func NewBaseline(r *Results) (Baseline, error) {
+	a, err := typeAwareFirst(r)
+	if err != nil {
+		return Baseline{}, fmt.Errorf("new baseline: %w", err)
 	}
-	return b
+	return Baseline{
+		K: r.K, Seed: a.Seed, GOARCH: goarch, Rerank: r.Rerank, Params: r.Params,
+		PrecisionAtK: round4(a.Precision), NDCGAtK: round4(a.NDCG),
+	}, nil
 }
 
 // LoadBaseline reads a baseline file.
@@ -68,14 +68,30 @@ func LoadBaseline(path string) (Baseline, error) {
 	if err := json.Unmarshal(data, &b); err != nil {
 		return Baseline{}, fmt.Errorf("parse baseline %s: %w", path, err)
 	}
+	// A zero metric or k would make the gate vacuous.
+	if b.K < 1 {
+		return Baseline{}, fmt.Errorf("baseline %s: k must be at least 1, got %d", path, b.K)
+	}
+	if b.PrecisionAtK <= 0 {
+		return Baseline{}, fmt.Errorf("baseline %s: precision_at_k must be positive, got %v", path, b.PrecisionAtK)
+	}
 	return b, nil
+}
+
+// CheckBaselineArch returns ErrUnsupportedArch when not running on amd64, so
+// callers can refuse before spending time on an eval run.
+func CheckBaselineArch() error {
+	if goarch != "amd64" {
+		return fmt.Errorf("baseline on %s: %w", goarch, ErrUnsupportedArch)
+	}
+	return nil
 }
 
 // WriteBaseline writes b to path, or returns ErrUnsupportedArch (writing
 // nothing) when not running on amd64.
 func WriteBaseline(path string, b Baseline) error {
-	if goarch != "amd64" {
-		return fmt.Errorf("write baseline on %s: %w", goarch, ErrUnsupportedArch)
+	if err := CheckBaselineArch(); err != nil {
+		return fmt.Errorf("write baseline: %w", err)
 	}
 	data, err := json.MarshalIndent(b, "", "  ")
 	if err != nil {

@@ -60,7 +60,10 @@ func TestGateBelowFloor(t *testing.T) {
 func TestBaselineRound(t *testing.T) {
 	r := precResults(0, 0, 0.123456)
 	r.Arms[engram.DecayTypeAware][0].NDCG = 0.98765
-	b := NewBaseline(r)
+	b, err := NewBaseline(r)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if b.PrecisionAtK != 0.1235 || b.NDCGAtK != 0.9877 || b.Seed != 42 || b.K != 5 || b.Rerank != "none" {
 		t.Fatalf("got %+v", b)
 	}
@@ -68,7 +71,10 @@ func TestBaselineRound(t *testing.T) {
 
 func TestBaselineRoundTripAndArch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "b.json")
-	want := NewBaseline(precResults(0, 0, 0.5))
+	want, err := NewBaseline(precResults(0, 0, 0.5))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if goarch != "amd64" {
 		t.Skip("non-amd64 host")
 	}
@@ -87,6 +93,7 @@ func TestBaselineRoundTripAndArch(t *testing.T) {
 	}
 }
 
+// The goarch tests mutate a package variable, so they must not use t.Parallel.
 func TestBaselineRefusesNonAmd64(t *testing.T) {
 	old := goarch
 	goarch = "arm64"
@@ -98,5 +105,48 @@ func TestBaselineRefusesNonAmd64(t *testing.T) {
 	}
 	if _, statErr := os.Stat(path); statErr == nil {
 		t.Fatal("file written")
+	}
+}
+
+func TestCheckBaselineArch(t *testing.T) {
+	old := goarch
+	t.Cleanup(func() { goarch = old })
+	goarch = "arm64"
+	if err := CheckBaselineArch(); !errors.Is(err, ErrUnsupportedArch) || !strings.Contains(err.Error(), "arm64") {
+		t.Fatalf("arm64: %v", err)
+	}
+	goarch = "amd64"
+	if err := CheckBaselineArch(); err != nil {
+		t.Fatalf("amd64: %v", err)
+	}
+}
+
+func TestNewBaselineMissingArm(t *testing.T) {
+	r := precResults(0, 0, 0.5)
+	delete(r.Arms, engram.DecayTypeAware)
+	if _, err := NewBaseline(r); err == nil {
+		t.Fatal("want error for missing type-aware arm")
+	}
+}
+
+func TestLoadBaselineRejectsZero(t *testing.T) {
+	for name, body := range map[string]string{
+		"precision": `{"k":5,"precision_at_k":0}`,
+		"k":         `{"k":0,"precision_at_k":0.5}`,
+	} {
+		path := filepath.Join(t.TempDir(), name+".json")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadBaseline(path); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+}
+
+func TestGateRoundsRunSide(t *testing.T) {
+	// 0.52995 rounds to 0.5300, exactly baseline - tol.
+	if err := CheckGate(precResults(0, 0, 0.52995), Baseline{PrecisionAtK: 0.55}, GateTolerance); err != nil {
+		t.Fatal(err)
 	}
 }
