@@ -42,6 +42,20 @@ func TestMetricsKnownValues(t *testing.T) {
 	}
 }
 
+func TestMetricsShortList(t *testing.T) {
+	t.Parallel()
+	ret, rel := []string{"a", "x", "b"}, relSet("a", "b", "c")
+	if got := precisionAt(ret, rel, 5); math.Abs(got-0.4) > 1e-9 {
+		t.Errorf("P = %v, want 0.4", got)
+	}
+	if got := recallAt(ret, rel, 5); math.Abs(got-0.6667) > 1e-4 {
+		t.Errorf("R = %v", got)
+	}
+	if got := reciprocalRank(ret, rel, 5); got != 1 {
+		t.Errorf("RR = %v", got)
+	}
+}
+
 func TestMetricsEmpty(t *testing.T) {
 	t.Parallel()
 	rel := relSet("a")

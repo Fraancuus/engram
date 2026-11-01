@@ -23,10 +23,11 @@ func hits(ret []string, rel map[string]bool, k int) ([]string, int) {
 // precisionAt is the fraction of the top k results that are relevant.
 func precisionAt(ret []string, rel map[string]bool, k int) float64 {
 	top, n := hits(ret, rel, k)
-	if len(top) == 0 {
+	if len(top) == 0 || k < 1 {
 		return 0
 	}
-	return float64(n) / float64(len(top))
+	// Divide by k, not len(top): a short result list must not inflate precision.
+	return float64(n) / float64(k)
 }
 
 // recallAt is the fraction of relevant items found in the top k results.
