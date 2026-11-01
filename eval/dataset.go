@@ -37,6 +37,28 @@ const (
 	QBridgeEntity
 )
 
+// queryClasses is every class in report order.
+var queryClasses = []QueryClass{QTopicCurrent, QFact, QEpisodeRecent, QEpisodeOld, QBridgeLink, QBridgeEntity}
+
+// String is the class name as printed in the report.
+func (c QueryClass) String() string {
+	switch c {
+	case QTopicCurrent:
+		return "topic-current"
+	case QFact:
+		return "fact"
+	case QEpisodeRecent:
+		return "episode-recent"
+	case QEpisodeOld:
+		return "episode-old"
+	case QBridgeLink:
+		return "bridge-link"
+	case QBridgeEntity:
+		return "bridge-entity"
+	}
+	return fmt.Sprintf("class(%d)", int(c))
+}
+
 // Memory is one generated memory. Content equals GID and doubles as the embedder
 // lookup key.
 type Memory struct {

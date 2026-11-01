@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"text/tabwriter"
-	"time"
 
 	"github.com/Fraancuus/engram"
 )
@@ -13,35 +13,33 @@ import (
 // TieNDCG is the mean-NDCG gap within which the smaller store wins.
 const TieNDCG = 0.005
 
-// Recommend returns the arm with the highest mean NDCG; when the top two are
-// within TieNDCG, the one with the smaller mean final store size wins.
+// Recommend returns the arm with the highest mean NDCG; every arm within
+// TieNDCG of that maximum counts as tied and the smallest mean final store
+// size wins among them (equal sizes go to the earlier arm in armOrder).
 func Recommend(r *Results) string {
 	type cand struct {
 		name       string
 		ndcg, size float64
 	}
 	var cs []cand
+	top := math.Inf(-1)
 	for _, name := range armOrder {
 		if len(r.Arms[name]) == 0 {
 			continue
 		}
 		s := r.Summary(name)
 		cs = append(cs, cand{name, s.NDCG.Mean, s.FinalSize.Mean})
+		top = max(top, s.NDCG.Mean)
 	}
-	if len(cs) == 0 {
-		return ""
-	}
-	best, second := -1, -1
+	best := -1
 	for i, c := range cs {
-		switch {
-		case best < 0 || c.ndcg > cs[best].ndcg:
-			best, second = i, best
-		case second < 0 || c.ndcg > cs[second].ndcg:
-			second = i
+		// epsilon: a gap of exactly TieNDCG must tie despite float error.
+		if top-c.ndcg <= TieNDCG+1e-9 && (best < 0 || c.size < cs[best].size) {
+			best = i
 		}
 	}
-	if second >= 0 && cs[best].ndcg-cs[second].ndcg <= TieNDCG && cs[second].size < cs[best].size {
-		best = second
+	if best < 0 {
+		return ""
 	}
 	return cs[best].name
 }
@@ -49,8 +47,10 @@ func Recommend(r *Results) string {
 func meanStd(s Stats) string { return fmt.Sprintf("%.3f±%.3f", s.Mean, s.Std) }
 func count(s Stats) string   { return fmt.Sprintf("%.0f±%.0f", s.Mean, s.Std) }
 
-// WriteTable prints one row per arm (mean±std over seeds) followed by the
-// recommendation line.
+func ms(s Stats) string { return fmt.Sprintf("%.1f±%.1f ms", s.Mean, s.Std) }
+
+// WriteTable prints one row per arm (mean±std over seeds), the per-class
+// nDCG/MRR table, and the recommendation line.
 func WriteTable(w io.Writer, r *Results) {
 	_, _ = fmt.Fprintf(w, "rerank: %s\n", r.Rerank)
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
@@ -66,11 +66,32 @@ func WriteTable(w io.Writer, r *Results) {
 			meanStd(s.BridgeRecall["link"]), meanStd(s.BridgeRecall["entity"]),
 			meanStd(s.ViaShare["vector"]), meanStd(s.ViaShare["link"]), meanStd(s.ViaShare["entity"]),
 			count(s.FinalSize), count(s.FinalEdges), count(s.FinalBridges),
-			s.LatencyP50.Round(time.Microsecond), s.LatencyP95.Round(time.Microsecond))
+			ms(s.LatencyP50), ms(s.LatencyP95))
 	}
 	_ = tw.Flush() // a failing w fails the next write too; WriteTable has no error return
+
+	_, _ = fmt.Fprint(w, "\nby query class (ndcg / mrr)\n")
+	tw = tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprint(tw, "arm")
+	for _, c := range queryClasses {
+		_, _ = fmt.Fprintf(tw, "\t%s", c)
+	}
+	_, _ = fmt.Fprintln(tw)
+	for _, name := range armOrder {
+		if len(r.Arms[name]) == 0 {
+			continue
+		}
+		s := r.Summary(name)
+		_, _ = fmt.Fprint(tw, name)
+		for _, c := range queryClasses {
+			_, _ = fmt.Fprintf(tw, "\t%.3f/%.3f", s.ByClass[c].NDCG.Mean, s.ByClass[c].MRR.Mean)
+		}
+		_, _ = fmt.Fprintln(tw)
+	}
+	_ = tw.Flush()
+
 	rec := Recommend(r)
-	_, _ = fmt.Fprintf(w, "recommended: %s (ENGRAM_DECAY=%s)\n", rec, rec)
+	_, _ = fmt.Fprintf(w, "\nrecommended: %s (ENGRAM_DECAY=%s)\n", rec, rec)
 }
 
 // WriteJSON writes r as indented JSON. Durations marshal as nanoseconds.

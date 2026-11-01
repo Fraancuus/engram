@@ -24,6 +24,12 @@ const (
 // Point is one size/graph sample of an arm's store.
 type Point struct{ Day, Size, Edges, Bridges int }
 
+// ClassStats is the mean nDCG and MRR of the N queries of one class.
+type ClassStats struct {
+	NDCG, MRR float64
+	N         int
+}
+
 // ArmResult is one arm's aggregates over a dataset.
 type ArmResult struct {
 	Name         string
@@ -41,6 +47,7 @@ type ArmResult struct {
 	FinalEdges   int
 	FinalBridges int
 	Series       []Point
+	ByClass      map[QueryClass]ClassStats
 }
 
 // dedupError reports that Remember collapsed a generated memory into an
@@ -79,40 +86,55 @@ type armAcc struct {
 	byType               map[engram.MemoryType][]float64
 	bridge               map[string][]float64
 	via                  map[string]int
+	classNDCG, classMRR  map[QueryClass][]float64
 	lat                  []time.Duration
 	series               []Point
 }
 
 func newAcc() *armAcc {
-	return &armAcc{byType: map[engram.MemoryType][]float64{}, bridge: map[string][]float64{}, via: map[string]int{}}
+	return &armAcc{
+		byType: map[engram.MemoryType][]float64{}, bridge: map[string][]float64{}, via: map[string]int{},
+		classNDCG: map[QueryClass][]float64{}, classMRR: map[QueryClass][]float64{},
+	}
 }
 
 // newArm builds an arm. Every memory and query content is registered with its
 // vector so the pipeline's embedder can resolve it.
-func newArm(decay engram.DecayModel, ds *Dataset, mode rerankMode) *armState {
+func newArm(decay engram.DecayModel, ds *Dataset, mode RerankMode) *armState {
 	return buildArm(decay, ds, mode, nil)
 }
 
-// rerankMode selects whether an arm reranks recall results.
-type rerankMode int
+// RerankMode selects whether an arm reranks recall results.
+type RerankMode int
 
 const (
-	// rerankNone keeps the blend order (default).
-	rerankNone rerankMode = iota
-	// rerankCosine reorders by cosine to the query embedding.
-	rerankCosine
+	// RerankNone keeps the blend order (default).
+	RerankNone RerankMode = iota
+	// RerankCosine reorders by cosine to the query embedding.
+	RerankCosine
 )
 
 // String is the mode's name as printed in the report.
-func (m rerankMode) String() string {
-	if m == rerankCosine {
+func (m RerankMode) String() string {
+	if m == RerankCosine {
 		return "cosine"
 	}
 	return "none"
 }
 
+// ParseRerank is the inverse of RerankMode.String.
+func ParseRerank(s string) (RerankMode, error) {
+	switch s {
+	case "none":
+		return RerankNone, nil
+	case "cosine":
+		return RerankCosine, nil
+	}
+	return RerankNone, fmt.Errorf("unknown rerank mode %q: want none or cosine", s)
+}
+
 // buildArm is newArm with an optional reranker override (tests count calls).
-func buildArm(decay engram.DecayModel, ds *Dataset, mode rerankMode, rr engram.Reranker) *armState {
+func buildArm(decay engram.DecayModel, ds *Dataset, mode RerankMode, rr engram.Reranker) *armState {
 	emb := mock.NewLookupEmbedder()
 	for _, m := range ds.Memories {
 		emb.Register(m.Content, m.Vec)
@@ -126,7 +148,7 @@ func buildArm(decay engram.DecayModel, ds *Dataset, mode rerankMode, rr engram.R
 		rr = mock.CosineReranker{Embedder: emb}
 	}
 	opts := []mcp.Option{mcp.WithIDGenerator(sequentialIDs())}
-	if mode == rerankNone {
+	if mode == RerankNone {
 		opts = append(opts, mcp.WithoutRerank())
 	}
 	tools := mcp.NewTools(emb, rr, decay, store, clock, opts...)
@@ -256,8 +278,11 @@ func (a *armState) query(ctx context.Context, ds *Dataset, q Query, k int, acc *
 	acc.prec = append(acc.prec, precisionAt(ret, rel, k))
 	r := recallAt(ret, rel, k)
 	acc.rec = append(acc.rec, r)
-	acc.ndcg = append(acc.ndcg, ndcgAt(ret, rel, k))
-	acc.mrr = append(acc.mrr, reciprocalRank(ret, rel, k))
+	nd, rr := ndcgAt(ret, rel, k), reciprocalRank(ret, rel, k)
+	acc.ndcg = append(acc.ndcg, nd)
+	acc.mrr = append(acc.mrr, rr)
+	acc.classNDCG[q.Class] = append(acc.classNDCG[q.Class], nd)
+	acc.classMRR[q.Class] = append(acc.classMRR[q.Class], rr)
 	switch q.Class {
 	case QBridgeLink:
 		acc.bridge["link"] = append(acc.bridge["link"], r)
@@ -282,7 +307,7 @@ func (a *armState) query(ctx context.Context, ds *Dataset, q Query, k int, acc *
 }
 
 // runArm plays the whole dataset under decay and returns the arm's aggregates.
-func runArm(ctx context.Context, name string, decay engram.DecayModel, ds *Dataset, k int, mode rerankMode) (ArmResult, error) {
+func runArm(ctx context.Context, name string, decay engram.DecayModel, ds *Dataset, k int, mode RerankMode) (ArmResult, error) {
 	a := newArm(decay, ds, mode)
 	acc := newAcc()
 	for d := 0; d < ds.Params.Days; d++ {
@@ -297,7 +322,11 @@ func runArm(ctx context.Context, name string, decay engram.DecayModel, ds *Datas
 		RecallByType: map[engram.MemoryType]float64{}, BridgeRecall: map[string]float64{}, ViaShare: map[string]float64{},
 		LatencyP50: percentile(acc.lat, 0.5), LatencyP95: percentile(acc.lat, 0.95),
 		FinalSize: a.store.Len(), FinalEdges: a.store.EdgeCount(), FinalBridges: a.store.BridgeCount(),
-		Series: acc.series,
+		Series:  acc.series,
+		ByClass: map[QueryClass]ClassStats{},
+	}
+	for c, xs := range acc.classNDCG {
+		res.ByClass[c] = ClassStats{NDCG: aggregate(xs).Mean, MRR: aggregate(acc.classMRR[c]).Mean, N: len(xs)}
 	}
 	for t, xs := range acc.byType {
 		res.RecallByType[t] = aggregate(xs).Mean

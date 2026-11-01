@@ -26,12 +26,36 @@ func tinyDataset(t *testing.T) *Dataset {
 func TestArmADoesNotPrune(t *testing.T) {
 	t.Parallel()
 	ds := tinyDataset(t)
-	res, err := runArm(context.Background(), "A", engram.NullDecay{}, ds, 5, rerankNone)
+	res, err := runArm(context.Background(), "A", engram.NullDecay{}, ds, 5, RerankNone)
 	if err != nil {
 		t.Fatalf("runArm: %v", err)
 	}
 	if res.FinalSize != len(ds.Memories) {
 		t.Fatalf("FinalSize = %d, want %d", res.FinalSize, len(ds.Memories))
+	}
+}
+
+func TestRunArmByClass(t *testing.T) {
+	t.Parallel()
+	ds := tinyDataset(t)
+	res, err := runArm(context.Background(), "A", engram.NullDecay{}, ds, 5, RerankNone)
+	if err != nil {
+		t.Fatalf("runArm: %v", err)
+	}
+	n, ndcg, mrr := 0, 0.0, 0.0
+	for c, cs := range res.ByClass {
+		if cs.N == 0 {
+			t.Fatalf("class %v has N=0", c)
+		}
+		n += cs.N
+		ndcg += cs.NDCG * float64(cs.N)
+		mrr += cs.MRR * float64(cs.N)
+	}
+	if n != len(ds.Queries) {
+		t.Fatalf("class counts sum to %d, want %d queries", n, len(ds.Queries))
+	}
+	if math.Abs(ndcg/float64(n)-res.NDCG) > 1e-9 || math.Abs(mrr/float64(n)-res.MRR) > 1e-9 {
+		t.Fatalf("overall nDCG/MRR %v/%v is not the query-weighted class mean %v/%v", res.NDCG, res.MRR, ndcg/float64(n), mrr/float64(n))
 	}
 }
 
@@ -42,7 +66,7 @@ func TestReinforceThroughRecall(t *testing.T) {
 		t.Fatal("dataset has no accesses")
 	}
 	first := ds.Accesses[0]
-	a := newArm(engram.NullDecay{}, ds, rerankNone)
+	a := newArm(engram.NullDecay{}, ds, RerankNone)
 	acc := newAcc()
 	for d := 0; d <= first.Day; d++ {
 		if err := a.day(context.Background(), ds, d, 5, acc); err != nil {
@@ -61,7 +85,7 @@ func TestReinforceThroughRecall(t *testing.T) {
 func TestArmBPrunesStaleStandard(t *testing.T) {
 	t.Parallel()
 	ds := tinyDataset(t)
-	a := newArm(engram.UniformDecay{}, ds, rerankNone)
+	a := newArm(engram.UniformDecay{}, ds, RerankNone)
 	acc := newAcc()
 	for d := 0; d <= 150; d++ {
 		if err := a.day(context.Background(), ds, d, 5, acc); err != nil {
@@ -105,7 +129,7 @@ func TestDedupAborts(t *testing.T) {
 			{GID: "g2", Namespace: "ns0", Type: engram.Semantic, Content: "g2", Vec: v, Importance: 0.5},
 		},
 	}
-	_, err := runArm(context.Background(), "A", engram.NullDecay{}, ds, 5, rerankNone)
+	_, err := runArm(context.Background(), "A", engram.NullDecay{}, ds, 5, RerankNone)
 	var de *dedupError
 	if !errors.As(err, &de) || de.GID != "g2" {
 		t.Fatalf("err = %v, want *dedupError for g2", err)
@@ -118,7 +142,7 @@ func TestDedupAborts(t *testing.T) {
 func TestSeriesEveryTenDays(t *testing.T) {
 	t.Parallel()
 	ds := tinyDataset(t)
-	res, err := runArm(context.Background(), "A", engram.NullDecay{}, ds, 5, rerankNone)
+	res, err := runArm(context.Background(), "A", engram.NullDecay{}, ds, 5, RerankNone)
 	if err != nil {
 		t.Fatalf("runArm: %v", err)
 	}
@@ -142,11 +166,11 @@ func TestArmRerankModes(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name       string
-		mode       rerankMode
+		mode       RerankMode
 		wantCalled bool
 	}{
-		{"none never reranks", rerankNone, false},
-		{"cosine reranks", rerankCosine, true},
+		{"none never reranks", RerankNone, false},
+		{"cosine reranks", RerankCosine, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
