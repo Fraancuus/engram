@@ -244,3 +244,39 @@ func TestInTopicRange(t *testing.T) {
 		t.Fatalf("in-topic cosine range [%.4f, %.4f] outside [0.70, 0.94]", lo, hi)
 	}
 }
+
+func TestNoDedupCollisionsSeeds(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow")
+	}
+	t.Parallel()
+	for _, seed := range []int64{1, 2, 5, 9} {
+		p := Floor()
+		p.Seed = seed
+		d, err := Generate(p)
+		if err != nil {
+			t.Fatalf("seed %d: %v", seed, err)
+		}
+		_, byNS := inTopicAndNamespace(d)
+		mx := -1.0
+		for _, idx := range byNS {
+			for a := 0; a < len(idx); a++ {
+				for b := a + 1; b < len(idx); b++ {
+					mx = max(mx, mock.Cosine(d.Memories[idx[a]].Vec, d.Memories[idx[b]].Vec))
+				}
+			}
+		}
+		t.Logf("seed %d max in-namespace cosine %.4f", seed, mx)
+		if mx >= 0.95 {
+			t.Fatalf("seed %d: max %.4f >= 0.95", seed, mx)
+		}
+	}
+}
+
+func TestGenerateUncheckedRejectsTinyDim(t *testing.T) {
+	t.Parallel()
+	p := Params{Seed: 5, Namespaces: 2, Topics: 6, Memories: 120, Entities: 12, Queries: 40, Days: 180, Dim: 4}
+	if _, err := generateUnchecked(p); err == nil {
+		t.Fatal("expected error for dim 4")
+	}
+}

@@ -24,6 +24,11 @@ const (
 	// noiseLeakMax caps |noise . otherCentroid|; noise that leaks more is redrawn
 	// so cross-topic cosine stays under 0.30.
 	noiseLeakMax = 0.25
+	// maxInTopicCos is the rejection bound on same-topic pairs, a margin under
+	// the dedup threshold of 0.95.
+	maxInTopicCos = 0.94
+	// maxNoiseTries bounds the rejection loop in vector assignment.
+	maxNoiseTries = 2000
 )
 
 // newRNG returns a deterministic generator for seed.

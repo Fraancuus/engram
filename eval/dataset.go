@@ -11,6 +11,7 @@ import (
 	"math/rand/v2"
 
 	"github.com/Fraancuus/engram"
+	"github.com/Fraancuus/engram/mock"
 )
 
 // Kind is the generator-side memory kind.
@@ -106,13 +107,15 @@ func Generate(p Params) (*Dataset, error) {
 
 // generateUnchecked is Generate without the floor check, for small test datasets.
 func generateUnchecked(p Params) (*Dataset, error) {
-	if p.Namespaces < 1 || p.Topics < 1 || p.Memories < p.Topics || p.Dim < 2 || p.Days < 1 || p.Queries < 1 {
+	if p.Namespaces < 1 || p.Topics < 1 || p.Memories < p.Topics || p.Dim < 5 || p.Days < 1 || p.Queries < 1 {
 		return nil, errors.New("generate dataset: params must be positive and memories >= topics")
 	}
 	r := newRNG(p.Seed)
 	d := &Dataset{Params: p}
 	d.buildMemories(r)
-	d.assignVectors(r)
+	if err := d.assignVectors(r); err != nil {
+		return nil, fmt.Errorf("generate dataset: %w", err)
+	}
 	d.assignWriteDays(r)
 	g := d.buildGraph(r)
 	d.buildAccesses(r)
@@ -166,7 +169,7 @@ func (d *Dataset) buildMemories(r *rand.Rand) {
 // assignVectors gives every memory its vector. Offsets and noise are orthogonal
 // to the centroid and to each other, so in-topic cosine depends only on the
 // noise overlap; a twin shares most of its sibling's noise.
-func (d *Dataset) assignVectors(r *rand.Rand) {
+func (d *Dataset) assignVectors(r *rand.Rand) error {
 	dim := d.Params.Dim
 	cents := centroids(r, d.Params.Topics, dim)
 	noise := make([]engram.Vector, len(d.Memories))
@@ -179,21 +182,41 @@ func (d *Dataset) assignVectors(r *rand.Rand) {
 		for _, group := range [][]int{ts.std, ts.facts, ts.eps} {
 			for _, i := range group {
 				m := &d.Memories[i]
-				for try := 0; ; try++ {
+				ok := false
+				for try := 0; try < maxNoiseTries && !ok; try++ {
 					if m.Twin == "" {
 						noise[i] = unitOrtho(r, dim, basis...)
 					} else {
 						sib := noise[d.byGID[m.Twin]]
 						noise[i] = mix(sib, nil, 0, unitOrtho(r, dim, append(basis[:4:4], sib)...), sigmaTwin)
 					}
-					if try >= 200 || noiseIsClean(noise[i], cents, t) {
-						break
-					}
+					m.Vec = mix(cents[t], offs[m.Kind], kindOffsetScale, noise[i], sigmaInTopic)
+					ok = noiseIsClean(noise[i], cents, t) && d.farFromTopicMates(i, ts)
 				}
-				m.Vec = mix(cents[t], offs[m.Kind], kindOffsetScale, noise[i], sigmaInTopic)
+				if !ok {
+					return fmt.Errorf("assign vector for %s (topic %d): no noise draw satisfies the cosine bounds in %d tries", m.GID, t, maxNoiseTries)
+				}
 			}
 		}
 	}
+	return nil
+}
+
+// farFromTopicMates reports whether memory i, already holding a candidate
+// vector, stays under maxInTopicCos with every earlier-assigned memory of its
+// topic. This enforces the dedup bound (0.95) by construction.
+func (d *Dataset) farFromTopicMates(i int, ts topicSpan) bool {
+	for _, group := range [][]int{ts.std, ts.facts, ts.eps} {
+		for _, j := range group {
+			if j == i {
+				return true // memories are assigned in std, facts, eps order
+			}
+			if mock.Cosine(d.Memories[i].Vec, d.Memories[j].Vec) >= maxInTopicCos {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // noiseIsClean reports whether noise correlates at most noiseLeakMax with every
