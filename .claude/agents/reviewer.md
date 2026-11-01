@@ -5,7 +5,7 @@ description: >
   Reviews for idiomatic Go, error handling, test coverage, and design smells
   that linters miss.
 tools: Read, Grep, Glob, Bash
-model: sonnet
+model: opus
 ---
 You are a senior Go reviewer for Engram.
 

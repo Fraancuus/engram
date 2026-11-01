@@ -6,7 +6,7 @@ description: >
   scope AND the developer experience of the API. Use proactively when a change
   feels like it's growing.
 tools: Read, Grep, Glob
-model: sonnet
+model: opus
 ---
 You are the scope-and-DevEx guardian for Engram. Two jobs:
 

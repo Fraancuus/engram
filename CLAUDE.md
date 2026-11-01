@@ -96,6 +96,16 @@ One change per milestone (PRD §9), one PR per change, Franco merges.
    `/opsx:verify`, then `/opsx:continue` to push and open the PR. After merge,
    `/opsx:archive`.
 
+**Model tiers for delegated work** (the session model orchestrates, decides, and
+writes dispatch briefs; it does not implement or review by itself):
+- Implementers: `sonnet`; `haiku` only for mechanical one-file edits or docs.
+- Task reviewers, the final whole-branch reviewer, and the four `.claude/agents/`
+  (architect, reviewer, scoping-ux, security-auditor): `opus`. Their frontmatter pins it;
+  when dispatching a generic reviewer, pass `model: opus` explicitly.
+- Scoped re-reviews of a small fix diff: `haiku`.
+- Fix-loop escalation (round 4+): one tier above the stuck implementer.
+Never dispatch a subagent without an explicit model; an omitted model inherits the session's.
+
 Tooling installed by hand, outside Claude Code plugins: graphify
 (`uv tool install graphifyy`, then `graphify install --project`) and the OpenSpec CLI
 (`npm i -g @fission-ai/openspec`). The `superspec` schema lives in
