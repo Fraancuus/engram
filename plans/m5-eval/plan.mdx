@@ -1,0 +1,361 @@
+---
+title: "M5 Eval Harness: measuring type-aware decay"
+kind: plan
+localOnly: true
+---
+
+### Summary
+
+After this change, `go run ./cmd/eval` generates a seeded synthetic, graph-structured dataset (3 namespaces, 50 topics, 5,000 memories, 200 entities, 500 queries, 180 virtual days, 64 dimensions), replays it through the shipped `mcp` recall pipeline three times, and prints one comparison table plus a recommendation. The arms differ only in the `DecayModel`: A is `none` (`NullDecay`), B is `uniform` (`UniformDecay`), C is `type-aware` (`TypeAwareDecay`). `go run ./cmd/eval --ci` runs the floor-size dataset with the baseline seed and fails when arm C precision@5 drops more than 0.02 below `eval/baseline.json`. The strategy also becomes an operator option: `engramd` reads `ENGRAM_DECAY`. Capabilities covered: `eval-dataset`, `eval-harness`, `eval-ci-gate`, `memory-store-fake`, `tools-entry`, `decay-strategy-option`. Out of scope: `memory_stats`, the README write-up and demo (M6), a public benchmark, a sidecar or Neo4j backed run, runtime auto-tuning, ablation arms, tuning decay constants.
+
+The numbers below are illustrative only, to show the shape of the output; real values come from the first run.
+
+<Table
+  id="illustrative-output"
+  columns={["arm", "precision@5", "recall@5", "ndcg@5", "procedural", "semantic", "episodic", "bridge-link", "bridge-entity", "store", "edges"]}
+  rows={[
+    ["none", "0.412±0.004", "0.655±0.006", "0.580±0.005", "0.71", "0.88", "0.93", "0.82", "0.79", "5000", "21400"],
+    ["uniform", "0.436±0.005", "0.640±0.007", "0.597±0.006", "0.90", "0.52", "0.55", "0.51", "0.47", "2100", "7200"],
+    ["type-aware", "0.449±0.004", "0.662±0.006", "0.611±0.005", "0.93", "0.84", "0.57", "0.63", "0.60", "2600", "9800"]
+  ]}
+  density="compact"
+/>
+
+```text
+recommended: type-aware (ENGRAM_DECAY=type-aware)
+```
+
+A null result (B or A beating C) is a finding that the report prints, not a CI failure: the gate compares C to its own past only. See Open Questions at the bottom for the decisions still open.
+
+### Eval architecture
+
+`eval.Run` builds a fresh arm per decay model and seed. Every arm uses the same wiring and the same dataset; the only substituted part is the `DecayModel`. The eval calls the same handler code the MCP server wraps, so the thing measured is the thing shipped. The reranker is a cosine scorer over the generator's own vectors and never sees labels, so nothing judges itself.
+
+<Diagram id="eval-architecture" frame="hide" caption="Only the DecayModel differs per arm. Ground-truth labels flow from the generator to the scorer, never through the reranker.">
+
+```html
+<div class="diagram-panel" data-rough style="display:grid;gap:12px;padding:12px">
+  <div class="diagram-card" data-rough style="padding:10px">
+    <div class="diagram-pill">Dataset generator (eval.Generate, seeded PCG)</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      <div class="diagram-node">memories</div>
+      <div class="diagram-node">accesses</div>
+      <div class="diagram-node">queries</div>
+      <div class="diagram-node">ground-truth labels</div>
+    </div>
+  </div>
+  <div class="diagram-card" data-rough style="padding:10px">
+    <div class="diagram-pill">eval.Run (arms x seeds)</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:8px">
+      <div class="diagram-box" data-rough style="padding:8px"><strong>Arm A</strong><br/>NullDecay<br/><span class="diagram-muted">ENGRAM_DECAY=none</span></div>
+      <div class="diagram-box" data-rough style="padding:8px"><strong>Arm B</strong><br/>UniformDecay<br/><span class="diagram-muted">ENGRAM_DECAY=uniform</span></div>
+      <div class="diagram-box" data-rough style="padding:8px"><strong>Arm C</strong><br/>TypeAwareDecay<br/><span class="diagram-muted">ENGRAM_DECAY=type-aware</span></div>
+    </div>
+  </div>
+  <div class="diagram-card" data-rough style="padding:10px">
+    <div class="diagram-pill">Identical in every arm</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:8px">
+      <div class="diagram-node">mcp.Tools (shipped pipeline)</div>
+      <div class="diagram-node">mock.MemStore</div>
+      <div class="diagram-node">mock.LookupEmbedder</div>
+      <div class="diagram-node">mock.CosineReranker</div>
+      <div class="diagram-node">eval.Clock (virtual days)</div>
+      <div class="diagram-node">sweep.SweepOnce</div>
+    </div>
+  </div>
+  <div class="diagram-card" data-rough style="padding:10px">
+    <div class="diagram-pill">Scoring and output</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      <div class="diagram-node">scorer: P, R, nDCG, MRR at k</div>
+      <div class="diagram-node">Summary + Recommend</div>
+      <div class="diagram-node">WriteTable / WriteJSON</div>
+      <div class="diagram-node">CheckGate vs baseline.json</div>
+    </div>
+  </div>
+</div>
+```
+
+```css
+.diagram-panel strong { display: inline-block; margin-bottom: 4px; }
+```
+
+</Diagram>
+
+### Dataset shape and the virtual-day loop
+
+The dataset is generated directly as unit vectors with structure (no text embedding), so the arms share identical geometry and the generator owns the ground truth. Content strings (for example `t017/std/v2`, `t017/fact/3`, `t017/ep/0412`) exist because `remember` requires content and double as the embedder lookup key.
+
+<Diagram id="dataset-shape" frame="hide" caption="Dataset structure (left) and the per-day simulation loop (right).">
+
+```html
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px">
+  <div class="diagram-panel" data-rough style="padding:12px">
+    <div class="diagram-pill">Per topic (one namespace)</div>
+    <div style="display:grid;gap:8px;margin-top:8px">
+      <div class="diagram-box" data-rough style="padding:8px"><strong>Standard chain</strong> (procedural, importance 0.7)<br/>v1 to v3, each written with Supersedes of the previous version</div>
+      <div class="diagram-box" data-rough style="padding:8px"><strong>2 to 4 facts</strong> (semantic, 0.5), write-once, linked to the current standard</div>
+      <div class="diagram-box" data-rough style="padding:8px"><strong>Episodes</strong> (0.3 to 0.5), fill the remainder; twins at cosine 0.86 to 0.94 trigger auto-link</div>
+    </div>
+    <div class="diagram-pill" style="margin-top:10px">Across topics</div>
+    <div style="display:grid;gap:8px;margin-top:8px">
+      <div class="diagram-box" data-rough style="padding:8px"><strong>Hub entities</strong> (5%): 3+ topics, 2+ namespaces, fan-out under 20</div>
+      <div class="diagram-box" data-rough style="padding:8px"><strong>Bridge-only pairs X to Y</strong>: Y has cosine under 0.30 to the query; reachable only by link or shared entity from X; at least half of X are episodic</div>
+      <div class="diagram-box" data-rough style="padding:8px"><strong>2% cross-topic links</strong> from episodes</div>
+    </div>
+  </div>
+  <div class="diagram-panel" data-rough style="padding:12px">
+    <div class="diagram-pill">One virtual day (180 iterations)</div>
+    <ol style="margin:8px 0 0 18px;display:grid;gap:6px">
+      <li>Set <code>eval.Clock</code> to the day start</li>
+      <li>Writes: <code>Remember</code> with entities, links, supersedes (same in all arms)</li>
+      <li>Accesses: <code>Recall</code> with the memory's own vector, k=5, reinforcing through the real path</li>
+      <li>Queries: <code>Recall</code>, latency timed with <code>time.Since</code>, scored against <code>Relevant</code></li>
+      <li><code>SweepOnce(now)</code>: grace 30 d, floor 0.02, batch = <code>store.Len()</code> read just before the call</li>
+      <li>Record size, edges, bridges (a Point every 10 days)</li>
+    </ol>
+    <div class="diagram-muted" style="margin-top:10px">Query mix: 25% topic-current, 15% fact, 20% episode-recent, 15% episode-old, 25% bridge (half link, half entity).</div>
+  </div>
+</div>
+```
+
+</Diagram>
+
+Ground truth: topic-current relevant set is the current standard version; fact queries target that fact; episode queries target that episode at any age; bridge queries target `{hop node X, bridge-only Y}`. Entity-bridge queries are scoped to both namespaces involved.
+
+### Hard-to-reverse decisions
+
+<Callout id="decisions-hard" tone="decision">
+
+These shapes are consumed by later code or by CI, so changing them after merge is expensive.
+
+- **`mcp` exported API.** `mcp.Tools`, `mcp.Option`, `mcp.WithIDGenerator`, `mcp.NewTools(...)`, `mcp.ServerStore`, and the exported DTOs. `NewServer` changes signature to `NewServer(t *Tools)`. This widens the package API; the `architect` agent reviews it in Task 4.
+- **`ENGRAM_DECAY` names.** Exactly `type-aware` (default), `uniform`, `none`. An unknown value is a startup error.
+- **`eval/baseline.json` schema.** `k`, `seed`, `goarch`, `params`, `precision_at_k`, `ndcg_at_k`; 4-decimal rounding; gate tolerance 0.02.
+- **Generator floor constants.** 3 namespaces, 50 topics, 5,000 memories, 200 entities, 500 queries, 180 days, dim 64; dedup 0.95, auto-link 0.85, twin cosine [0.86, 0.94], in-topic [0.70, 0.94], cross-topic under 0.30, hub fan-out under 20, neighbor and propagate caps 20, sweep grace 30 d, hard floor 0.02. Frozen after one tuning pass.
+- **Supersession runs in all arms.** The arms differ by the decay curve and nothing else; under A a superseded standard is excluded by `scoreAndFilter` but never pruned.
+- **Old episodes count as relevant.** Forgetting an old episode is the price of a leaner store, and the table must show that loss.
+- **amd64-only baseline.** Go does not fuse multiply-adds on amd64, so Windows and Linux CI agree bit for bit; `WriteBaseline` returns `ErrUnsupportedArch` elsewhere.
+
+</Callout>
+
+### Files created and modified
+
+<FileTree
+  id="files-touched"
+  title="Files touched"
+  entries={[
+    { path: "decay.go", change: "modified", note: "DecayTypeAware/DecayUniform/DecayNone, DecayByName, DecayName." },
+    { path: "decay_test.go", change: "modified", note: "TestDecayByName, TestDecayNameRoundTrip." },
+    { path: "mock/embedder.go", change: "added", note: "Cosine, LookupEmbedder, CosineReranker." },
+    { path: "mock/embedder_test.go", change: "added" },
+    { path: "mock/memstore.go", change: "added", note: "Functional in-memory store mirroring neo4j/store.go." },
+    { path: "mock/memstore_test.go", change: "added" },
+    { path: "mock/memstore_conformance_test.go", change: "added", note: "package mock_test; asserts mcp.Store and sweep.Pruner conformance without an import cycle." },
+    { path: "mcp/remember.go", change: "modified", note: "Handlers become exported Tools; DTOs exported." },
+    { path: "mcp/recall.go", change: "modified" },
+    { path: "mcp/forget.go", change: "modified" },
+    { path: "mcp/server.go", change: "modified", note: "NewTools, Option, WithIDGenerator, NewServer(t *Tools)." },
+    { path: "mcp/tools_test.go", change: "added" },
+    { path: "cmd/engramd/main.go", change: "modified", note: "decayFromEnv, NewTools wiring at lines 65-66." },
+    { path: "cmd/engramd/main_test.go", change: "added" },
+    { path: "eval/doc.go", change: "added", note: "States the anti-circularity rule." },
+    { path: "eval/params.go", change: "added" },
+    { path: "eval/params_test.go", change: "added" },
+    { path: "eval/dataset.go", change: "added", note: "Types, Generate, Hash." },
+    { path: "eval/vectors.go", change: "added" },
+    { path: "eval/graph.go", change: "added" },
+    { path: "eval/schedule.go", change: "added" },
+    { path: "eval/dataset_test.go", change: "added" },
+    { path: "eval/vectors_test.go", change: "added" },
+    { path: "eval/graph_test.go", change: "added" },
+    { path: "eval/schedule_test.go", change: "added" },
+    { path: "eval/clock.go", change: "added" },
+    { path: "eval/metrics.go", change: "added" },
+    { path: "eval/metrics_test.go", change: "added" },
+    { path: "eval/arm.go", change: "added" },
+    { path: "eval/arm_test.go", change: "added" },
+    { path: "eval/run.go", change: "added" },
+    { path: "eval/report.go", change: "added" },
+    { path: "eval/report_test.go", change: "added" },
+    { path: "eval/baseline.go", change: "added" },
+    { path: "eval/baseline_test.go", change: "added" },
+    { path: "eval/baseline.json", change: "added", note: "Arm C precision@5 and nDCG@5 at seed 42, amd64." },
+    { path: "cmd/eval/main.go", change: "modified", note: "Stub becomes the real binary with flags." },
+    { path: "cmd/eval/main_test.go", change: "added" },
+    { path: "README.md", change: "modified", note: "Eval paragraph: gate is live, how to run, baseline location." },
+    { path: "openspec/changes/m5-eval/design.md", change: "modified", note: "Record final sigma and schedule constants if tuned." }
+  ]}
+/>
+
+### Key exported interfaces
+
+<Code
+  id="code-domain-mcp"
+  filename="decay.go, mcp/server.go (planned)"
+  language="go"
+  caption="Strategy names and the in-process entry to the shipped pipeline."
+  code={"// decay.go\nconst (\n\tDecayTypeAware = \"type-aware\"\n\tDecayUniform   = \"uniform\"\n\tDecayNone      = \"none\"\n)\n\nfunc DecayByName(name string) (DecayModel, error) // unknown name: error lists all three\nfunc DecayName(d DecayModel) string               // \"\" for an unknown implementation\n\n// mcp/server.go\ntype Option func(*Tools)\n\nfunc WithIDGenerator(fn func() (engram.MemoryID, error)) Option\n\nfunc NewTools(embedder engram.Embedder, reranker engram.Reranker, decay engram.DecayModel,\n\tstore ServerStore, clock engram.Clock, opts ...Option) *Tools\n\nfunc (t *Tools) Remember(ctx context.Context, in RememberInput) (RememberOutput, error)\nfunc (t *Tools) Recall(ctx context.Context, in RecallInput) (RecallOutput, error)\nfunc (t *Tools) Forget(ctx context.Context, in ForgetInput) (ForgetOutput, error)\n\nfunc NewServer(t *Tools) *mcpsdk.Server"}
+/>
+
+<Code
+  id="code-memstore"
+  filename="mock/memstore.go (planned)"
+  language="go"
+  caption="MemStore method set: mcp.Store + forget methods + sweep.Pruner, plus observability."
+  code={"type MemStore struct { /* RWMutex, mems, order, links (symmetric), mentions, byEntity */ }\n\nfunc NewMemStore() *MemStore\n\n// mcp.Store, forget methods, sweep.Pruner\nfunc (s *MemStore) Put(...)\nfunc (s *MemStore) Search(...)\nfunc (s *MemStore) Reinforce(...)\nfunc (s *MemStore) LinkEntities(...)\nfunc (s *MemStore) Link(...)\nfunc (s *MemStore) Neighbors(...)\nfunc (s *MemStore) PropagateReinforce(...)\nfunc (s *MemStore) Supersede(...)\nfunc (s *MemStore) SetForgotten(...)\nfunc (s *MemStore) Pin(...)\nfunc (s *MemStore) Delete(...)\nfunc (s *MemStore) PruneCandidates(...)\n\n// observability for the report\nfunc (s *MemStore) Len() int\nfunc (s *MemStore) EdgeCount() int\nfunc (s *MemStore) BridgeCount() int\nfunc (s *MemStore) Snapshot(id engram.MemoryID) (engram.Memory, bool)"}
+/>
+
+<Code
+  id="code-eval-api"
+  filename="eval/params.go, eval/run.go, eval/baseline.go (planned)"
+  language="go"
+  caption="Eval public surface."
+  code={"type Params struct {\n\tSeed                                                 int64\n\tNamespaces, Topics, Memories, Entities, Queries, Days, Dim int\n}\n\nfunc Floor() Params\nfunc (p Params) Scaled(n int) Params\nfunc (p Params) Validate() error\n\nfunc Run(ctx context.Context, p Params, seeds []int64, k int) (*Results, error)\nfunc Recommend(r *Results) string // highest mean nDCG@k; tie within 0.005 goes to smaller store\n\nconst GateTolerance = 0.02\nfunc CheckGate(r *Results, b Baseline, tol float64) error // error text includes both numbers and tol"}
+/>
+
+<Code
+  id="code-baseline-json"
+  filename="eval/baseline.json (shape)"
+  language="json"
+  caption="Baseline JSON shape. Values are placeholders; the real file is generated by --update-baseline."
+  code={"{\n  \"k\": 5,\n  \"seed\": 42,\n  \"goarch\": \"amd64\",\n  \"params\": {\n    \"Seed\": 42, \"Namespaces\": 3, \"Topics\": 50, \"Memories\": 5000,\n    \"Entities\": 200, \"Queries\": 500, \"Days\": 180, \"Dim\": 64\n  },\n  \"precision_at_k\": 0.0,\n  \"ndcg_at_k\": 0.0\n}"}
+/>
+
+### Tasks
+
+Each task is test-first: write the failing test, run it to see the failure, implement, run to see it pass, commit. The step-by-step checklist lives in `openspec/changes/m5-eval/plan.md`. Global rules: no `time.Now()` in `eval/`, `mock/`, `decay.go` or `mcp` handlers (the only wall-clock read is latency timing in `eval/arm.go` via `time.Since`); `mock` must not import `mcp` or `sweep` in non-test files; every task passes `go test -race`.
+
+#### Task 1: Decay strategy names
+
+Spec: `decay-strategy-option`. Reuses `TypeAwareDecay`, `UniformDecay`, `NullDecay`. Adds the three name consts, `DecayByName`, `DecayName` in `decay.go`.
+
+Tests: `TestDecayByName`, `TestDecayNameRoundTrip`.
+
+Commit: `feat(domain): DecayByName/DecayName for eval arms and ENGRAM_DECAY`
+
+#### Task 2: Lookup embedder and cosine reranker
+
+Spec: `memory-store-fake`. Adds `Cosine`, `LookupEmbedder` (error wraps unknown text), `CosineReranker` in `mock/embedder.go`. Needs no mutex because registration precedes use; the doc comment says so.
+
+Tests: `TestLookupEmbedderUnknown`, `TestCosineRerankerAlignment`, `TestCosineZeroNorm`.
+
+Commit: `feat(mock): LookupEmbedder and CosineReranker for the eval`
+
+#### Task 3: MemStore
+
+Spec: `memory-store-fake`. Reuses the programmable `FakeStore` (unchanged) and `Cosine`. Adds the functional `MemStore` mirroring `neo4j/store.go`: search over scope, neighbors capped at 20 with `Via` of `link` or `entity:<name>`, prune predicate `LastAccessed < before && !Pinned`, delete cascades through links and mentions.
+
+Tests: `TestMemStoreSearchOrderAndScope`, `TestMemStoreSearchIncludesForgotten`, `TestMemStoreNeighborsScope`, `TestMemStoreNeighborsSeedsExcluded`, `TestMemStoreNeighborsLinkCap`, `TestMemStoreNeighborsTwoEntities`, `TestMemStoreDeleteCascades`, `TestMemStorePruneBoundary`, `TestMemStorePrunePinned`, `TestMemStoreNotFound`, `TestMemStoreSupersedeIdempotent`, `TestMemStoreBridgeCount`, `TestMemStoreConcurrentSearchDelete`; conformance assertions in `mock/memstore_conformance_test.go`.
+
+Commit: `feat(mock): MemStore, a functional in-memory store mirroring the Neo4j adapter`
+
+#### Task 4: Export the handlers as `mcp.Tools`
+
+Spec: `tools-entry`. Reuses `doRemember`, `doRecall`, `doForget` unchanged. Adds `Tools`, `ServerStore`, `Option`, `WithIDGenerator`, `NewTools`, exported methods and DTOs (`RecallHit`, `Provenance`, ...), and `NewServer(t *Tools)`. Updates `cmd/engramd/main.go` lines 65-66. Dispatches the `architect` agent on the export shape; applies blocking findings only.
+
+Tests: `TestWithIDGeneratorSequential`, `TestNewToolsDefaultID`, `TestNewServerWrapsTools`; existing `TestNewServerWiresPorts` assertions are kept; `go vet -tags integration ./mcp/` compiles.
+
+Commit: `refactor(mcp): export Tools (in-process entry) and WithIDGenerator; NewServer wraps Tools`
+
+#### Task 5: `ENGRAM_DECAY` in engramd
+
+Spec: `decay-strategy-option`. Reuses `engram.DecayByName`. Adds `decayFromEnv(get func(string) string)` in `cmd/engramd/main.go`; unset means `type-aware`; unknown fails startup with `decay config: %w`; the startup log gains a `decay` attribute.
+
+Tests: `TestDecayFromEnv`.
+
+Commit: `feat(engramd): ENGRAM_DECAY selects the decay strategy (type-aware default)`
+
+#### Task 6: Eval params and floor
+
+Spec: `eval-dataset` (size floor). Adds `Params`, `Floor`, `Scaled`, `Validate`, `HubFraction` and a package doc stating the anti-circularity rule.
+
+Tests: `TestParamsFloor`, `TestParamsScale`.
+
+Commit: `feat(eval): Params with size floor and -scale`
+
+#### Task 7: Dataset generator
+
+Spec: `eval-dataset`. Reuses `mock.Cosine` and `math/rand/v2` PCG. Adds `Kind`, `QueryClass`, `Memory`, `Entity`, `Access`, `Query`, `Dataset`, `Generate`, `Hash`, `Lookup`, and the vector, graph and schedule files. Sigma constants (`sigmaInTopic` 0.55, `sigmaTwin` 0.20, `kindOffsetScale` 0.35) are tuned once and frozen.
+
+Tests: `TestGenerateDeterministic`, `TestTopicComposition`, `TestNoDedupCollisions`, `TestTwinRange`, `TestCrossTopicLow`, `TestHubSpansNamespaces`, `TestHubFanoutUnderCap`, `TestBridgeOnlyUnreachableByVector`, `TestHalfBridgeHopsEpisodic`, `TestNoAccessBeforeWrite`, `TestQueryMix`, `TestTopicCurrentPicksCurrentVersion`, `TestEntityBridgeScope`, `TestFactLinksCurrentStandard`. Floor generation completes in under 2 s.
+
+Commit: `feat(eval): seeded synthetic dataset with graph structure and ground truth`
+
+#### Task 8: Clock and metrics
+
+Spec: `eval-harness`. Adds `Clock` (settable `engram.Clock`), `Day0`, `dayTime`, `precisionAt`, `recallAt`, `ndcgAt`, `reciprocalRank`, `Stats`, `aggregate`, `percentile` (nearest rank).
+
+Tests: `TestMetricsKnownValues`, `TestMetricsEmpty`, `TestMetricsTruncateToK`, `TestAggregateStd`, `TestPercentileNearestRank`, `TestClockSetNow`.
+
+Commit: `feat(eval): virtual clock and retrieval metrics`
+
+#### Task 9: Arm runner
+
+Spec: `eval-harness`. Reuses `mcp.NewTools`, `mcp.WithIDGenerator`, `mock.NewMemStore`, `mock.NewLookupEmbedder`, `mock.CosineReranker`, `sweep.New` and `SweepOnce`. Adds `Point`, `ArmResult`, `runArm`, `dedupError`, `sequentialIDs`. A `Deduped: true` reply aborts the run as an error rather than being remapped.
+
+Tests: `TestArmADoesNotPrune`, `TestReinforceThroughRecall`, `TestArmBPrunesStaleStandard`, `TestDedupAborts`, `TestSeriesEveryTenDays`.
+
+Commit: `feat(eval): arm runner over mcp.Tools + MemStore with virtual time`
+
+#### Task 10: Run, report, recommendation
+
+Spec: `eval-harness` (report and recommendation). Adds `Results`, `Run`, `Summary`, `TieNDCG` (0.005), `Recommend`, `WriteTable`, `WriteJSON`. Ends with a temporary `TestRunFloorSmoke` (guarded by `testing.Short()`) to confirm the run finishes in under 60 s and that C is at least B on procedural recall; constants are adjusted once if not, and recorded in `design.md`.
+
+Tests: `TestRecommendMaxNDCG`, `TestRecommendTieBreak`, `TestReportTableColumns`, `TestWriteJSONRoundTrip`.
+
+Commit: `feat(eval): Run over arms x seeds, table report, recommendation`
+
+#### Task 11: Baseline, CI gate, binary
+
+Spec: `eval-ci-gate`. Adds `Baseline`, `GateTolerance`, `NewBaseline`, `LoadBaseline`, `WriteBaseline`, `ErrUnsupportedArch`, `CheckGate`, and the real `cmd/eval` binary with flags `--ci`, `--update-baseline`, `-seed`, `-seeds`, `-scale`, `-k`, `-days`, `-json`, `-baseline`. Generates `eval/baseline.json` and confirms two consecutive `--ci` runs print identical output.
+
+Tests: `TestGateRegression`, `TestGateWithinTolerance`, `TestGateNullThesisPasses`, `TestBaselineRound`, `TestBaselineRefusesNonAmd64`, `TestMainMissingBaseline`, `TestMainCIForcesOneSeed`.
+
+Commit: `feat(eval): baseline + --ci regression gate; cmd/eval flags`
+
+#### Task 12: Verification, review, docs touch
+
+Runs the full gate (below), dispatches `reviewer` on the whole diff versus `main` and `security-auditor` on `mcp/server.go`, `mcp/remember.go`, `cmd/engramd/main.go`, `cmd/eval/main.go`, updates the `README.md` eval paragraph, runs `graphify update .`, and fills `openspec/changes/m5-eval/verify.md` via `/opsx:verify`.
+
+Commit: `docs: eval gate live; README points at cmd/eval`
+
+### Risks and mitigations
+
+<Table
+  id="risks"
+  columns={["Risk", "Mitigation"]}
+  rows={[
+    ["Synthetic geometry can be tuned to flatter arm C", "Generator constants are frozen and named; every metric is reported, including episodic recall where B and C lose; multiple seeds; the M6 README states the assumptions; the gate never asserts the thesis."],
+    ["Floor too small to show the effect, or too slow for CI", "Brute force at 5,000 x 64 is seconds in Go. If the signal is noisy at the floor, raise the floor rather than add tricks (see Open Questions)."],
+    ["MemStore drifts from the Neo4j adapter", "Table tests pin scoping, caps, ordering, prune predicate and delete cascades one for one; a future -backend neo4j flag can run the same harness under the integration tag."],
+    ["Exporting mcp handlers widens the package API", "It is the surface the server already exposes over stdio; the architect agent reviews the shape in Task 4."],
+    ["Dedup collapses intended memories", "Generator keeps in-topic cosines below 0.95; TestNoDedupCollisions asserts the maximum pairwise cosine within a namespace; a Deduped reply aborts the run."],
+    ["Bridge recall conflates a pruned hop with a reached cap", "Hub fan-out stays below the neighbor cap of 20 in the generator, so caps do not bind."],
+    ["A twin pair lands at exactly 0.95 after rounding and aborts the run", "TestNoDedupCollisions asserts strict less than 0.95 over every in-namespace pair, not just twins."],
+    ["Entity-bridge query scope loses Y", "TestEntityBridgeScope asserts the scope is the union of both namespaces for every entity-bridge query."],
+    ["SweepOnce batch under-counts candidates", "runArm reads store.Len() immediately before each SweepOnce; TestArmBPrunesStaleStandard asserts a standard last accessed on day 60 is gone by day 150 under B."],
+    ["--ci without eval/baseline.json panics on a nil baseline", "TestMainMissingBaseline asserts exit 1 and the --update-baseline hint."],
+    ["Neighbors returns the same neighbor through two shared entities", "TestMemStoreNeighborsTwoEntities asserts two rows with distinct Via; blend keeps the max, as with Cypher."]
+  ]}
+/>
+
+### Verification
+
+Run from the repository root; all must pass before the change is called done. CI runs the same plus `govulncheck`, CodeQL and gitleaks.
+
+<Code
+  id="verification"
+  language="bash"
+  caption="Gate commands. gofmt prints nothing when clean."
+  code={"gofmt -l .\ngo build ./...\ngo test -race ./...\ngolangci-lint run ./...\ngo run ./cmd/eval --ci"}
+/>
+
+End-to-end smoke: `go run ./cmd/eval --update-baseline -seed 42` writes `eval/baseline.json` on amd64; then `go run ./cmd/eval --ci` twice with identical stdout and exit 0 both times; then `go run ./cmd/eval` prints the three-arm table and the `recommended:` line; with `-baseline` pointing at a missing file, `--ci` exits 1 with the `--update-baseline` hint.
+
+### Open Questions
+
+<Callout id="decisions-2026-11-01" tone="info" title="Open questions resolved (Franco, 2026-11-01)">
+- **Execution:** subagent-driven, one fresh subagent per task with a reviewer between tasks (superpowers:subagent-driven-development).
+- **Floor:** if the C versus B signal at 5,000 memories is noisy, raise the floor (memories and related dimensions); no seed selection, no constant fiddling.
+- **Headline k:** k = 5. `-k` still accepts other values; the baseline file records k.
+</Callout>
