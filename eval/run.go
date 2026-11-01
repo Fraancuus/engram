@@ -14,6 +14,7 @@ var armOrder = []string{engram.DecayNone, engram.DecayUniform, engram.DecayTypeA
 // Results holds every arm's per-seed results of one eval run.
 type Results struct {
 	K      int
+	Rerank string
 	Params Params
 	Seeds  []int64
 	Arms   map[string][]ArmResult
@@ -21,8 +22,8 @@ type Results struct {
 
 // Run generates one dataset per seed and runs all three arms over it,
 // sequentially. p.Seed is overwritten per seed.
-func Run(ctx context.Context, p Params, seeds []int64, k int) (*Results, error) {
-	res := &Results{K: k, Params: p, Seeds: seeds, Arms: map[string][]ArmResult{}}
+func Run(ctx context.Context, p Params, seeds []int64, k int, mode rerankMode) (*Results, error) {
+	res := &Results{K: k, Rerank: mode.String(), Params: p, Seeds: seeds, Arms: map[string][]ArmResult{}}
 	for _, seed := range seeds {
 		ps := p
 		ps.Seed = seed
@@ -35,7 +36,7 @@ func Run(ctx context.Context, p Params, seeds []int64, k int) (*Results, error) 
 			if err != nil {
 				return nil, fmt.Errorf("decay model %q: %w", name, err)
 			}
-			ar, err := runArm(ctx, name, dm, ds, k)
+			ar, err := runArm(ctx, name, dm, ds, k, mode)
 			if err != nil {
 				return nil, fmt.Errorf("run arm %q seed %d: %w", name, seed, err)
 			}

@@ -53,3 +53,23 @@ func TestNewServerWrapsTools(t *testing.T) {
 		t.Fatal("NewServer returned nil")
 	}
 }
+
+func TestWithoutRerankKeepsBlendOrder(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{
+		{Memory: engram.Memory{ID: "s1", Content: "first"}, Score: 0.9},
+		{Memory: engram.Memory{ID: "s2", Content: "second"}, Score: 0.8},
+	}}
+	rr := &mock.FakeReranker{Scores: []float64{0.1, 0.8}} // would reverse the order
+	tools := NewTools(&mock.FakeEmbedder{Vec: engram.Vector{1}}, rr, mock.FakeDecay{R: 1}, st, fixedClock{}, WithoutRerank())
+	out, err := tools.Recall(context.Background(), RecallInput{Query: "q"})
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
+	}
+	if got := resultIDs(out); len(got) != 2 || got[0] != "s1" || got[1] != "s2" {
+		t.Errorf("order = %v, want [s1 s2]", got)
+	}
+	if rr.LastDocs != nil {
+		t.Errorf("reranker was called with %v", rr.LastDocs)
+	}
+}

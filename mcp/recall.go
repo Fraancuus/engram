@@ -201,6 +201,9 @@ func blend(seeds []engram.RecallResult, neighbors []engram.Neighbor, k int, brid
 // If the reranker errors or returns a mismatched count it degrades to the blend order
 // (logged), so recall never fails solely because the reranker is unavailable.
 func (h *Tools) rerankResults(ctx context.Context, query string, cands []engram.RecallResult) []engram.RecallResult {
+	if h.reranker == nil {
+		return cands
+	}
 	// Nothing to reorder with fewer than two candidates; the lone result keeps its
 	// retrieval (blend) score rather than paying for a single-doc cross-encoder call.
 	if len(cands) < 2 {

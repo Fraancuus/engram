@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -25,7 +26,7 @@ func fakeArm(name string, ndcg float64, size int) ArmResult {
 
 func fakeResults(a, b, c float64, sa, sb, sc int) *Results {
 	return &Results{
-		K: 5, Seeds: []int64{1},
+		K: 5, Rerank: "none", Seeds: []int64{1},
 		Arms: map[string][]ArmResult{
 			engram.DecayNone:      {fakeArm(engram.DecayNone, a, sa)},
 			engram.DecayUniform:   {fakeArm(engram.DecayUniform, b, sb)},
@@ -88,6 +89,9 @@ func TestReportTableColumns(t *testing.T) {
 			t.Errorf("missing header %q in:\n%s", h, out)
 		}
 	}
+	if !strings.HasPrefix(out, "rerank: none\n") {
+		t.Errorf("missing rerank line in:\n%s", out)
+	}
 	if !strings.Contains(out, "recommended: type-aware (ENGRAM_DECAY=type-aware)") {
 		t.Errorf("missing recommendation line in:\n%s", out)
 	}
@@ -127,15 +131,17 @@ func TestWriteJSONRoundTrip(t *testing.T) {
 }
 
 func TestRunFloorSmoke(t *testing.T) {
-	if testing.Short() {
-		t.Skip()
+	if os.Getenv("ENGRAM_EVAL_SMOKE") != "1" {
+		t.Skip("set ENGRAM_EVAL_SMOKE=1 to run")
 	}
-	start := time.Now() // wall timing of the test only, not eval logic
-	r, err := Run(context.Background(), Floor(), []int64{42}, 5)
-	if err != nil {
-		t.Fatal(err)
+	for _, mode := range []rerankMode{rerankNone, rerankCosine} {
+		start := time.Now() // wall timing of the test only, not eval logic
+		r, err := Run(context.Background(), Floor(), []int64{42}, 5, mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var buf bytes.Buffer
+		WriteTable(&buf, r)
+		t.Logf("wall %s\n%s", time.Since(start), buf.String())
 	}
-	var buf bytes.Buffer
-	WriteTable(&buf, r)
-	t.Logf("wall %s\n%s", time.Since(start), buf.String())
 }

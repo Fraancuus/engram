@@ -36,6 +36,12 @@ func WithIDGenerator(fn func() (engram.MemoryID, error)) Option {
 	return func(t *Tools) { t.newID = fn }
 }
 
+// WithoutRerank disables the rerank stage, so recall results keep the blend order. The
+// eval uses it because no label-free stand-in for the cross-encoder exists.
+func WithoutRerank() Option {
+	return func(t *Tools) { t.reranker = nil }
+}
+
 // NewTools wires the domain ports into the remember, recall and forget pipeline with
 // the production defaults. Call its methods in process, or hand it to NewServer.
 func NewTools(embedder engram.Embedder, reranker engram.Reranker, decay engram.DecayModel, store ServerStore, clock engram.Clock, opts ...Option) *Tools {

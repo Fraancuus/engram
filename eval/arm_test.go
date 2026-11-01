@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Fraancuus/engram"
+	"github.com/Fraancuus/engram/mock"
 )
 
 func tinyParams() Params {
@@ -25,7 +26,7 @@ func tinyDataset(t *testing.T) *Dataset {
 func TestArmADoesNotPrune(t *testing.T) {
 	t.Parallel()
 	ds := tinyDataset(t)
-	res, err := runArm(context.Background(), "A", engram.NullDecay{}, ds, 5)
+	res, err := runArm(context.Background(), "A", engram.NullDecay{}, ds, 5, rerankNone)
 	if err != nil {
 		t.Fatalf("runArm: %v", err)
 	}
@@ -41,7 +42,7 @@ func TestReinforceThroughRecall(t *testing.T) {
 		t.Fatal("dataset has no accesses")
 	}
 	first := ds.Accesses[0]
-	a := newArm(engram.NullDecay{}, ds)
+	a := newArm(engram.NullDecay{}, ds, rerankNone)
 	acc := newAcc()
 	for d := 0; d <= first.Day; d++ {
 		if err := a.day(context.Background(), ds, d, 5, acc); err != nil {
@@ -60,7 +61,7 @@ func TestReinforceThroughRecall(t *testing.T) {
 func TestArmBPrunesStaleStandard(t *testing.T) {
 	t.Parallel()
 	ds := tinyDataset(t)
-	a := newArm(engram.UniformDecay{}, ds)
+	a := newArm(engram.UniformDecay{}, ds, rerankNone)
 	acc := newAcc()
 	for d := 0; d <= 150; d++ {
 		if err := a.day(context.Background(), ds, d, 5, acc); err != nil {
@@ -104,7 +105,7 @@ func TestDedupAborts(t *testing.T) {
 			{GID: "g2", Namespace: "ns0", Type: engram.Semantic, Content: "g2", Vec: v, Importance: 0.5},
 		},
 	}
-	_, err := runArm(context.Background(), "A", engram.NullDecay{}, ds, 5)
+	_, err := runArm(context.Background(), "A", engram.NullDecay{}, ds, 5, rerankNone)
 	var de *dedupError
 	if !errors.As(err, &de) || de.GID != "g2" {
 		t.Fatalf("err = %v, want *dedupError for g2", err)
@@ -117,11 +118,58 @@ func TestDedupAborts(t *testing.T) {
 func TestSeriesEveryTenDays(t *testing.T) {
 	t.Parallel()
 	ds := tinyDataset(t)
-	res, err := runArm(context.Background(), "A", engram.NullDecay{}, ds, 5)
+	res, err := runArm(context.Background(), "A", engram.NullDecay{}, ds, 5, rerankNone)
 	if err != nil {
 		t.Fatalf("runArm: %v", err)
 	}
 	if len(res.Series) != 18 || res.Series[0].Day != 9 || res.Series[17].Day != 179 {
 		t.Fatalf("series = %+v, want 18 points days 9..179", res.Series)
+	}
+}
+
+// countingReranker wraps a Reranker and counts calls.
+type countingReranker struct {
+	inner engram.Reranker
+	calls int
+}
+
+func (c *countingReranker) Rerank(ctx context.Context, q string, docs []string) ([]float64, error) {
+	c.calls++
+	return c.inner.Rerank(ctx, q, docs)
+}
+
+func TestArmRerankModes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		mode       rerankMode
+		wantCalled bool
+	}{
+		{"none never reranks", rerankNone, false},
+		{"cosine reranks", rerankCosine, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ds := tinyDataset(t)
+			emb := mock.NewLookupEmbedder()
+			for _, m := range ds.Memories {
+				emb.Register(m.Content, m.Vec)
+			}
+			for _, q := range ds.Queries {
+				emb.Register(q.Content, q.Vec)
+			}
+			cr := &countingReranker{inner: mock.CosineReranker{Embedder: emb}}
+			a := buildArm(engram.NullDecay{}, ds, tt.mode, cr)
+			acc := newAcc()
+			for d := 0; d < ds.Params.Days; d++ {
+				if err := a.day(context.Background(), ds, d, 5, acc); err != nil {
+					t.Fatalf("day %d: %v", d, err)
+				}
+			}
+			if (cr.calls > 0) != tt.wantCalled {
+				t.Fatalf("rerank calls = %d, wantCalled %v", cr.calls, tt.wantCalled)
+			}
+		})
 	}
 }

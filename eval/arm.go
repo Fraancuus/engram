@@ -17,7 +17,7 @@ import (
 const (
 	sweepGrace     = 30 * 24 * time.Hour
 	sweepHardFloor = 0.02
-	accessK        = 5
+	accessK        = 1
 	seriesEvery    = 10
 )
 
@@ -89,7 +89,30 @@ func newAcc() *armAcc {
 
 // newArm builds an arm. Every memory and query content is registered with its
 // vector so the pipeline's embedder can resolve it.
-func newArm(decay engram.DecayModel, ds *Dataset) *armState {
+func newArm(decay engram.DecayModel, ds *Dataset, mode rerankMode) *armState {
+	return buildArm(decay, ds, mode, nil)
+}
+
+// rerankMode selects whether an arm reranks recall results.
+type rerankMode int
+
+const (
+	// rerankNone keeps the blend order (default).
+	rerankNone rerankMode = iota
+	// rerankCosine reorders by cosine to the query embedding.
+	rerankCosine
+)
+
+// String is the mode's name as printed in the report.
+func (m rerankMode) String() string {
+	if m == rerankCosine {
+		return "cosine"
+	}
+	return "none"
+}
+
+// buildArm is newArm with an optional reranker override (tests count calls).
+func buildArm(decay engram.DecayModel, ds *Dataset, mode rerankMode, rr engram.Reranker) *armState {
 	emb := mock.NewLookupEmbedder()
 	for _, m := range ds.Memories {
 		emb.Register(m.Content, m.Vec)
@@ -99,7 +122,14 @@ func newArm(decay engram.DecayModel, ds *Dataset) *armState {
 	}
 	store := mock.NewMemStore()
 	clock := &Clock{}
-	tools := mcp.NewTools(emb, mock.CosineReranker{Embedder: emb}, decay, store, clock, mcp.WithIDGenerator(sequentialIDs()))
+	if rr == nil {
+		rr = mock.CosineReranker{Embedder: emb}
+	}
+	opts := []mcp.Option{mcp.WithIDGenerator(sequentialIDs())}
+	if mode == rerankNone {
+		opts = append(opts, mcp.WithoutRerank())
+	}
+	tools := mcp.NewTools(emb, rr, decay, store, clock, opts...)
 	return &armState{decay: decay, store: store, tools: tools, clock: clock,
 		ids: map[string]string{}, byID: map[string]string{}}
 }
@@ -128,7 +158,7 @@ func (a *armState) day(ctx context.Context, ds *Dataset, d, k int, acc *armAcc) 
 			}
 		}
 	}
-	five := accessK
+	one := accessK
 	for _, ac := range ds.Accesses {
 		if ac.Day != d {
 			continue
@@ -137,7 +167,7 @@ func (a *armState) day(ctx context.Context, ds *Dataset, d, k int, acc *armAcc) 
 		if !ok {
 			return fmt.Errorf("access of unknown gid %s", ac.GID)
 		}
-		in := mcp.RecallInput{Query: m.Content, Namespaces: []string{string(m.Namespace)}, K: &five}
+		in := mcp.RecallInput{Query: m.Content, Namespaces: []string{string(m.Namespace)}, K: &one}
 		if _, err := a.tools.Recall(ctx, in); err != nil {
 			return fmt.Errorf("day %d access %s: %w", d, ac.GID, err)
 		}
@@ -252,8 +282,8 @@ func (a *armState) query(ctx context.Context, ds *Dataset, q Query, k int, acc *
 }
 
 // runArm plays the whole dataset under decay and returns the arm's aggregates.
-func runArm(ctx context.Context, name string, decay engram.DecayModel, ds *Dataset, k int) (ArmResult, error) {
-	a := newArm(decay, ds)
+func runArm(ctx context.Context, name string, decay engram.DecayModel, ds *Dataset, k int, mode rerankMode) (ArmResult, error) {
+	a := newArm(decay, ds, mode)
 	acc := newAcc()
 	for d := 0; d < ds.Params.Days; d++ {
 		if err := a.day(ctx, ds, d, k, acc); err != nil {
