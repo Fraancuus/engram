@@ -45,10 +45,13 @@ type ArmResult struct {
 
 // dedupError reports that Remember collapsed a generated memory into an
 // existing one, which the dataset's construction forbids.
-type dedupError struct{ GID, Existing string }
+type dedupError struct {
+	GID, Existing string // generator id and the store id it collapsed into
+	Cosine        float64
+}
 
 func (e *dedupError) Error() string {
-	return fmt.Sprintf("memory %s deduplicated into %s: dataset vectors are too close", e.GID, e.Existing)
+	return fmt.Sprintf("memory %s deduplicated into %s (cosine %.6f): dataset vectors are too close", e.GID, e.Existing, e.Cosine)
 }
 
 // sequentialIDs yields m000001, m000002 and so on.
@@ -178,7 +181,11 @@ func (a *armState) write(ctx context.Context, m Memory) error {
 		return fmt.Errorf("write %s: %w", m.GID, err)
 	}
 	if out.Deduped {
-		return &dedupError{GID: m.GID, Existing: a.byID[out.MemoryID]}
+		de := &dedupError{GID: m.GID, Existing: out.MemoryID}
+		if ex, ok := a.store.Snapshot(engram.MemoryID(out.MemoryID)); ok {
+			de.Cosine = mock.Cosine(m.Vec, ex.Embedding)
+		}
+		return de
 	}
 	a.ids[m.GID] = out.MemoryID
 	a.byID[out.MemoryID] = m.GID

@@ -3,6 +3,7 @@ package eval
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/Fraancuus/engram"
@@ -107,6 +108,9 @@ func TestDedupAborts(t *testing.T) {
 	var de *dedupError
 	if !errors.As(err, &de) || de.GID != "g2" {
 		t.Fatalf("err = %v, want *dedupError for g2", err)
+	}
+	if de.Existing != "m000001" || math.Abs(de.Cosine-1) > 1e-6 {
+		t.Fatalf("Existing=%q Cosine=%v, want m000001 and ~1", de.Existing, de.Cosine)
 	}
 }
 
