@@ -288,3 +288,45 @@ Resolved after the builder check (2026-11-01): supersession chains are procedura
 semantic, because `remember` only supersedes on procedural writes and that matches the PRD;
 ids are injected and sequential in the eval; `Deduped: true` is an eval error; baseline
 floats are rounded and amd64-only; sweep cadence stays daily with batch = store size.
+
+## Result at the floor (2026-11-02)
+
+Final frozen generator constants (`eval/vectors.go`, `eval/schedule.go`):
+
+| constant | value |
+|---|---|
+| `sigmaInTopic` | 0.42 |
+| `sigmaTwin` | 3.6 |
+| `sigmaFactVersion` | 0.33 |
+| `kindOffsetScale` | 0.35 |
+| `maxInTopicCos` | 0.94 |
+| `minInTopicCos` | 0.70 |
+| `maxNoiseTries` | 2000 |
+| `maxChainTries` | 20 |
+| `queryNoise` | 0.15 |
+
+Floor run (`go run ./cmd/eval --ci`, seed 42, k=5, rerank none):
+
+```
+rerank: none
+arm         precision@5  recall@5     ndcg@5       mrr          procedural   semantic     episodic     bridge-link  bridge-entity  via-vector   via-link     via-entity   store   edges    bridges  p50         p95
+none        0.225±0.000  0.937±0.000  0.897±0.000  0.927±0.000  1.000±0.000  1.000±0.000  0.895±0.000  1.000±0.000  0.500±0.000    0.771±0.000  0.229±0.000  0.000±0.000  5000±0  23081±0  36447±0  1.6±0.0 ms  6.9±0.0 ms
+uniform     0.173±0.000  0.724±0.000  0.677±0.000  0.704±0.000  0.800±0.000  0.605±0.000  0.728±0.000  0.774±0.000  0.365±0.000    0.846±0.000  0.154±0.000  0.000±0.000  4889±0  22530±0  34744±0  1.7±0.0 ms  7.6±0.0 ms
+type-aware  0.154±0.000  0.682±0.000  0.587±0.000  0.582±0.000  1.000±0.000  1.000±0.000  0.463±0.000  0.516±0.000  0.206±0.000    0.860±0.000  0.140±0.000  0.000±0.000  2991±0  10658±0  13371±0  0.0±0.0 ms  5.8±0.0 ms
+
+by query class (ndcg / mrr)
+arm         topic-current  fact         episode-recent  episode-old  bridge-link  bridge-entity
+none        1.000/1.000    0.648/0.531  0.996/0.995     0.995/0.993  1.000/1.000  0.610/0.992
+uniform     0.767/0.756    0.352/0.274  0.993/0.990     0.573/0.555  0.771/0.881  0.416/0.661
+type-aware  1.000/1.000    0.662/0.548  0.600/0.540     0.199/0.186  0.499/0.609  0.206/0.310
+
+recommended: none (ENGRAM_DECAY=none)
+```
+
+Baseline (`eval/baseline.json`): k 5, seed 42, goarch amd64, rerank none, precision_at_k 0.1544, ndcg_at_k 0.5868 (arm `type-aware`).
+
+Findings:
+
+- Under TypeAwareDecay, 1-3-day-old episodes drop out of the top 5 because the blend adds w_ret*R with w_ret 0.5. This is an M4 blend property, not tuned here.
+- Semantic fact versions never decay within 180 d at the shipped constants, so implicit staleness is not cleared.
+- Entity bridges never surface without the cross-encoder (blend sim x 0.5).
