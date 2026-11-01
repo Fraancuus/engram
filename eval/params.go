@@ -20,7 +20,7 @@ type Params struct {
 // Floor returns the minimum corpus size the eval accepts (Seed 0).
 func Floor() Params {
 	return Params{
-		Namespaces: 3, Topics: 50, Memories: 5000, Entities: 200,
+		Namespaces: 3, Topics: 50, Memories: 5000, Entities: 1200,
 		Queries: 500, Days: 180, Dim: 64,
 	}
 }

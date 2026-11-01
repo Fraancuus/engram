@@ -40,3 +40,19 @@ func TestNewRNGDeterministic(t *testing.T) {
 		}
 	}
 }
+
+func TestCentroidsOrthonormal(t *testing.T) {
+	t.Parallel()
+	p := Floor()
+	cs := centroids(newRNG(42), p.Topics, p.Dim)
+	for i, a := range cs {
+		if math.Abs(norm(a)-1) > 1e-6 {
+			t.Fatalf("centroid %d norm %v", i, norm(a))
+		}
+		for j := i + 1; j < len(cs); j++ {
+			if c := mock.Cosine(a, cs[j]); math.Abs(c) >= 1e-6 {
+				t.Fatalf("centroids %d,%d cosine %v", i, j, c)
+			}
+		}
+	}
+}

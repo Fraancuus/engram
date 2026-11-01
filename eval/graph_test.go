@@ -167,3 +167,12 @@ func TestFactLinksCurrentStandard(t *testing.T) {
 		t.Fatalf("only %d cross-topic episode links", crossTopic)
 	}
 }
+
+func TestFloorEntityPool(t *testing.T) {
+	t.Parallel()
+	d := floorDS(t)
+	if len(d.Entities) < 1200 {
+		t.Fatalf("entity pool %d < 1200", len(d.Entities))
+	}
+	t.Logf("entity pool %d", len(d.Entities))
+}
