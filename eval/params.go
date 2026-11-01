@@ -7,14 +7,14 @@ const HubFraction = 0.05
 
 // Params sizes a generated eval corpus.
 type Params struct {
-	Seed       int64
-	Namespaces int
-	Topics     int
-	Memories   int
-	Entities   int
-	Queries    int
-	Days       int
-	Dim        int
+	Seed       int64 `json:"seed"`
+	Namespaces int   `json:"namespaces"`
+	Topics     int   `json:"topics"`
+	Memories   int   `json:"memories"`
+	Entities   int   `json:"entities"`
+	Queries    int   `json:"queries"`
+	Days       int   `json:"days"`
+	Dim        int   `json:"dim"`
 }
 
 // Floor returns the minimum corpus size the eval accepts (Seed 0).
