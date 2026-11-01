@@ -50,6 +50,12 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Resolve the decay strategy first so a typo fails fast without touching the database.
+	decay, decayName, err := decayFromEnv(os.Getenv)
+	if err != nil {
+		return fmt.Errorf("decay config: %w", err)
+	}
+
 	store, err := eneo4j.New(ctx,
 		getenv("NEO4J_URI", "neo4j://localhost:7687"),
 		getenv("NEO4J_USER", "neo4j"),
@@ -62,7 +68,6 @@ func run() error {
 
 	embedder := inference.New(getenv("TEI_URL", "http://localhost:8080"))
 	reranker := inference.NewReranker(getenv("TEI_RERANK_URL", "http://localhost:8081"))
-	decay := engram.TypeAwareDecay{}
 	tools := mcp.NewTools(embedder, reranker, decay, store, systemClock{})
 	srv := mcp.NewServer(tools)
 
@@ -76,7 +81,7 @@ func run() error {
 	}()
 
 	// Logs go to stderr (slog default); stdout carries the MCP stdio protocol.
-	slog.Info("engramd serving MCP over stdio", "tools", "remember,recall,forget", "sweep_interval", sweepInterval.String())
+	slog.Info("engramd serving MCP over stdio", "tools", "remember,recall,forget", "sweep_interval", sweepInterval.String(), "decay", decayName)
 	serveErr := mcp.Serve(ctx, srv)
 	stop() // cancel ctx (even on a clean client disconnect) so the sweep goroutine drains
 	wg.Wait()
@@ -84,6 +89,20 @@ func run() error {
 		return serveErr
 	}
 	return nil
+}
+
+// decayFromEnv resolves the decay strategy from ENGRAM_DECAY via get (os.Getenv in
+// production). Unset or empty selects type-aware. It returns the resolved name for logging.
+func decayFromEnv(get func(string) string) (engram.DecayModel, string, error) {
+	name := get("ENGRAM_DECAY")
+	if name == "" {
+		name = engram.DecayTypeAware
+	}
+	m, err := engram.DecayByName(name)
+	if err != nil {
+		return nil, "", fmt.Errorf("ENGRAM_DECAY %q: %w", name, err)
+	}
+	return m, name, nil
 }
 
 // getenv returns the value of key, or def when the variable is unset or empty.
