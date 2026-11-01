@@ -268,11 +268,13 @@ func (d *Dataset) assignVectors(r *rand.Rand) error {
 // (centroid, offsets) frame.
 func (d *Dataset) assignChain(r *rand.Rand, chain []int, basis []engram.Vector, cents []engram.Vector, t int, ts topicSpan) (engram.Vector, error) {
 	dim := d.Params.Dim
-	cn := unitOrtho(r, dim, basis...)
-	for try := 0; try < maxNoiseTries && !noiseIsClean(cn, cents, t); try++ {
+	var cn engram.Vector
+	clean := false
+	for try := 0; try < maxNoiseTries && !clean; try++ {
 		cn = unitOrtho(r, dim, basis...)
+		clean = noiseIsClean(cn, cents, t)
 	}
-	if !noiseIsClean(cn, cents, t) {
+	if !clean {
 		return nil, fmt.Errorf("assign chain centroid for topic %d chain %d: no clean noise draw in %d tries", t, d.Memories[chain[0]].Chain, maxNoiseTries)
 	}
 	cc := mix(cents[t], basis[1+int(KindFact)], kindOffsetScale, cn, sigmaInTopic)

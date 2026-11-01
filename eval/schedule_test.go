@@ -124,7 +124,7 @@ func TestLatestAt(t *testing.T) {
 	t.Parallel()
 	d := &Dataset{Memories: []Memory{{WriteDay: 10}, {WriteDay: 70}, {WriteDay: 115}}}
 	chain := []int{0, 1, 2}
-	for _, c := range []struct{ day, want int }{{5, 0}, {10, 0}, {100, 1}, {115, 2}, {179, 2}} {
+	for _, c := range []struct{ day, want int }{{5, 0}, {10, 0}, {70, 1}, {100, 1}, {115, 2}, {179, 2}} {
 		if got := d.latestAt(chain, c.day); got != c.want {
 			t.Errorf("day %d: latest version index %d, want %d", c.day, got, c.want)
 		}

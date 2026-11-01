@@ -148,7 +148,7 @@ func TestFactLinksCurrentStandard(t *testing.T) {
 				cur = s // chain is in version order, so the last match is current
 			}
 		}
-		if cur.GID == "" || f.Links[len(f.Links)-1] != cur.GID || len(f.Links) != min(f.Version, 2) {
+		if cur.GID == "" || len(f.Links) != min(f.Version, 2) || f.Links[len(f.Links)-1] != cur.GID {
 			t.Fatalf("%s (day %d): links %v, want the current standard %s last", f.GID, f.WriteDay, f.Links, cur.GID)
 		}
 	}

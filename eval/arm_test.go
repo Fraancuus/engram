@@ -102,14 +102,20 @@ func TestArmBPrunesStaleStandard(t *testing.T) {
 	}
 	// A recall (query or access) reinforces what it returns, so a stale
 	// standard that was recalled after its own accesses stopped at day 60 may
-	// legitimately survive. Track those via LastAccessed and exempt them.
+	// legitimately survive. Detect that as AccessCount growing past its day-60
+	// value (a write sets LastAccessed but leaves AccessCount alone).
 	recalled := map[string]bool{}
+	base := map[string]int{}
 	for d := 0; d <= 150; d++ {
 		if err := a.day(context.Background(), ds, d, 5, acc); err != nil {
 			t.Fatalf("day %d: %v", d, err)
 		}
 		for gid := range superseded {
-			if snap, ok := a.store.Snapshot(engram.MemoryID(a.ids[gid])); ok && snap.LastAccessed.After(dayTime(60)) {
+			snap, ok := a.store.Snapshot(engram.MemoryID(a.ids[gid]))
+			switch {
+			case d == 60 && ok:
+				base[gid] = snap.AccessCount
+			case d > 60 && ok && snap.AccessCount > base[gid]:
 				recalled[gid] = true
 			}
 		}
@@ -118,9 +124,16 @@ func TestArmBPrunesStaleStandard(t *testing.T) {
 	for _, ac := range ds.Accesses {
 		lastAccess[ac.GID] = max(lastAccess[ac.GID], ac.Day)
 	}
-	checked := 0
+	checked, exempted := 0, 0
 	for _, m := range ds.Memories {
-		if m.Kind != KindStandard || !superseded[m.GID] || lastAccess[m.GID] > 60 || recalled[m.GID] {
+		// A version written after day 60 has had under 90 days to decay by day
+		// 150 and may still be inside its stability window; only older ones must
+		// be gone.
+		if m.Kind != KindStandard || !superseded[m.GID] || m.WriteDay > 60 || lastAccess[m.GID] > 60 {
+			continue
+		}
+		if recalled[m.GID] {
+			exempted++
 			continue
 		}
 		checked++
@@ -128,6 +141,7 @@ func TestArmBPrunesStaleStandard(t *testing.T) {
 			t.Errorf("stale standard %s still in store on day 150", m.GID)
 		}
 	}
+	t.Logf("stale standards: %d checked, %d exempted as recalled after day 60", checked, exempted)
 	if checked == 0 {
 		t.Fatal("no unrecalled stale standard to check")
 	}
