@@ -15,7 +15,7 @@ time, map iteration order, or goroutine scheduling.
 
 ### Requirement: Size floor
 `Params.Validate` MUST reject parameters below the floor: 3 namespaces, 50 topics, 5,000
-memories, 1,200 entities, 500 queries, 180 virtual days, vector dimension 64.
+memories, 1,200 entities, 500 queries, 180 virtual days, vector dimension 128.
 `Params.Entities` is a minimum pool size: the generator MUST grow the pool when the fan-out
 cap would otherwise be exceeded and MUST expose the actual count. `-scale n`
 MUST multiply topics, memories, entities and queries by `n` and leave the other dimensions
@@ -31,7 +31,7 @@ unchanged.
 
 #### Scenario: Scale multiplies the right dimensions
 - **WHEN** `-scale 2` is applied to the floor
-- **THEN** topics = 100, memories ≥ 10,000, entities = 2,400, queries = 1,000, namespaces = 3, days = 180, dim = 64
+- **THEN** topics = 100, memories ≥ 10,000, entities = 2,400, queries = 1,000, namespaces = 3, days = 180, dim = 128
 
 ### Requirement: Typed memory mix per topic
 Each topic MUST belong to exactly one namespace and MUST contain: one procedural standard
@@ -51,11 +51,11 @@ normalize(topic centroid + 0.35·kind offset + σ·noise) with frozen named σ c
 Topic centroids MUST be mutually orthonormal whenever `Topics ≤ Dim`. All bounds below are
 RAW cosines; the store reports `(1 + cos) / 2`, so the pipeline's dedup threshold 0.95 is
 raw cos 0.90 and its auto-link threshold 0.85 is raw cos 0.70. On the CI seed at the floor:
-ordinary in-topic pairs (not twins, not chain mates) have cosine in [0.40, 0.69], below the
-auto-link point, so general chatter does not link; cross-topic cosine has absolute value
+ordinary in-topic pairs (not twins, not chain mates) have cosine in [0.40, 0.66], below the
+auto-link point with margin, so general chatter does not link; cross-topic cosine has absolute value
 below 0.30 over a seeded sample of 2,000 pairs (the all-pairs maximum is reported in the
 design, not bounded); designated "twin" episode pairs and versions of one fact chain have
-pairwise cosine in [0.72, 0.88] (they auto-link, they never dedup); and no two memories in
+pairwise cosine in [0.74, 0.88] (they auto-link, they never dedup); and no two memories in
 the same namespace have cosine ≥ 0.90 (the dedup point). The dedup bound MUST hold on every
 seed by construction; the other ranges are asserted on the CI seed.
 
@@ -69,7 +69,7 @@ seed by construction; the other ranges are asserted on the CI seed.
 
 #### Scenario: Twins cross the auto-link threshold
 - **WHEN** a twin pair is generated
-- **THEN** its cosine is ≥ 0.72 and ≤ 0.88
+- **THEN** its cosine is ≥ 0.74 and ≤ 0.88
 
 ### Requirement: Deliberate interconnection
 The generator MUST emit: explicit links from each standard version to the next, from every

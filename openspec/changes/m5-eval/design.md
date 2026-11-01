@@ -126,7 +126,7 @@ multiplies topics, memories, entities, queries by n):
 | entities | 1,200 (5% hubs) |
 | queries | 500 |
 | virtual days | 180 |
-| vector dim | 64 |
+| vector dim | 128 |
 
 Per topic (assigned to one namespace): procedural standard** with 1–3 versions
 (importance 0.7; each new version is written with `Supersedes: [previous]` in every arm,
@@ -144,7 +144,7 @@ generated with a smaller σ so their cosine lands in [0.86, 0.94]: above `linkTh
 deduplicated. The builder tunes σ values once and freezes them as named constants.
 
 Geometry notes settled during implementation (2026-11-01): topic centroids are an
-orthonormal set whenever `Topics ≤ Dim` (true at the floor: 50 ≤ 64), so cross-topic cosine
+orthonormal set whenever `Topics ≤ Dim` (true at the floor: 50 ≤ 128), so cross-topic cosine
 is carried only by the kind-offset and noise components; with the frozen σ the all-pairs
 maximum is ≈0.36–0.38 (seeds 42/1/7) and the sampled 2,000-pair bound `< 0.30` is what the
 test asserts. The load-bearing bound is per bridge query, cos(query, Y) < 0.30, asserted
@@ -174,10 +174,14 @@ Interconnection, built on purpose:
 orthogonal vectors score 0.5. Every pipeline threshold is applied to that scale, so in raw
 cosine the dedup point is 0.90 and the auto-link point is 0.70. `mock.MemStore.Search`
 mirrors the normalized score; the generator's bounds are stated in raw cosine and mapped
-through it: ordinary in-topic pairs [0.40, 0.69] (no auto-link), twins and chain versions
-[0.72, 0.88] (auto-link, no dedup), dedup bound < 0.90 by construction, bridge-only
+through it: ordinary in-topic pairs [0.40, 0.66] (no auto-link, with margin below 0.70), twins and
+chain versions [0.74, 0.88] (auto-link, no dedup, with margin above 0.70), dedup bound < 0.90 by construction, bridge-only
 cos(query, Y) < 0.30. The quantized index also adds score noise (a few hundredths on dense
-vectors; up to 0.5 on degenerate sparse ones), which the mock does not model. Product
+vectors; up to 0.5 on degenerate sparse ones), which the mock does not model. The floor
+dimension was raised from 64 to 128 at this point: with 50 orthonormal centroids in 64
+dims, the noise needed to hold ordinary pairs under cos 0.66 leaks across topics (sampled
+cross-topic max 0.40–0.43, ~8 violations per 2,000 pairs); at 128 dims the sampled bound
+< 0.30 holds. Raised the floor, no tricks. Product
 finding for a follow-up change, not this one: the M1/M2 constants `defaultDedupThreshold`
 0.95 and `linkThreshold` 0.85 were chosen as if they were raw cosines; in production they
 mean cos 0.90 and cos 0.70.
@@ -271,7 +275,7 @@ is excluded by `scoreAndFilter` but never pruned, so A's store still grows witho
 - [Synthetic geometry can be tuned to flatter C] → generator constants are frozen and
   named; every metric is reported, including episodic recall where B/C lose; multiple
   seeds; the README (M6) states the assumptions; the gate never asserts the thesis.
-- [Floor too small to show the effect, or too slow for CI] → brute force at 5,000 × 64
+- [Floor too small to show the effect, or too slow for CI] → brute force at 5,000 × 128
   dims is ~15k searches per arm, seconds in Go; if the signal is noisy at the floor, raise
   the floor rather than add tricks.
 - [MemStore drifts from the Neo4j adapter] → table tests pin the mirrored semantics

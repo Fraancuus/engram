@@ -71,7 +71,7 @@ virtual clock and the real `sweep.SweepOnce`. Only the `DecayModel` differs betw
    relevant items are reachable only through one hop (link or entity).
 5. **Minimum size** (CI runs exactly this; `-scale` multiplies for local runs): 3
    namespaces, 50 topics, 5,000 memories, 200 entities, 500 queries, 180 virtual days,
-   vector dim 64.
+   vector dim 128 (raised from 64 on 2026-11-01, design D3b).
 6. **Interconnection**: explicit links (standard version chains, fact↔standard, sparse cross-topic),
    auto-links triggered on purpose (twin episodes above the 0.85 threshold, below dedup),
    hub entities spanning topics and namespaces, and queries whose relevant set includes a

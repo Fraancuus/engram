@@ -21,7 +21,7 @@
 - Root package `engram` imports no infrastructure; `eval` may import `engram`, `mcp`, `mock`, `sweep`; `mock` must not import `mcp` or `sweep` in non-test files (import cycle: `mcp` tests import `mock`).
 - No `time.Now()` in `eval/`, `mock/`, `decay.go`, or `mcp` handlers; the only wall-clock read is latency timing in `eval/arm.go` via `time.Since`.
 - Every goroutine-touching type passes `go test -race ./...`. Tests use `t.Parallel()` where there is no shared state.
-- Floor: 3 namespaces, 50 topics, 5,000 memories, 1,200 entities (a minimum; see design D5 geometry notes), 500 queries, 180 days, dim 64. Topic centroids orthonormal when Topics ≤ Dim. Thresholds: dedup 0.95, auto-link 0.85, twin cosine [0.86, 0.94], in-topic [0.70, 0.94], cross-topic |cos| < 0.30, bridge-only cos(q, Y) < 0.30, hub fan-out < 20, neighbor cap 20, propagate cap 20, sweep grace 30 d, hard floor 0.02, k = 5, gate tolerance 0.02, tie 0.005, 4-decimal rounding, amd64-only baseline.
+- Floor: 3 namespaces, 50 topics, 5,000 memories, 1,200 entities (a minimum; see design D5 geometry notes), 500 queries, 180 days, dim 128 (raised from 64 after the similarity-scale finding, design D3b). Topic centroids orthonormal when Topics ≤ Dim. Thresholds in raw cosine (the store reports (1+cos)/2): dedup point 0.90, auto-link point 0.70, twins and chain versions [0.74, 0.88], ordinary in-topic [0.40, 0.66], cross-topic |cos| < 0.30 (sampled), bridge-only cos(q, Y) < 0.30, hub fan-out < 20, neighbor cap 20, propagate cap 20, sweep grace 30 d, hard floor 0.02, k = 5, gate tolerance 0.02, tie 0.005, 4-decimal rounding, amd64-only baseline.
 - Decay names are exactly `type-aware`, `uniform`, `none`.
 - Errors wrap with `%w` and say what was being done; sentinel `engram.ErrNotFound` for unknown ids in `MemStore`.
 - Commit after each task with a conventional message; never commit `graphify-out/`.
@@ -123,7 +123,7 @@
 **Interfaces:**
 - Produces: `type Params struct { Seed int64; Namespaces, Topics, Memories, Entities, Queries, Days, Dim int }`; `func Floor() Params` (Seed 0, values from Global Constraints); `func (p Params) Scaled(n int) Params` (multiplies Topics, Memories, Entities, Queries; n < 1 treated as 1); `func (p Params) Validate() error` (first violated dimension named with its floor); `const HubFraction = 0.05`.
 
-- [ ] **Step 1: Write failing tests** `TestParamsFloor` (Floor().Validate() nil; Memories 4,999 → error containing `memories` and `5000`), `TestParamsScale` (Scaled(2): Topics 100, Memories 10000, Entities 400, Queries 1000, Namespaces 3, Days 180, Dim 64).
+- [ ] **Step 1: Write failing tests** `TestParamsFloor` (Floor().Validate() nil; Memories 4,999 → error containing `memories` and `5000`), `TestParamsScale` (Scaled(2): Topics 100, Memories 10000, Entities 400, Queries 1000, Namespaces 3, Days 180, Dim 128).
 - [ ] **Step 2: Run** `go test -race ./eval/`. Expected: FAIL to compile.
 - [ ] **Step 3: Implement** `eval/params.go` and a package doc in `eval/doc.go` stating the anti-circularity rule.
 - [ ] **Step 4: Run** the tests. Expected: PASS.
@@ -140,7 +140,7 @@
   - `type Memory struct { GID string; Topic int; Namespace engram.Namespace; Type engram.MemoryType; Kind Kind; Version int; Content string; Vec engram.Vector; Importance float64; Entities []string; Links []string; Supersedes string; WriteDay int; Twin string }` (`Content` = `GID`, e.g. `t017/std/v2`, `t017/fact/3`, `t017/ep/0412`).
   - `type Entity struct { Name string; Hub bool }`; `type Access struct { GID string; Day int }`; `type Query struct { ID string; Class QueryClass; Day int; Content string; Vec engram.Vector; Namespaces []engram.Namespace; Relevant []string }`.
   - `type Dataset struct { Params Params; Memories []Memory; Entities []Entity; Accesses []Access; Queries []Query; byGID map[string]int }`; `func Generate(p Params) (*Dataset, error)` (calls `Validate`); `func (d *Dataset) Hash() string` (sha256 over a canonical encoding); `func (d *Dataset) Lookup(gid string) (Memory, bool)`.
-  - `vectors.go`: `const dimDefault = 64`, `sigmaInTopic`, `sigmaTwin`, `kindOffsetScale = 0.35` (frozen, builder tunes once); `func newRNG(seed int64) *rand.Rand` (`math/rand/v2` PCG); `func unit(r *rand.Rand, dim int) engram.Vector`; `func mix(centroid, offset engram.Vector, scale float64, noise engram.Vector, sigma float64) engram.Vector` (normalised).
+  - `vectors.go`: `const dimDefault = 128`, `sigmaInTopic`, `sigmaTwin`, `kindOffsetScale = 0.35` (frozen, builder tunes once); `func newRNG(seed int64) *rand.Rand` (`math/rand/v2` PCG); `func unit(r *rand.Rand, dim int) engram.Vector`; `func mix(centroid, offset engram.Vector, scale float64, noise engram.Vector, sigma float64) engram.Vector` (normalised).
   - Schedule constants from D6 (`standardWriteDays = [0,10]`, `laterVersionDays = [30,90]`, `standardAccessEvery = 7`, `standardAccessUntil = 60`, `topicCurrentQueryDays = [150,179]`, …).
 - Consumes: `mock.Cosine`.
 
