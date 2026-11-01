@@ -2,6 +2,7 @@ package engram
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -131,5 +132,55 @@ func TestTypeAwareUnknownTypeFallsBack(t *testing.T) {
 	}
 	if got := d.Retrievability(mem(MemoryType("reference"), 0, decayBase), decayBase); got == 0 {
 		t.Errorf("Retrievability(fresh unknown) = %v, want > 0", got)
+	}
+}
+
+func TestDecayByName(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		want DecayModel
+	}{
+		{DecayTypeAware, TypeAwareDecay{}},
+		{DecayUniform, UniformDecay{}},
+		{DecayNone, NullDecay{}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := DecayByName(tc.name)
+			if err != nil {
+				t.Fatalf("DecayByName(%q) error: %v", tc.name, err)
+			}
+			if got != tc.want {
+				t.Errorf("DecayByName(%q) = %#v, want %#v", tc.name, got, tc.want)
+			}
+		})
+	}
+
+	t.Run("unknown", func(t *testing.T) {
+		t.Parallel()
+		got, err := DecayByName("fast")
+		if err == nil {
+			t.Fatalf("DecayByName(\"fast\") = %#v, want error", got)
+		}
+		for _, n := range []string{DecayTypeAware, DecayUniform, DecayNone} {
+			if !strings.Contains(err.Error(), n) {
+				t.Errorf("error %q does not mention %q", err, n)
+			}
+		}
+	})
+}
+
+func TestDecayNameRoundTrip(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{DecayTypeAware, DecayUniform, DecayNone} {
+		m, err := DecayByName(name)
+		if err != nil {
+			t.Fatalf("DecayByName(%q): %v", name, err)
+		}
+		if got := DecayName(m); got != name {
+			t.Errorf("DecayName(DecayByName(%q)) = %q", name, got)
+		}
 	}
 }
