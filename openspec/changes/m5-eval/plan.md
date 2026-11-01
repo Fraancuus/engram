@@ -21,7 +21,7 @@
 - Root package `engram` imports no infrastructure; `eval` may import `engram`, `mcp`, `mock`, `sweep`; `mock` must not import `mcp` or `sweep` in non-test files (import cycle: `mcp` tests import `mock`).
 - No `time.Now()` in `eval/`, `mock/`, `decay.go`, or `mcp` handlers; the only wall-clock read is latency timing in `eval/arm.go` via `time.Since`.
 - Every goroutine-touching type passes `go test -race ./...`. Tests use `t.Parallel()` where there is no shared state.
-- Floor: 3 namespaces, 50 topics, 5,000 memories, 200 entities, 500 queries, 180 days, dim 64. Thresholds: dedup 0.95, auto-link 0.85, twin cosine [0.86, 0.94], in-topic [0.70, 0.94], cross-topic |cos| < 0.30, bridge-only cos(q, Y) < 0.30, hub fan-out < 20, neighbor cap 20, propagate cap 20, sweep grace 30 d, hard floor 0.02, k = 5, gate tolerance 0.02, tie 0.005, 4-decimal rounding, amd64-only baseline.
+- Floor: 3 namespaces, 50 topics, 5,000 memories, 1,200 entities (a minimum; see design D5 geometry notes), 500 queries, 180 days, dim 64. Topic centroids orthonormal when Topics ≤ Dim. Thresholds: dedup 0.95, auto-link 0.85, twin cosine [0.86, 0.94], in-topic [0.70, 0.94], cross-topic |cos| < 0.30, bridge-only cos(q, Y) < 0.30, hub fan-out < 20, neighbor cap 20, propagate cap 20, sweep grace 30 d, hard floor 0.02, k = 5, gate tolerance 0.02, tie 0.005, 4-decimal rounding, amd64-only baseline.
 - Decay names are exactly `type-aware`, `uniform`, `none`.
 - Errors wrap with `%w` and say what was being done; sentinel `engram.ErrNotFound` for unknown ids in `MemStore`.
 - Commit after each task with a conventional message; never commit `graphify-out/`.

@@ -15,7 +15,9 @@ time, map iteration order, or goroutine scheduling.
 
 ### Requirement: Size floor
 `Params.Validate` MUST reject parameters below the floor: 3 namespaces, 50 topics, 5,000
-memories, 200 entities, 500 queries, 180 virtual days, vector dimension 64. `-scale n`
+memories, 1,200 entities, 500 queries, 180 virtual days, vector dimension 64.
+`Params.Entities` is a minimum pool size: the generator MUST grow the pool when the fan-out
+cap would otherwise be exceeded and MUST expose the actual count. `-scale n`
 MUST multiply topics, memories, entities and queries by `n` and leave the other dimensions
 unchanged.
 
@@ -29,7 +31,7 @@ unchanged.
 
 #### Scenario: Scale multiplies the right dimensions
 - **WHEN** `-scale 2` is applied to the floor
-- **THEN** topics = 100, memories ≥ 10,000, entities = 400, queries = 1,000, namespaces = 3, days = 180, dim = 64
+- **THEN** topics = 100, memories ≥ 10,000, entities = 2,400, queries = 1,000, namespaces = 3, days = 180, dim = 64
 
 ### Requirement: Typed memory mix per topic
 Each topic MUST belong to exactly one namespace and MUST contain: one procedural standard
@@ -44,14 +46,21 @@ and in [0.3, 0.5] for episodes.
 
 ### Requirement: Vector geometry
 Memory vectors MUST be unit vectors of the configured dimension built as
-normalize(topic centroid + 0.35·kind offset + σ·noise) with frozen named σ constants such
-that: in-topic pairwise cosine lies in [0.70, 0.94]; cross-topic cosine has absolute value
-below 0.30; designated "twin" episode pairs have cosine in [0.86, 0.94]; and no two
-memories in the same namespace have cosine ≥ 0.95 (the dedup threshold).
+normalize(topic centroid + 0.35·kind offset + σ·noise) with frozen named σ constants.
+Topic centroids MUST be mutually orthonormal whenever `Topics ≤ Dim`. On the CI seed at the
+floor: in-topic pairwise cosine lies in [0.70, 0.94]; cross-topic cosine has absolute value
+below 0.30 over a seeded sample of 2,000 pairs (the all-pairs maximum is reported in the
+design, not bounded); designated "twin" episode pairs have cosine in [0.86, 0.94]; and no two
+memories in the same namespace have cosine ≥ 0.95 (the dedup threshold). The dedup bound
+MUST hold on every seed; the other ranges are asserted on the CI seed.
 
 #### Scenario: No dedup collisions
 - **WHEN** a dataset is generated at the floor
 - **THEN** the maximum pairwise cosine among memories sharing a namespace is below 0.95
+
+#### Scenario: Orthonormal centroids at the floor
+- **WHEN** a dataset is generated with Topics ≤ Dim
+- **THEN** every pair of distinct topic centroids has |cosine| < 1e-6 and every centroid has unit norm
 
 #### Scenario: Twins cross the auto-link threshold
 - **WHEN** a twin pair is generated

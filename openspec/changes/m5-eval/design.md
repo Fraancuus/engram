@@ -123,7 +123,7 @@ multiplies topics, memories, entities, queries by n):
 | namespaces | 3 |
 | topics | 50 |
 | memories | 5,000 |
-| entities | 200 (5% hubs) |
+| entities | 1,200 (5% hubs) |
 | queries | 500 |
 | virtual days | 180 |
 | vector dim | 64 |
@@ -139,6 +139,22 @@ cosine lands in roughly 0.75–0.93 and cross-topic cosine near 0. "Twin" episod
 generated with a smaller σ so their cosine lands in [0.86, 0.94]: above `linkThreshold`
 (0.85) to exercise auto-linking, below `defaultDedupThreshold` (0.95) so they are not
 deduplicated. The builder tunes σ values once and freezes them as named constants.
+
+Geometry notes settled during implementation (2026-11-01): topic centroids are an
+orthonormal set whenever `Topics ≤ Dim` (true at the floor: 50 ≤ 64), so cross-topic cosine
+is carried only by the kind-offset and noise components; with the frozen σ the all-pairs
+maximum is ≈0.36–0.38 (seeds 42/1/7) and the sampled 2,000-pair bound `< 0.30` is what the
+test asserts. The load-bearing bound is per bridge query, cos(query, Y) < 0.30, asserted
+for every bridge query. Above the floor (large `-scale`) centroids are random unit vectors.
+The entity floor is 1,200, not 200: 5,000 memories with 1–3 mentions each cannot fit under
+a fan-out of 20 with fewer than ~1,160 entities, and the fan-out cap is what keeps
+`neighborCapPerSeed` from truncating a bridge. `Params.Entities` is a minimum; the
+generator grows the pool if the cap would otherwise be exceeded and the dataset reports the
+actual count. A twin shares its sibling's noise so the pair's cosine is a fixed ≈0.90
+(inside [0.86, 0.94]); the in-topic range [0.70, 0.94] and all geometric bounds are
+asserted on the CI seed (42), with other seeds spot-checked, not guaranteed. Link-bridge Y
+sits in X's namespace (those queries are scoped to one namespace); entity-bridge Y crosses
+namespaces through a hub.
 
 Interconnection, built on purpose:
 - Explicit links on `remember`: standard vᵢ → vᵢ₊₁, every fact ↔ the current standard
