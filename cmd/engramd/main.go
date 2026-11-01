@@ -63,7 +63,8 @@ func run() error {
 	embedder := inference.New(getenv("TEI_URL", "http://localhost:8080"))
 	reranker := inference.NewReranker(getenv("TEI_RERANK_URL", "http://localhost:8081"))
 	decay := engram.TypeAwareDecay{}
-	srv := mcp.NewServer(embedder, reranker, decay, store, systemClock{})
+	tools := mcp.NewTools(embedder, reranker, decay, store, systemClock{})
+	srv := mcp.NewServer(tools)
 
 	// The decay sweep runs alongside serving and exits when ctx is cancelled.
 	sweeper := sweep.New(store, decay, systemClock{}, sweepInterval, sweepGrace, sweepFloor, sweepBatch, slog.Default())

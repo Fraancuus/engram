@@ -37,14 +37,16 @@ const (
 	propagateThreshold = 0.85
 )
 
-type recallInput struct {
+// RecallInput is the argument set of the recall tool.
+type RecallInput struct {
 	Query            string   `json:"query" jsonschema:"text to search for"`
 	Namespaces       []string `json:"namespaces,omitempty" jsonschema:"restrict to these universes; empty means all"`
 	K                *int     `json:"k,omitempty" jsonschema:"max results, default 10, capped at 100"`
 	IncludeForgotten bool     `json:"include_forgotten,omitempty" jsonschema:"include soft-forgotten/decayed memories"`
 }
 
-type provenanceDTO struct {
+// Provenance explains why a recalled memory ranked where it did.
+type Provenance struct {
 	Source       string    `json:"source"`
 	CreatedAt    time.Time `json:"created_at"`
 	LastAccessed time.Time `json:"last_accessed"`
@@ -52,40 +54,42 @@ type provenanceDTO struct {
 	RetrievedVia string    `json:"retrieved_via"`
 }
 
-type recallResultDTO struct {
-	ID         string        `json:"id"`
-	Content    string        `json:"content"`
-	Score      float64       `json:"score"`
-	Type       string        `json:"type"`
-	Namespace  string        `json:"namespace"`
-	Provenance provenanceDTO `json:"provenance"`
+// RecallHit is one ranked memory returned by recall.
+type RecallHit struct {
+	ID         string     `json:"id"`
+	Content    string     `json:"content"`
+	Score      float64    `json:"score"`
+	Type       string     `json:"type"`
+	Namespace  string     `json:"namespace"`
+	Provenance Provenance `json:"provenance"`
 }
 
-type recallOutput struct {
-	Results []recallResultDTO `json:"results"`
+// RecallOutput is the result of the recall tool.
+type RecallOutput struct {
+	Results []RecallHit `json:"results"`
 }
 
 // doRecall validates the query, embeds it, runs a namespace-filtered vector search, and
 // maps the results to the response DTO (provenance is projected from each memory's own
 // fields). Internal failures are logged and returned sanitized.
-func (h *handlers) doRecall(ctx context.Context, in recallInput) (out recallOutput, err error) {
+func (h *Tools) doRecall(ctx context.Context, in RecallInput) (out RecallOutput, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			h.log.Error("recall: recovered panic", "panic", r)
-			out, err = recallOutput{}, errors.New("recall: internal error")
+			out, err = RecallOutput{}, errors.New("recall: internal error")
 		}
 	}()
 
 	if strings.TrimSpace(in.Query) == "" || len(in.Query) > maxContentBytes {
-		return recallOutput{}, fmt.Errorf("query must be 1..%d bytes and not blank", maxContentBytes)
+		return RecallOutput{}, fmt.Errorf("query must be 1..%d bytes and not blank", maxContentBytes)
 	}
 	if len(in.Namespaces) > maxNamespaces {
-		return recallOutput{}, fmt.Errorf("at most %d namespaces allowed", maxNamespaces)
+		return RecallOutput{}, fmt.Errorf("at most %d namespaces allowed", maxNamespaces)
 	}
 	namespaces := make([]engram.Namespace, 0, len(in.Namespaces))
 	for _, n := range in.Namespaces {
 		if strings.TrimSpace(n) == "" || len(n) > maxNamespaceBytes {
-			return recallOutput{}, fmt.Errorf("namespace must be 1..%d bytes and not blank", maxNamespaceBytes)
+			return RecallOutput{}, fmt.Errorf("namespace must be 1..%d bytes and not blank", maxNamespaceBytes)
 		}
 		namespaces = append(namespaces, engram.Namespace(n))
 	}
@@ -104,12 +108,12 @@ func (h *handlers) doRecall(ctx context.Context, in recallInput) (out recallOutp
 	vec, err := h.embedder.Embed(ctx, in.Query)
 	if err != nil {
 		h.log.Error("recall: embed failed", "err", err)
-		return recallOutput{}, errors.New("recall: embedding failed")
+		return RecallOutput{}, errors.New("recall: embedding failed")
 	}
 	seeds, err := h.store.Search(ctx, namespaces, vec, h.seedN)
 	if err != nil {
 		h.log.Error("recall: search failed", "err", err)
-		return recallOutput{}, errors.New("recall: store unavailable")
+		return RecallOutput{}, errors.New("recall: store unavailable")
 	}
 	seedIDs := make([]engram.MemoryID, len(seeds))
 	for i, s := range seeds {
@@ -118,7 +122,7 @@ func (h *handlers) doRecall(ctx context.Context, in recallInput) (out recallOutp
 	neighbors, err := h.store.Neighbors(ctx, seedIDs, namespaces)
 	if err != nil {
 		h.log.Error("recall: neighbors failed", "err", err)
-		return recallOutput{}, errors.New("recall: store unavailable")
+		return RecallOutput{}, errors.New("recall: store unavailable")
 	}
 	// Blend selects a candidate pool (>= k so the reranker has room to reorder), the
 	// reranker decides the final order, then we take k and trim under the token budget.
@@ -134,15 +138,15 @@ func (h *handlers) doRecall(ctx context.Context, in recallInput) (out recallOutp
 	}
 	results := packBudget(ranked, h.maxTokens)
 
-	out = recallOutput{Results: make([]recallResultDTO, len(results))}
+	out = RecallOutput{Results: make([]RecallHit, len(results))}
 	for i, r := range results {
-		out.Results[i] = recallResultDTO{
+		out.Results[i] = RecallHit{
 			ID:        string(r.ID),
 			Content:   r.Content,
 			Score:     r.Score,
 			Type:      string(r.Type),
 			Namespace: string(r.Namespace),
-			Provenance: provenanceDTO{
+			Provenance: Provenance{
 				Source:       r.Source,
 				CreatedAt:    r.CreatedAt,
 				LastAccessed: r.LastAccessed,
@@ -196,7 +200,7 @@ func blend(seeds []engram.RecallResult, neighbors []engram.Neighbor, k int, brid
 // rerankResults reorders candidates by the cross-encoder's score (the final authority).
 // If the reranker errors or returns a mismatched count it degrades to the blend order
 // (logged), so recall never fails solely because the reranker is unavailable.
-func (h *handlers) rerankResults(ctx context.Context, query string, cands []engram.RecallResult) []engram.RecallResult {
+func (h *Tools) rerankResults(ctx context.Context, query string, cands []engram.RecallResult) []engram.RecallResult {
 	// Nothing to reorder with fewer than two candidates; the lone result keeps its
 	// retrieval (blend) score rather than paying for a single-doc cross-encoder call.
 	if len(cands) < 2 {
@@ -240,7 +244,7 @@ func packBudget(rs []engram.RecallResult, maxTokens int) []engram.RecallResult {
 // scoreAndFilter applies the decay-weighted blend and the soft-forget filter: it drops
 // superseded/forgotten/below-threshold-retrievability candidates (unless includeForgotten)
 // and re-scores the rest as wSim·sim + wImp·importance + wRet·retrievability.
-func (h *handlers) scoreAndFilter(cands []engram.RecallResult, now time.Time, includeForgotten bool) []engram.RecallResult {
+func (h *Tools) scoreAndFilter(cands []engram.RecallResult, now time.Time, includeForgotten bool) []engram.RecallResult {
 	out := make([]engram.RecallResult, 0, len(cands))
 	for _, c := range cands {
 		r := h.decay.Retrievability(c.Memory, now)
@@ -259,7 +263,7 @@ func (h *handlers) scoreAndFilter(cands []engram.RecallResult, now time.Time, in
 // response is sent — a deliberate v1 tradeoff (correctness over latency; a detached, batched
 // write is a future optimization). A reinforce failure is logged and skipped so it never
 // fails an otherwise-successful recall.
-func (h *handlers) reinforce(ctx context.Context, results []engram.RecallResult, now time.Time) {
+func (h *Tools) reinforce(ctx context.Context, results []engram.RecallResult, now time.Time) {
 	for _, r := range results {
 		if err := h.store.Reinforce(ctx, r.ID, now); err != nil {
 			h.log.Error("recall: reinforce failed", "id", r.ID, "err", err)

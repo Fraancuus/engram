@@ -17,8 +17,8 @@ type fixedClock struct{}
 
 func (fixedClock) Now() time.Time { return time.Unix(1_700_000_000, 0).UTC() }
 
-func testHandlers(emb *mock.FakeEmbedder, st *mock.FakeStore) *handlers {
-	return &handlers{
+func testHandlers(emb *mock.FakeEmbedder, st *mock.FakeStore) *Tools {
+	return &Tools{
 		embedder:         emb,
 		reranker:         &mock.FakeReranker{},
 		decay:            mock.FakeDecay{R: 1}, // nothing soft-forgotten by default
@@ -38,8 +38,8 @@ func testHandlers(emb *mock.FakeEmbedder, st *mock.FakeStore) *handlers {
 	}
 }
 
-func validRemember() rememberInput {
-	return rememberInput{Content: "hello world", Type: "semantic", Namespace: "work/eng"}
+func validRemember() RememberInput {
+	return RememberInput{Content: "hello world", Type: "semantic", Namespace: "work/eng"}
 }
 
 func TestDoRememberSupersedesProcedural(t *testing.T) {
@@ -225,16 +225,16 @@ func TestDoRememberValidation(t *testing.T) {
 	imp := func(f float64) *float64 { return &f }
 	tests := []struct {
 		name string
-		mut  func(*rememberInput)
+		mut  func(*RememberInput)
 	}{
-		{"invalid type", func(in *rememberInput) { in.Type = "reference" }},
-		{"empty content", func(in *rememberInput) { in.Content = "" }},
-		{"empty namespace", func(in *rememberInput) { in.Namespace = "" }},
-		{"importance too high", func(in *rememberInput) { in.Importance = imp(1.5) }},
-		{"importance negative", func(in *rememberInput) { in.Importance = imp(-0.1) }},
-		{"whitespace content", func(in *rememberInput) { in.Content = "   " }},
-		{"whitespace entity", func(in *rememberInput) { in.Entities = []string{"  "} }},
-		{"whitespace link", func(in *rememberInput) { in.Links = []string{"  "} }},
+		{"invalid type", func(in *RememberInput) { in.Type = "reference" }},
+		{"empty content", func(in *RememberInput) { in.Content = "" }},
+		{"empty namespace", func(in *RememberInput) { in.Namespace = "" }},
+		{"importance too high", func(in *RememberInput) { in.Importance = imp(1.5) }},
+		{"importance negative", func(in *RememberInput) { in.Importance = imp(-0.1) }},
+		{"whitespace content", func(in *RememberInput) { in.Content = "   " }},
+		{"whitespace entity", func(in *RememberInput) { in.Entities = []string{"  "} }},
+		{"whitespace link", func(in *RememberInput) { in.Links = []string{"  "} }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

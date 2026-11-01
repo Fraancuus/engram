@@ -36,7 +36,7 @@ func TestDoRecallMapsResults(t *testing.T) {
 	}}
 	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
 
-	out, err := h.doRecall(context.Background(), recallInput{Query: "q"})
+	out, err := h.doRecall(context.Background(), RecallInput{Query: "q"})
 	if err != nil {
 		t.Fatalf("doRecall: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestDoRecallClampsK(t *testing.T) {
 			// assert the result count.
 			st := &mock.FakeStore{SearchResults: manySeeds(120)}
 			h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
-			out, err := h.doRecall(context.Background(), recallInput{Query: "q", K: tt.in})
+			out, err := h.doRecall(context.Background(), RecallInput{Query: "q", K: tt.in})
 			if err != nil {
 				t.Fatalf("doRecall: %v", err)
 			}
@@ -92,7 +92,7 @@ func TestDoRecallExpandsAndTagsProvenance(t *testing.T) {
 		NeighborsRes:  []engram.Neighbor{{Memory: engram.Memory{ID: "n1", Content: "neighbor"}, SourceID: "s1", Via: "link", Weight: 0.5}},
 	}
 	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
-	out, err := h.doRecall(context.Background(), recallInput{Query: "q", Namespaces: []string{"nsA"}})
+	out, err := h.doRecall(context.Background(), RecallInput{Query: "q", Namespaces: []string{"nsA"}})
 	if err != nil {
 		t.Fatalf("doRecall: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestDoRecallPassesNamespaces(t *testing.T) {
 	t.Parallel()
 	st := &mock.FakeStore{}
 	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
-	if _, err := h.doRecall(context.Background(), recallInput{Query: "q", Namespaces: []string{"a", "b"}}); err != nil {
+	if _, err := h.doRecall(context.Background(), RecallInput{Query: "q", Namespaces: []string{"a", "b"}}); err != nil {
 		t.Fatalf("doRecall: %v", err)
 	}
 	if len(st.LastSearchNS) != 2 || st.LastSearchNS[0] != "a" || st.LastSearchNS[1] != "b" {
@@ -130,7 +130,7 @@ func TestDoRecallEmptyQuery(t *testing.T) {
 	t.Parallel()
 	emb := &mock.FakeEmbedder{Vec: engram.Vector{1}}
 	h := testHandlers(emb, &mock.FakeStore{})
-	if _, err := h.doRecall(context.Background(), recallInput{Query: ""}); err == nil {
+	if _, err := h.doRecall(context.Background(), RecallInput{Query: ""}); err == nil {
 		t.Fatal("want error for empty query")
 	}
 	if emb.Last != "" {
@@ -141,7 +141,7 @@ func TestDoRecallEmptyQuery(t *testing.T) {
 func TestDoRecallEmbedErrorIsSanitized(t *testing.T) {
 	t.Parallel()
 	h := testHandlers(&mock.FakeEmbedder{Err: errors.New("tei-internal-detail")}, &mock.FakeStore{})
-	_, err := h.doRecall(context.Background(), recallInput{Query: "q"})
+	_, err := h.doRecall(context.Background(), RecallInput{Query: "q"})
 	if err == nil {
 		t.Fatal("want error on embed failure")
 	}
@@ -154,7 +154,7 @@ func TestDoRecallRejectsBlankQuery(t *testing.T) {
 	t.Parallel()
 	emb := &mock.FakeEmbedder{Vec: engram.Vector{1}}
 	h := testHandlers(emb, &mock.FakeStore{})
-	if _, err := h.doRecall(context.Background(), recallInput{Query: "   "}); err == nil {
+	if _, err := h.doRecall(context.Background(), RecallInput{Query: "   "}); err == nil {
 		t.Fatal("want error for whitespace-only query")
 	}
 	if emb.Last != "" {
@@ -165,7 +165,7 @@ func TestDoRecallRejectsBlankQuery(t *testing.T) {
 func TestDoRecallRejectsBlankNamespace(t *testing.T) {
 	t.Parallel()
 	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, &mock.FakeStore{})
-	if _, err := h.doRecall(context.Background(), recallInput{Query: "q", Namespaces: []string{"  "}}); err == nil {
+	if _, err := h.doRecall(context.Background(), RecallInput{Query: "q", Namespaces: []string{"  "}}); err == nil {
 		t.Fatal("want error for whitespace-only namespace")
 	}
 }
@@ -178,7 +178,7 @@ func TestDoRecallReranks(t *testing.T) {
 	}}
 	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
 	h.reranker = &mock.FakeReranker{Scores: []float64{0.1, 0.8}} // s1->0.1, s2->0.8 => s2 first
-	out, err := h.doRecall(context.Background(), recallInput{Query: "q"})
+	out, err := h.doRecall(context.Background(), RecallInput{Query: "q"})
 	if err != nil {
 		t.Fatalf("doRecall: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestDoRecallRerankFallback(t *testing.T) {
 	}}
 	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
 	h.reranker = &mock.FakeReranker{Err: errors.New("rerank-down")}
-	out, err := h.doRecall(context.Background(), recallInput{Query: "q"})
+	out, err := h.doRecall(context.Background(), RecallInput{Query: "q"})
 	if err != nil {
 		t.Fatalf("doRecall should not fail when rerank errors: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestDoRecallRerankCountMismatchFallback(t *testing.T) {
 	}}
 	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
 	h.reranker = countMismatchReranker{}
-	out, err := h.doRecall(context.Background(), recallInput{Query: "q"})
+	out, err := h.doRecall(context.Background(), RecallInput{Query: "q"})
 	if err != nil {
 		t.Fatalf("doRecall must not fail on rerank count mismatch: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestDoRecallSoftForget(t *testing.T) {
 	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
 	h.decay = mock.FakeDecay{R: 0} // below softThreshold -> soft-forgotten
 
-	out, err := h.doRecall(context.Background(), recallInput{Query: "q"})
+	out, err := h.doRecall(context.Background(), RecallInput{Query: "q"})
 	if err != nil {
 		t.Fatalf("doRecall: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestDoRecallSoftForget(t *testing.T) {
 		t.Errorf("soft-forgotten memory returned: %v", resultIDs(out))
 	}
 
-	out, err = h.doRecall(context.Background(), recallInput{Query: "q", IncludeForgotten: true})
+	out, err = h.doRecall(context.Background(), RecallInput{Query: "q", IncludeForgotten: true})
 	if err != nil {
 		t.Fatalf("doRecall(include_forgotten): %v", err)
 	}
@@ -270,7 +270,7 @@ func TestDoRecallExcludesSupersededAndForgotten(t *testing.T) {
 	}}
 	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
 	h.decay = mock.FakeDecay{R: 1}
-	out, err := h.doRecall(context.Background(), recallInput{Query: "q"})
+	out, err := h.doRecall(context.Background(), RecallInput{Query: "q"})
 	if err != nil {
 		t.Fatalf("doRecall: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestDoRecallWeightedScore(t *testing.T) {
 	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
 	h.decay = mock.FakeDecay{R: 0.125}
 	h.wSim, h.wImp, h.wRet = 2, 4, 8
-	out, err := h.doRecall(context.Background(), recallInput{Query: "q"})
+	out, err := h.doRecall(context.Background(), RecallInput{Query: "q"})
 	if err != nil {
 		t.Fatalf("doRecall: %v", err)
 	}
@@ -303,7 +303,7 @@ func TestDoRecallReinforcesResults(t *testing.T) {
 		{Memory: engram.Memory{ID: "s1", Content: "a"}, Score: 0.9},
 	}}
 	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
-	if _, err := h.doRecall(context.Background(), recallInput{Query: "q"}); err != nil {
+	if _, err := h.doRecall(context.Background(), RecallInput{Query: "q"}); err != nil {
 		t.Fatalf("doRecall: %v", err)
 	}
 	if len(st.Reinforced) != 1 || st.Reinforced[0] != "s1" {
@@ -321,7 +321,7 @@ func TestDoRecallReinforceFailureDoesNotFailRecall(t *testing.T) {
 		ReinforceErr:  errors.New("db-down"),
 	}
 	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
-	out, err := h.doRecall(context.Background(), recallInput{Query: "q"})
+	out, err := h.doRecall(context.Background(), RecallInput{Query: "q"})
 	if err != nil {
 		t.Fatalf("recall must succeed even when reinforce fails: %v", err)
 	}

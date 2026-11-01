@@ -11,7 +11,7 @@ func rr(id, content string) engram.RecallResult {
 	return engram.RecallResult{Memory: engram.Memory{ID: engram.MemoryID(id), Content: content}}
 }
 
-func resultIDs(out recallOutput) []string {
+func resultIDs(out RecallOutput) []string {
 	s := make([]string, len(out.Results))
 	for i, r := range out.Results {
 		s[i] = r.ID
