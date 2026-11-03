@@ -15,6 +15,8 @@ var armOrder = []string{engram.DecayNone, engram.DecayUniform, engram.DecayTypeA
 type Results struct {
 	K      int
 	Rerank string
+	// Lambda weighs relative store size in the recommendation score.
+	Lambda float64
 	Params Params
 	Seeds  []int64
 	Arms   map[string][]ArmResult
@@ -23,7 +25,7 @@ type Results struct {
 // Run generates one dataset per seed and runs all three arms over it,
 // sequentially. p.Seed is overwritten per seed.
 func Run(ctx context.Context, p Params, seeds []int64, k int, mode RerankMode) (*Results, error) {
-	res := &Results{K: k, Rerank: mode.String(), Params: p, Seeds: seeds, Arms: map[string][]ArmResult{}}
+	res := &Results{K: k, Rerank: mode.String(), Lambda: DefaultLambda, Params: p, Seeds: seeds, Arms: map[string][]ArmResult{}}
 	for _, seed := range seeds {
 		ps := p
 		ps.Seed = seed

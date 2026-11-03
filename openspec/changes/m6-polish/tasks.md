@@ -24,8 +24,8 @@ then. No eval run may be used to choose lambda, the mix or `sigmaTwin`.
 
 ## 5. Eval: report and recommendation
 
-- [ ] 5.1 `Results.Lambda`, `DefaultLambda = 0.10`, `Recommend` scores nDCG minus store cost, keeps the tie rule (rename `TieNDCG` to `TieScore`); store baseline is `none`, or the largest arm when `none` is absent. Tests: `TestRecommendStoreCostFlips` (0.98/5000 vs 0.90/1500 at 0.20), `TestRecommendLambdaZero`, `TestRecommendTieBreak` unchanged at lambda 0, `TestRecommendNoNoneArm`, `TestRecommendZeroStoreBaseline`.
-- [ ] 5.2 `WriteTable` prints mix and lambda in the header, a `score` column, the break-even line with `n/a` when no store is saved, and the new recommendation line. Tests: `TestBreakEven` (0.114 case and the not-applicable case), `TestReportBreakEvenLine`, `TestReportTableColumns` updated, `TestReportNamesMix`. Pin the access hit-rate table by extending `TestAccessHitSummaryAndTable`.
+- [x] 5.1 `Results.Lambda`, `DefaultLambda = 0.10`, `Recommend` scores nDCG minus store cost, keeps the tie rule (rename `TieNDCG` to `TieScore`); store baseline is `none`, or the largest arm when `none` is absent. Tests: `TestRecommendStoreCostFlips` (0.98/5000 vs 0.90/1500 at 0.20), `TestRecommendLambdaZero`, `TestRecommendTieBreak` unchanged at lambda 0, `TestRecommendNoNoneArm`, `TestRecommendZeroStoreBaseline`.
+- [x] 5.2 `WriteTable` prints mix and lambda in the header, a `score` column, the break-even line with `n/a` when no store is saved, and the new recommendation line. Tests: `TestBreakEven` (0.114 case and the not-applicable case), `TestReportBreakEvenLine`, `TestReportTableColumns` updated, `TestReportNamesMix`. Pin the access hit-rate table by extending `TestAccessHitSummaryAndTable`.
 
 ## 6. Eval: gate
 
