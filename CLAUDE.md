@@ -93,8 +93,9 @@ One change per milestone (PRD §9), one PR per change, Franco merges.
    superpowers:test-driven-development and subagent-driven-development. Layer order:
    domain → `mock/` → adapters → `cmd/`. Small diffs; delete before you add.
 5. **Review, verify, ship.** Run the `.claude/agents/` reviewers on what changed, then
-   `/opsx:verify`, then `/opsx:continue` to push and open the PR. After merge,
-   `/opsx:archive`.
+   `/opsx:verify`, then `/opsx:continue` to push and open the PR, then
+   `/opsx:archive` on the same branch and push, so one PR carries code, archive and synced
+   specs. Never a second PR for the archive.
 
 **Model tiers** (set 2026-11-01; the session model orchestrates, decides, and writes
 dispatch briefs; it does not implement or review by itself):
