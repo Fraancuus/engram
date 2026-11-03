@@ -5,7 +5,7 @@
 **Status:** Draft for build
 **Owner:** Franco
 **Type:** Open-source portfolio + passion project
-**One-liner:** A local-first, long-term memory service for AI agents — a clean concurrent **Go** service over a graph+vector store, with **type-aware forgetting**, **namespaced "universes"**, and a rigorous eval proving the forgetting actually helps.
+**One-liner:** A local-first, long-term memory service for AI agents — a clean concurrent **Go** service over a graph+vector store, with **type-aware forgetting**, **namespaced "universes"**, and a rigorous eval measuring what the forgetting buys and what it costs.
 
 ---
 
@@ -13,7 +13,7 @@
 
 Most "agent memory" projects are a vector store with `save()` and `search()`. They never forget, never distinguish *kinds* of memory, and — critically — **never measure whether the memory layer makes retrieval better.** The store grows unbounded, recall degrades, and there's no evidence either way.
 
-Engram's thesis: *forgetting is a feature* — but **what** and **how fast** you forget depends on the *type* of memory. An event fades; a code standard shouldn't. v1 builds that distinction and **proves its effect with an eval.** The proof is the differentiator, not the storage.
+Engram's thesis: *forgetting is a feature* — but **what** and **how fast** you forget depends on the *type* of memory. An event fades; a code standard shouldn't. v1 builds that distinction and **measures its effect with an eval.** The measurement is the differentiator, not the storage.
 
 ### Signal goals (this is a portfolio piece)
 - Systems engineering in **Go**: a single-binary concurrent service (goroutines for the decay sweep, `context` for timeouts), orchestrating ML inference + a graph+vector store.

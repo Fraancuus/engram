@@ -60,8 +60,8 @@ across universes for associative recall.
 
 Three arms over a labelled dataset with virtualized time: **none** (no decay),
 **uniform** decay, and **type-aware** decay with supersession. Metrics: precision@k,
-recall@k, nDCG/MRR, latency, store size, and type-stratified recall. Relevance is judged
-against ground-truth labels owned by the dataset generator, never the reranker scoring
+recall@k, nDCG/MRR, latency, store size, type-stratified recall, and nDCG per query class. Relevance is judged
+against held-out ground-truth labels owned by the dataset generator, never the reranker scoring
 itself. The dataset is synthetic; see
 [M5](openspec/changes/archive/2026-11-03-m5-eval/design.md) and
 [M6](openspec/changes/archive/2026-11-04-m6-polish/design.md) for the design.
@@ -100,16 +100,17 @@ Stress mix (second):
 forgetting. On the agent mix it gives up about 0.07 nDCG for a store at 23% of the size,
 and on the stress mix about 0.25. The cost falls on old episodes and bridges. The gain is
 store size, with procedural memory protected. Against uniform, type-aware keeps standards
-at 1.000 where uniform gives 0.989, and holds a store under a third of uniform's. At
+at 1.000 where uniform gives 0.989, and holds a store under a third of uniform's. On the agent mix at
 lambda 0.10 the three arms score within about 0.02. Type-aware is recommended on 9 of 10
-seeds and uniform on seed 42; with a cosine reranker stage, `none` is recommended. So the
-table recommends no arm with confidence. `ENGRAM_DECAY` stays `type-aware`, and that
+seeds and uniform on seed 42; with a cosine reranker stage at seed 42, `none` is
+recommended. On the stress mix the arms spread wider and `none` is recommended. So the
+agent table recommends no arm with confidence. `ENGRAM_DECAY` stays `type-aware`, and that
 default is an open decision.
 
 **Caveat.** Type-aware's 1.000 on facts, against 0.852 for `none`, is not a retrieval
 benefit. It comes from a discontinuity in the score blend at the 50-seed cap: a linked
 memory just outside the seeds inherits its source's similarity and outranks the target.
-This is open for a follow-up change. The real cross-encoder could not be run on this
+Uniform's fact gap over `none` has the same cause. This is open for a follow-up change. The real cross-encoder could not be run on this
 dataset, because its content is generator ids, not text.
 
 **Thresholds.** On the normalised index scale, dedup is 0.95 (raw cosine 0.90) and
@@ -146,7 +147,7 @@ go run ./cmd/engramd                                               # serves the 
 `engramd` speaks the Model Context Protocol over stdio, so point any MCP client at the
 command (`go run ./cmd/engramd`, or a built binary). It exposes three tools:
 
-- **`remember`** — `{content, type, namespace, importance?, source?, entities?, links?, supersedes?}` → `{memory_id, deduped, superseded?}`. Embeds the content, deduplicates within the namespace (reinforcing a near-identical memory instead of inserting), writes `:Entity` nodes + `[:MENTIONS]` edges, **auto-links** to sufficiently-similar neighbors (plus any explicit `links`), and lets a procedural or semantic write **supersede** older memories it replaces via `supersedes`. A write naming `supersedes` never dedups into what it replaces, and dedups only into its own type.
+- **`remember`** — `{content, type, namespace, importance?, source?, entities?, links?, supersedes?}` → `{memory_id, deduped, superseded?}`. Embeds the content, deduplicates within the namespace (reinforcing a near-identical memory instead of inserting), writes `:Entity` nodes + `[:MENTIONS]` edges, **auto-links** to sufficiently-similar neighbors (plus any explicit `links`), and lets a procedural or semantic write **supersede** older memories it replaces via `supersedes`. Such a write never dedups into what it replaces, and dedups only into its own type.
 - **`recall`** — `{query, namespaces?, k?, include_forgotten?}` → ranked `[{id, content, score, type, namespace, provenance}]`. Vector kNN seeds are expanded via 1-hop `[:LINKS]` and entity bridges (cross-namespace unless scoped), scored as similarity + 0.3 importance + 0.01 retrievability. Retrievability filters candidates before the pool is cut (**decayed/soft-forgotten memories excluded** unless `include_forgotten`) and adds at most 0.01 to the score, so it only breaks near-ties. Results are then **reranked by a cross-encoder** and packed under a **token budget**; returned memories are **reinforced on access**. `provenance.retrieved_via` reports how each result surfaced (`vector` / `link` / `entity:<name>`).
 - **`forget`** — `{id, mode}` → `{ok}`, where `mode` is `soft` (exclude from recall, recoverable), `hard` (delete), `pin` (protect from decay), or `supersede` (mark replaced).
 
