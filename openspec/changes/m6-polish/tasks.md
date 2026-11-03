@@ -37,7 +37,7 @@ then. No eval run may be used to choose lambda, the mix or `sigmaTwin`.
 
 ## 8. Review before the numbers
 
-- [ ] 8.1 `reviewer` (opus) over the Go diff so far; `security-auditor` (fable) over the Cypher predicate and the `supersedes` handling at the MCP boundary. Resolve every blocking finding before task 9.
+- [x] 8.1 `reviewer` (opus) over the Go diff so far; `security-auditor` (fable) over the Cypher predicate and the `supersedes` handling at the MCP boundary. Resolve every blocking finding before task 9.
 
 ## 9. Integration check
 

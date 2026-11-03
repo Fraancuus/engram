@@ -2,12 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/Fraancuus/engram"
+	"github.com/Fraancuus/engram/eval"
 )
 
 func TestMainMissingBaseline(t *testing.T) {
@@ -103,5 +108,123 @@ func TestUpdateBaselineRefusesStress(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err == nil {
 		t.Error("baseline written")
+	}
+}
+
+// stubRunEval swaps runEval for one that records its arguments and returns a
+// small type-aware result, so no floor run starts. Not parallel-safe.
+func stubRunEval(t *testing.T) (gotP *eval.Params, gotSeeds *[]int64, gotK *int, gotMode *eval.RerankMode) {
+	t.Helper()
+	var (
+		p     eval.Params
+		seeds []int64
+		k     int
+		mode  eval.RerankMode
+	)
+	old := runEval
+	runEval = func(_ context.Context, ps eval.Params, ss []int64, kk int, m eval.RerankMode) (*eval.Results, error) {
+		p, seeds, k, mode = ps, ss, kk, m
+		return &eval.Results{
+			K: kk, Rerank: m.String(), Lambda: eval.DefaultLambda, Params: ps, Seeds: ss,
+			Arms: map[string][]eval.ArmResult{engram.DecayTypeAware: {{Name: engram.DecayTypeAware, Seed: ss[0], Precision: 0.5, NDCG: 0.5}}},
+		}, nil
+	}
+	t.Cleanup(func() { runEval = old })
+	return &p, &seeds, &k, &mode
+}
+
+func writeTestBaseline(t *testing.T, mix string) string {
+	t.Helper()
+	b := eval.Baseline{K: 3, Seed: 7, GOARCH: "amd64", Rerank: "none", Params: eval.Floor(), PrecisionAtK: 0.5, NDCGAtK: 0.5}
+	b.Params.Mix = mix
+	path := filepath.Join(t.TempDir(), "base.json")
+	if err := eval.WriteBaseline(path, b); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// Not parallel: it swaps the package-level runEval.
+func TestRunPlumbsFlags(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     func(t *testing.T) []string
+		wantCode int
+		wantOut  []string
+		wantErr  []string
+		wantMix  string
+		wantSeed int64 // 0 means unchecked
+		wantK    int   // 0 means unchecked
+	}{
+		{"mix stress", func(*testing.T) []string { return []string{"-mix", "stress"} }, 0,
+			[]string{"mix: stress"}, nil, eval.MixStress, 0, 0},
+		{"lambda zero", func(*testing.T) []string { return []string{"-lambda", "0"} }, 0,
+			[]string{"lambda: 0\n", "lambda 0\n"}, nil, eval.MixAgent, 0, 0},
+		{"default lambda", func(*testing.T) []string { return nil }, 0,
+			[]string{"lambda: 0.1\n", "lambda 0.1\n"}, nil, eval.MixAgent, 0, 0},
+		{"ci adopts baseline mix", func(t *testing.T) []string {
+			return []string{"--ci", "-mix", "agent", "-baseline", writeTestBaseline(t, eval.MixStress)}
+		}, 0, []string{"eval gate passed"}, []string{"ignoring -mix"}, eval.MixStress, 7, 3},
+		{"ci no-mix baseline is stale", func(t *testing.T) []string {
+			return []string{"--ci", "-baseline", writeTestBaseline(t, "")}
+		}, 1, nil, []string{"baseline stale"}, eval.MixAgent, 0, 0},
+		{"ci no-mix baseline ignores -mix stress", func(t *testing.T) []string {
+			return []string{"--ci", "-mix", "stress", "-baseline", writeTestBaseline(t, "")}
+		}, 1, nil, []string{"baseline stale"}, eval.MixAgent, 0, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, seeds, k, _ := stubRunEval(t)
+			var out, errb bytes.Buffer
+			code := run(tt.args(t), &out, &errb)
+			if code != tt.wantCode {
+				t.Fatalf("code %d, want %d; stderr %q", code, tt.wantCode, errb.String())
+			}
+			if p.Mix != tt.wantMix {
+				t.Errorf("Params.Mix = %q, want %q", p.Mix, tt.wantMix)
+			}
+			for _, w := range tt.wantOut {
+				if !strings.Contains(out.String(), w) {
+					t.Errorf("stdout lacks %q:\n%s", w, out.String())
+				}
+			}
+			for _, w := range tt.wantErr {
+				if !strings.Contains(errb.String(), w) {
+					t.Errorf("stderr lacks %q: %q", w, errb.String())
+				}
+			}
+			if tt.wantSeed != 0 && (!slices.Equal(*seeds, []int64{tt.wantSeed}) || *k != tt.wantK) {
+				t.Errorf("seeds %v k %d, want [%d] %d", *seeds, *k, tt.wantSeed, tt.wantK)
+			}
+		})
+	}
+}
+
+// Not parallel: it swaps the package-level runEval and checkArch.
+func TestRunUpdateBaselinePlumbsSeedAndMix(t *testing.T) {
+	stubRunEval(t)
+	old := checkArch
+	checkArch = func() error { return nil }
+	t.Cleanup(func() { checkArch = old })
+	path := filepath.Join(t.TempDir(), "b.json")
+	var out, errb bytes.Buffer
+	if code := run([]string{"--update-baseline", "-seed", "42", "-baseline", path}, &out, &errb); code != 0 {
+		t.Fatalf("code %d stderr %q", code, errb.String())
+	}
+	data, err := os.ReadFile(path) // #nosec G304 -- test temp path
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Seed   int64 `json:"seed"`
+		Params struct {
+			Mix string `json:"mix"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Seed != 42 || got.Params.Mix != eval.MixAgent {
+		t.Errorf("baseline seed %d mix %q, want 42 agent:\n%s", got.Seed, got.Params.Mix, data)
 	}
 }

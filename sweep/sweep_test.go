@@ -102,3 +102,50 @@ func TestNewGuardsConstruction(t *testing.T) {
 		t.Fatalf("SweepOnce with defaulted config: %v", err)
 	}
 }
+
+// A superseded semantic memory decays on the fast curve (S=2 d), so once past
+// the grace period it is pruned while its live twin (S=60 d) survives.
+func TestSweepPrunesSupersededSemantic(t *testing.T) {
+	t.Parallel()
+	day0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	lastAccessed := day0.AddDate(0, 0, 10) // day 10 for both memories
+	const grace = 30 * 24 * time.Hour
+	const floor = 0.02
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name     string
+		day      int
+		wantGone bool
+	}{
+		{"day 40 is inside grace: last access is not before now-30d", 40, false},
+		{"day 41 is past grace: R=exp(-31/2) is below floor", 41, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := mock.NewMemStore()
+			for _, m := range []engram.Memory{
+				{ID: "stale", Namespace: "ns", Type: engram.Semantic, LastAccessed: lastAccessed},
+				{ID: "live", Namespace: "ns", Type: engram.Semantic, LastAccessed: lastAccessed},
+			} {
+				if err := store.Put(ctx, m); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := store.Supersede(ctx, []engram.MemoryID{"stale"}); err != nil {
+				t.Fatal(err)
+			}
+			s := New(store, engram.TypeAwareDecay{}, fixedClock{}, time.Hour, grace, floor, 100,
+				slog.New(slog.NewTextHandler(io.Discard, nil)))
+			n, err := s.SweepOnce(ctx, day0.AddDate(0, 0, tc.day))
+			if err != nil {
+				t.Fatalf("SweepOnce: %v", err)
+			}
+			_, staleKept := store.Snapshot("stale")
+			_, liveKept := store.Snapshot("live")
+			if staleKept == tc.wantGone || !liveKept {
+				t.Errorf("pruned %d: stale kept=%v (want %v), live kept=%v (want true)", n, staleKept, !tc.wantGone, liveKept)
+			}
+		})
+	}
+}

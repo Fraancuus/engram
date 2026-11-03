@@ -410,12 +410,13 @@ func TestMemStorePropagateCapIgnoresSuperseded(t *testing.T) {
 	mustPut(t, s, mem("a", "a", 0.9))
 	var links []engram.Link
 	var dead []engram.MemoryID
-	for i := 0; i < 25; i++ {
+	for i := 0; i < 30; i++ {
 		id := engram.MemoryID(fmt.Sprintf("n%02d", i))
 		mustPut(t, s, mem(string(id), "a", 0.9))
-		// the 5 heaviest are superseded
+		// 30 strong edges; the 5 heaviest (n25..n29) are superseded, so exactly the
+		// 20 heaviest live neighbors (n05..n24) refresh and n00..n04 miss the cap
 		w := 0.9 + float64(i)*0.001
-		if i >= 20 {
+		if i >= 25 {
 			dead = append(dead, id)
 		}
 		links = append(links, engram.Link{To: id, Weight: w})
@@ -426,9 +427,9 @@ func TestMemStorePropagateCapIgnoresSuperseded(t *testing.T) {
 	if err := s.PropagateReinforce(ctx, "a", 0.85, t1); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 25; i++ {
+	for i := 0; i < 30; i++ {
 		m, _ := s.Snapshot(engram.MemoryID(fmt.Sprintf("n%02d", i)))
-		if want := i < 20; m.LastAccessed.Equal(t1) != want {
+		if want := i >= 5 && i < 25; m.LastAccessed.Equal(t1) != want {
 			t.Errorf("n%02d refreshed=%v, want %v", i, m.LastAccessed.Equal(t1), want)
 		}
 	}

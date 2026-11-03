@@ -26,6 +26,9 @@ import (
 // checkArch is eval.CheckBaselineArch, replaceable by tests.
 var checkArch = eval.CheckBaselineArch
 
+// runEval is eval.Run, replaceable by tests.
+var runEval = eval.Run
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -111,18 +114,26 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		flags.Visit(func(f *flag.Flag) {
-			if f.Name == "seed" || f.Name == "k" || f.Name == "rerank" || f.Name == "mix" {
+			// -mix is noted below, only when the baseline's mix is what ran.
+			if f.Name == "seed" || f.Name == "k" || f.Name == "rerank" {
 				_, _ = fmt.Fprintf(stderr, "note: --ci uses the baseline's %s, ignoring -%s\n", f.Name, f.Name)
 			}
 		})
 		*seed, *k = base.Seed, base.K
-		// An empty baseline mix stays at the primary so CheckGate calls it stale.
+		// Start from the primary mix and adopt the baseline's when it has one: a
+		// baseline without a mix runs the primary, so CheckGate calls it stale.
+		p.Mix = eval.MixAgent
 		if base.Params.Mix != "" {
 			p.Mix = base.Params.Mix
+			flags.Visit(func(f *flag.Flag) {
+				if f.Name == "mix" {
+					_, _ = fmt.Fprintf(stderr, "note: --ci uses the baseline's mix, ignoring -mix\n")
+				}
+			})
 		}
 	}
 
-	res, err := eval.Run(context.Background(), p, seedsFor(*seed, *nSeeds, gated), *k, mode)
+	res, err := runEval(context.Background(), p, seedsFor(*seed, *nSeeds, gated), *k, mode)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "eval: %v\n", err)
 		return 1

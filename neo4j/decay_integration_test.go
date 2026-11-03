@@ -5,6 +5,7 @@ package neo4j_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -164,5 +165,43 @@ func TestStorePropagateReinforce(t *testing.T) {
 	}
 	if gst.LastAccessed.After(old.Add(time.Hour)) {
 		t.Errorf("superseded neighbor should not be refreshed: %v", gst.LastAccessed)
+	}
+}
+
+// 30 strong edges, the 5 heaviest superseded: superseded neighbors must not use
+// up cap slots, so exactly the 20 heaviest live neighbors refresh.
+func TestStorePropagateCapIgnoresSuperseded(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	ns := engram.Namespace(string(uniqueID("itest-propcap")))
+	src := uniqueID("src")
+	old := time.Now().UTC().Add(-100 * 24 * time.Hour)
+	putBare(t, s, src, ns)
+	const total, dead = 30, 5
+	ids := make([]engram.MemoryID, total)
+	links := make([]engram.Link, total)
+	for i := range ids {
+		ids[i] = uniqueID(fmt.Sprintf("n%02d", i))
+		putAt(t, s, ids[i], ns, old)
+		links[i] = engram.Link{To: ids[i], Weight: 0.9 + float64(i)*0.001} // heavier with i
+	}
+	if err := s.Supersede(ctx, ids[total-dead:]); err != nil {
+		t.Fatalf("Supersede: %v", err)
+	}
+	if err := s.Link(ctx, src, links); err != nil {
+		t.Fatalf("Link: %v", err)
+	}
+	if err := s.PropagateReinforce(ctx, src, 0.85, time.Now().UTC()); err != nil {
+		t.Fatalf("PropagateReinforce: %v", err)
+	}
+	for i, id := range ids {
+		g, err := s.Get(ctx, id)
+		if err != nil {
+			t.Fatalf("Get n%02d: %v", i, err)
+		}
+		refreshed := g.LastAccessed.After(old.Add(time.Hour))
+		if want := i >= 5 && i < total-dead; refreshed != want {
+			t.Errorf("n%02d refreshed=%v, want %v", i, refreshed, want)
+		}
 	}
 }
