@@ -21,8 +21,8 @@ const dimDefault = 128
 // raw cosine the dedup point is 0.90 and the link point is 0.85. Hence: ordinary
 // pairs stay below the link point, twins sit in [minTwinCos, maxTwinCos] between the
 // link and dedup points so they auto-link, chain versions sit in [minLinkedCos,
-// maxLinkedCos] (they link through supersession, not the link point), and nothing
-// reaches the dedup point.
+// maxLinkedCos]; they carry explicit links, and any above the link point also
+// auto-link, and nothing reaches the dedup point.
 const (
 	// sigmaInTopic scales the per-memory noise added to a topic centroid.
 	sigmaInTopic = 0.97
@@ -42,9 +42,8 @@ const (
 	// centroid; versions of one chain then sit near cosine 1/(1+sigma^2).
 	sigmaFactVersion = 0.5
 	// minOrdinaryCos and maxOrdinaryCos bound a same-topic pair that is neither a
-	// twin pair nor two versions of one chain; the ceiling is under the auto-link
-	// point (raw cosine 0.70) with a 0.04 margin, because the mock does not model the
-	// index's quantization noise.
+	// twin pair nor two versions of one chain; the ceiling stays well under the
+	// auto-link point (raw cosine 0.85), so general chatter does not link.
 	minOrdinaryCos = 0.40
 	maxOrdinaryCos = 0.66
 	// minTwinCos and maxTwinCos bound a twin pair: above the auto-link point (raw
