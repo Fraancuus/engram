@@ -339,9 +339,9 @@ func (d *Dataset) bestDraw(i int, ts topicSpan, cents []engram.Vector, draw func
 // bandScore returns how far memory i, already holding a candidate vector, sits
 // from the middle of its band against every earlier-assigned memory of its topic,
 // as a fraction of the band's half-width: at most 1 means every pair is inside
-// its band. The band is [minLinkedCos, maxLinkedCos] for a twin pair or two
-// versions of one fact chain and [minOrdinaryCos, maxOrdinaryCos] for any other
-// pair. This enforces the auto-link and dedup scales (see vectors.go) by
+// its band. The band is [minTwinCos, maxTwinCos] for a twin pair,
+// [minLinkedCos, maxLinkedCos] for two versions of one fact chain and
+// [minOrdinaryCos, maxOrdinaryCos] for any other pair. This enforces the auto-link and dedup scales (see vectors.go) by
 // construction.
 func (d *Dataset) bandScore(i int, ts topicSpan) float64 {
 	mi := d.Memories[i]
@@ -353,7 +353,10 @@ func (d *Dataset) bandScore(i int, ts topicSpan) float64 {
 			}
 			mj := d.Memories[j]
 			lo, hi := minOrdinaryCos, maxOrdinaryCos
-			if mi.Twin == mj.GID || mj.Twin == mi.GID || (mi.Kind == KindFact && mj.Kind == KindFact && mi.Chain == mj.Chain) {
+			switch {
+			case mi.Twin == mj.GID || mj.Twin == mi.GID:
+				lo, hi = minTwinCos, maxTwinCos
+			case mi.Kind == KindFact && mj.Kind == KindFact && mi.Chain == mj.Chain:
 				lo, hi = minLinkedCos, maxLinkedCos
 			}
 			worst = max(worst, math.Abs(mock.Cosine(mi.Vec, mj.Vec)-(lo+hi)/2)/((hi-lo)/2))

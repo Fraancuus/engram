@@ -528,3 +528,35 @@ func TestRecallPoolCutsToRerankCandidates(t *testing.T) {
 		}
 	}
 }
+
+func TestPropagateThresholdBoundary(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := mock.NewMemStore()
+	orth := func(i int) engram.Vector { v := make(engram.Vector, 4); v[i] = 1; return v }
+	for i, id := range []engram.MemoryID{"s", "at", "under", "explicit"} {
+		if err := st.Put(ctx, engram.Memory{ID: id, Namespace: "ns", Content: string(id), Embedding: orth(i)}); err != nil {
+			t.Fatalf("put %s: %v", id, err)
+		}
+	}
+	err := st.Link(ctx, "s", []engram.Link{{To: "at", Weight: 0.925}, {To: "under", Weight: 0.9249}, {To: "explicit", Weight: 1.0}})
+	if err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	h := testHandlers(&mock.FakeEmbedder{Vec: orth(0)}, &mock.FakeStore{})
+	h.store, h.forget = st, nil
+	one := 1
+	if _, err := h.doRecall(ctx, RecallInput{Query: "q", K: &one}); err != nil {
+		t.Fatalf("doRecall: %v", err)
+	}
+	now := h.clock.Now()
+	for id, want := range map[engram.MemoryID]bool{"at": true, "under": false, "explicit": true} {
+		res, err := st.Search(ctx, nil, orth(map[engram.MemoryID]int{"at": 1, "under": 2, "explicit": 3}[id]), 1)
+		if err != nil || len(res) == 0 {
+			t.Fatalf("search %s: %v", id, err)
+		}
+		if got := res[0].LastAccessed.Equal(now); got != want {
+			t.Errorf("%s refreshed = %v, want %v", id, got, want)
+		}
+	}
+}

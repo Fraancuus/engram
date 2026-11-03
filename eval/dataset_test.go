@@ -254,8 +254,8 @@ func TestTwinRange(t *testing.T) {
 			t.Fatalf("%s: twin %s missing", m.GID, m.Twin)
 		}
 		c := mock.Cosine(m.Vec, sib.Vec)
-		if c < 0.74 || c > 0.88 {
-			t.Fatalf("%s/%s: twin cosine %.4f outside [0.74, 0.88]", m.GID, sib.GID, c)
+		if c < minTwinCos || c > maxTwinCos {
+			t.Fatalf("%s/%s: twin cosine %.4f outside [%.2f, %.2f]", m.GID, sib.GID, c, minTwinCos, maxTwinCos)
 		}
 		n++
 	}

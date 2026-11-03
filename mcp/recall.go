@@ -31,12 +31,14 @@ const (
 	// Retrievability is a filter plus a bounded tiebreak: softThreshold drops soft-forgotten
 	// memories before the pool is cut, and wRet is small enough that R can only reorder
 	// scores that already sit within 0.01 of each other. A recalled memory refreshes
-	// strong-edge (weight >= propagateThreshold) neighbors.
+	// strong-edge (weight >= propagateThreshold) neighbors. Edge weights are index
+	// scores on the normalised (1+cos)/2 scale, so 0.925 is a raw cosine of 0.85,
+	// the same point as linkThreshold.
 	defaultWSim        = 1.0
 	defaultWImp        = 0.3
 	defaultWRet        = 0.01
 	defaultSoftThresh  = 0.05
-	propagateThreshold = 0.85
+	propagateThreshold = 0.925
 )
 
 // RecallInput is the argument set of the recall tool.

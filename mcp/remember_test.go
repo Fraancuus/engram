@@ -442,8 +442,8 @@ func TestDoRememberEmbedErrorIsSanitized(t *testing.T) {
 func TestDoRememberAutoLinks(t *testing.T) {
 	t.Parallel()
 	st := &mock.FakeStore{SearchResults: []engram.RecallResult{
-		{Memory: engram.Memory{ID: "n1"}, Score: 0.9}, // >= linkThreshold
-		{Memory: engram.Memory{ID: "n2"}, Score: 0.7}, // below linkThreshold
+		{Memory: engram.Memory{ID: "n1"}, Score: 0.93}, // >= linkThreshold
+		{Memory: engram.Memory{ID: "n2"}, Score: 0.7},  // below linkThreshold
 	}}
 	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
 	out, err := h.doRemember(context.Background(), validRemember())
@@ -454,8 +454,8 @@ func TestDoRememberAutoLinks(t *testing.T) {
 		t.Fatal("should insert, not dedup")
 	}
 	edges := st.LinkedEdges["test-id"]
-	if len(edges) != 1 || edges[0].To != "n1" || edges[0].Weight != 0.9 {
-		t.Errorf("auto-links = %+v, want [{n1 0.9}] (n2 below threshold filtered)", edges)
+	if len(edges) != 1 || edges[0].To != "n1" || edges[0].Weight != 0.93 {
+		t.Errorf("auto-links = %+v, want [{n1 0.93}] (n2 below threshold filtered)", edges)
 	}
 }
 
@@ -498,7 +498,7 @@ func TestDoRememberDedupSkipsAutoLink(t *testing.T) {
 func TestDoRememberLinkErrorIsSanitized(t *testing.T) {
 	t.Parallel()
 	st := &mock.FakeStore{
-		SearchResults: []engram.RecallResult{{Memory: engram.Memory{ID: "n1"}, Score: 0.9}},
+		SearchResults: []engram.RecallResult{{Memory: engram.Memory{ID: "n1"}, Score: 0.93}},
 		LinkEdgesErr:  errors.New("db-internal-detail"),
 	}
 	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
@@ -514,13 +514,15 @@ func TestDoRememberLinkErrorIsSanitized(t *testing.T) {
 func TestDoRememberAutoLinkAtThreshold(t *testing.T) {
 	t.Parallel()
 	st := &mock.FakeStore{SearchResults: []engram.RecallResult{
-		{Memory: engram.Memory{ID: "n1"}, Score: linkThreshold}, // exactly 0.85 -> links (>=)
+		{Memory: engram.Memory{ID: "n1"}, Score: 0.925},  // exactly the link point -> links (>=)
+		{Memory: engram.Memory{ID: "n2"}, Score: 0.9249}, // just under -> no link
 	}}
 	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
 	if _, err := h.doRemember(context.Background(), validRemember()); err != nil {
 		t.Fatalf("doRemember: %v", err)
 	}
-	if edges := st.LinkedEdges["test-id"]; len(edges) != 1 || edges[0].To != "n1" {
-		t.Errorf("candidate at exactly linkThreshold should auto-link, got %+v", edges)
+	edges := st.LinkedEdges["test-id"]
+	if len(edges) != 1 || edges[0].To != "n1" || edges[0].Weight != 0.925 {
+		t.Errorf("auto-links = %+v, want only [{n1 0.925}]", edges)
 	}
 }

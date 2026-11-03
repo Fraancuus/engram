@@ -56,14 +56,16 @@ const (
 	maxSourceBytes    = 256
 	defaultImportance = 0.5
 
-	// defaultDedupThreshold is the cosine similarity at or above which a new memory is
-	// treated as a duplicate of the nearest existing one in its namespace.
+	// defaultDedupThreshold is the index score at or above which a new memory is
+	// treated as a duplicate of the nearest existing one in its namespace. The score is
+	// the normalised (1+cos)/2 scale, so 0.95 is a raw cosine of 0.90.
 	defaultDedupThreshold = 0.95
 
 	// autoLinkK is how many nearest neighbors a new memory considers linking to;
-	// linkThreshold is the minimum cosine similarity for an auto-link.
+	// linkThreshold is the minimum index score for an auto-link, on the normalised
+	// (1+cos)/2 scale: 0.925 is a raw cosine of 0.85.
 	autoLinkK     = 5
-	linkThreshold = 0.85
+	linkThreshold = 0.925
 )
 
 // RememberInput is the argument set of the remember tool.
