@@ -1,0 +1,176 @@
+package eval
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/Fraancuus/engram"
+)
+
+func precResults(a, b, c float64) *Results {
+	arm := func(name string, p float64) []ArmResult {
+		return []ArmResult{{Name: name, Seed: 42, Precision: p, NDCG: p / 2}}
+	}
+	return &Results{
+		K: 5, Rerank: "none", Params: Floor(), Seeds: []int64{42},
+		Arms: map[string][]ArmResult{
+			engram.DecayNone: arm(engram.DecayNone, a), engram.DecayUniform: arm(engram.DecayUniform, b),
+			engram.DecayTypeAware: arm(engram.DecayTypeAware, c),
+		},
+	}
+}
+
+// baseAt is a baseline matching precResults' k, rerank and params.
+func baseAt(p float64) Baseline {
+	return Baseline{K: 5, Seed: 42, Rerank: "none", Params: Floor(), PrecisionAtK: p}
+}
+
+func TestGateRegression(t *testing.T) {
+	err := CheckGate(precResults(0, 0, 0.52), baseAt(0.55), GateTolerance)
+	if err == nil {
+		t.Fatal("want regression error")
+	}
+	for _, s := range []string{"0.5200", "0.5500", "0.02"} {
+		if !strings.Contains(err.Error(), s) {
+			t.Errorf("error %q missing %q", err, s)
+		}
+	}
+}
+
+func TestGateWithinTolerance(t *testing.T) {
+	for _, c := range []float64{0.535, 0.53, 0.60} {
+		if err := CheckGate(precResults(0, 0, c), baseAt(0.55), GateTolerance); err != nil {
+			t.Errorf("c=%v: %v", c, err)
+		}
+	}
+}
+
+func TestGateNullThesisPasses(t *testing.T) {
+	if err := CheckGate(precResults(0.4, 0.9, 0.54), baseAt(0.55), GateTolerance); err != nil {
+		t.Fatalf("B above C must not fail the gate: %v", err)
+	}
+}
+
+func TestGateBelowFloor(t *testing.T) {
+	r := precResults(0, 0, 0.55)
+	r.Params.Memories = 10
+	if err := CheckGate(r, baseAt(0.55), GateTolerance); err == nil {
+		t.Fatal("want below-floor error")
+	}
+}
+
+func TestGateRejectsStaleParams(t *testing.T) {
+	for name, mut := range map[string]func(*Baseline){
+		"memories": func(b *Baseline) { b.Params.Memories++ },
+		"seed":     func(b *Baseline) { b.Params.Seed++ },
+		"b.seed":   func(b *Baseline) { b.Seed++ },
+		"dim":      func(b *Baseline) { b.Params.Dim++ },
+		"rerank":   func(b *Baseline) { b.Rerank = "cross" },
+		"k":        func(b *Baseline) { b.K = 10 },
+	} {
+		b := baseAt(0.55)
+		mut(&b)
+		err := CheckGate(precResults(0, 0, 0.60), b, GateTolerance)
+		if err == nil || !strings.Contains(err.Error(), "baseline stale") {
+			t.Errorf("%s: want stale error, got %v", name, err)
+		}
+	}
+}
+
+func TestBaselineRound(t *testing.T) {
+	r := precResults(0, 0, 0.123456)
+	r.Arms[engram.DecayTypeAware][0].NDCG = 0.98765
+	b, err := NewBaseline(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.PrecisionAtK != 0.1235 || b.NDCGAtK != 0.9877 || b.Seed != 42 || b.K != 5 || b.Rerank != "none" {
+		t.Fatalf("got %+v", b)
+	}
+}
+
+func TestBaselineRoundTripAndArch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "b.json")
+	want, err := NewBaseline(precResults(0, 0, 0.5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if goarch != "amd64" {
+		t.Skip("non-amd64 host")
+	}
+	if err := WriteBaseline(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadBaseline(path)
+	if err != nil || got != want {
+		t.Fatalf("got %+v, %v; want %+v", got, err, want)
+	}
+	raw, _ := os.ReadFile(path) // #nosec G304 -- test temp path
+	for _, k := range []string{`"precision_at_k"`, `"ndcg_at_k"`, `"goarch"`, `"params"`, `"rerank"`} {
+		if !strings.Contains(string(raw), k) {
+			t.Errorf("missing key %s", k)
+		}
+	}
+}
+
+// The goarch tests mutate a package variable, so they must not use t.Parallel.
+func TestBaselineRefusesNonAmd64(t *testing.T) {
+	old := goarch
+	goarch = "arm64"
+	t.Cleanup(func() { goarch = old })
+	path := filepath.Join(t.TempDir(), "b.json")
+	err := WriteBaseline(path, Baseline{})
+	if !errors.Is(err, ErrUnsupportedArch) {
+		t.Fatalf("got %v", err)
+	}
+	if _, statErr := os.Stat(path); statErr == nil {
+		t.Fatal("file written")
+	}
+}
+
+func TestCheckBaselineArch(t *testing.T) {
+	old := goarch
+	t.Cleanup(func() { goarch = old })
+	goarch = "arm64"
+	if err := CheckBaselineArch(); !errors.Is(err, ErrUnsupportedArch) || !strings.Contains(err.Error(), "arm64") {
+		t.Fatalf("arm64: %v", err)
+	}
+	goarch = "amd64"
+	if err := CheckBaselineArch(); err != nil {
+		t.Fatalf("amd64: %v", err)
+	}
+}
+
+func TestNewBaselineMissingArm(t *testing.T) {
+	r := precResults(0, 0, 0.5)
+	delete(r.Arms, engram.DecayTypeAware)
+	if _, err := NewBaseline(r); err == nil {
+		t.Fatal("want error for missing type-aware arm")
+	}
+}
+
+func TestLoadBaselineRejectsZero(t *testing.T) {
+	for name, body := range map[string]string{
+		"precision": `{"k":5,"precision_at_k":0}`,
+		"k":         `{"k":0,"precision_at_k":0.5}`,
+		"k too big": `{"k":101,"precision_at_k":0.5}`,
+	} {
+		path := filepath.Join(t.TempDir(), name+".json")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadBaseline(path); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+}
+
+func TestGateRoundsRunSide(t *testing.T) {
+	// 0.52995 rounds to 0.5300, exactly baseline - tol.
+	if err := CheckGate(precResults(0, 0, 0.52995), baseAt(0.55), GateTolerance); err != nil {
+		t.Fatal(err)
+	}
+}

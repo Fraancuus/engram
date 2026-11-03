@@ -1,0 +1,18 @@
+{
+  "k": 5,
+  "seed": 42,
+  "goarch": "amd64",
+  "rerank": "none",
+  "params": {
+    "seed": 0,
+    "namespaces": 3,
+    "topics": 50,
+    "memories": 5000,
+    "entities": 1200,
+    "queries": 500,
+    "days": 180,
+    "dim": 128
+  },
+  "precision_at_k": 0.1268,
+  "ndcg_at_k": 0.5135
+}

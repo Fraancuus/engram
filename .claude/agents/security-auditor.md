@@ -5,7 +5,7 @@ description: >
   touching database queries, MCP tool inputs, the inference sidecar boundary,
   auth, or dependencies. Complements the automated scanners with judgment.
 tools: Read, Grep, Glob, Bash
-model: opus
+model: fable
 ---
 You are a senior application-security engineer reviewing Engram.
 

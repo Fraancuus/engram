@@ -28,8 +28,8 @@ func uniqueNS(base string) engram.Namespace {
 	return engram.Namespace(fmt.Sprintf("%s-%d", base, time.Now().UnixNano()))
 }
 
-// liveHandlers wires the real TEI embedder and Neo4j store into the handlers, or skips.
-func liveHandlers(t *testing.T) *handlers {
+// liveHandlers wires the real TEI embedder and Neo4j store into Tools, or skips.
+func liveHandlers(t *testing.T) *Tools {
 	t.Helper()
 	store, err := eneo4j.New(context.Background(),
 		envOr("NEO4J_TEST_URI", "neo4j://localhost:7687"),
@@ -39,7 +39,7 @@ func liveHandlers(t *testing.T) *handlers {
 		t.Skipf("neo4j unavailable (%v); run: docker compose up -d --wait", err)
 	}
 	t.Cleanup(func() { _ = store.Close(context.Background()) })
-	return &handlers{
+	return &Tools{
 		embedder:         inference.New(envOr("TEI_TEST_URL", "http://localhost:8080")),
 		reranker:         inference.NewReranker(envOr("TEI_RERANK_TEST_URL", "http://localhost:8081")),
 		decay:            engram.TypeAwareDecay{},
@@ -59,7 +59,7 @@ func liveHandlers(t *testing.T) *handlers {
 	}
 }
 
-func mustRemember(t *testing.T, h *handlers, in rememberInput) rememberOutput {
+func mustRemember(t *testing.T, h *Tools, in RememberInput) RememberOutput {
 	t.Helper()
 	out, err := h.doRemember(context.Background(), in)
 	if err != nil {
@@ -73,16 +73,16 @@ func mustRemember(t *testing.T, h *handlers, in rememberInput) rememberOutput {
 func TestM1RecallRanks(t *testing.T) {
 	h := liveHandlers(t)
 	ns := string(uniqueNS("m1-rank"))
-	paris := mustRemember(t, h, rememberInput{
+	paris := mustRemember(t, h, RememberInput{
 		Content: "The capital of France is Paris.", Type: "semantic", Namespace: ns,
 		Entities: []string{"France", "Paris"},
 	})
-	mustRemember(t, h, rememberInput{
+	mustRemember(t, h, RememberInput{
 		Content: "Goroutines are Go's lightweight concurrency primitive.", Type: "semantic", Namespace: ns,
 	})
 
 	out, err := h.doRecall(context.Background(),
-		recallInput{Query: "What is the capital of France?", Namespaces: []string{ns}})
+		RecallInput{Query: "What is the capital of France?", Namespaces: []string{ns}})
 	if err != nil {
 		t.Fatalf("recall: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestM1RecallRanks(t *testing.T) {
 func TestM1Dedup(t *testing.T) {
 	h := liveHandlers(t)
 	ns := string(uniqueNS("m1-dedup"))
-	in := rememberInput{Content: "Engram deduplicates near-identical memories.", Type: "episodic", Namespace: ns}
+	in := RememberInput{Content: "Engram deduplicates near-identical memories.", Type: "episodic", Namespace: ns}
 	first := mustRemember(t, h, in)
 	if first.Deduped {
 		t.Fatal("first remember must not be deduped")
@@ -117,10 +117,10 @@ func TestM1NamespaceScoping(t *testing.T) {
 	h := liveHandlers(t)
 	nsA := string(uniqueNS("m1-scope-a"))
 	nsB := string(uniqueNS("m1-scope-b"))
-	a := mustRemember(t, h, rememberInput{Content: "Project Orca ships next quarter.", Type: "semantic", Namespace: nsA})
+	a := mustRemember(t, h, RememberInput{Content: "Project Orca ships next quarter.", Type: "semantic", Namespace: nsA})
 
 	outB, err := h.doRecall(context.Background(),
-		recallInput{Query: "When does Orca ship?", Namespaces: []string{nsB}})
+		RecallInput{Query: "When does Orca ship?", Namespaces: []string{nsB}})
 	if err != nil {
 		t.Fatalf("recall nsB: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestM1NamespaceScoping(t *testing.T) {
 	}
 
 	outA, err := h.doRecall(context.Background(),
-		recallInput{Query: "When does Orca ship?", Namespaces: []string{nsA}})
+		RecallInput{Query: "When does Orca ship?", Namespaces: []string{nsA}})
 	if err != nil {
 		t.Fatalf("recall nsA: %v", err)
 	}

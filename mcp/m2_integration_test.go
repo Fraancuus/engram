@@ -9,7 +9,7 @@ import (
 )
 
 // provs renders each result's id:retrieved_via for failure messages.
-func provs(out recallOutput) []string {
+func provs(out RecallOutput) []string {
 	s := make([]string, len(out.Results))
 	for i, r := range out.Results {
 		s[i] = r.ID + ":" + r.Provenance.RetrievedVia
@@ -24,10 +24,10 @@ func TestM2ExplicitLinkExpansion(t *testing.T) {
 	h := liveHandlers(t)
 	h.seedN = 1
 	ns := string(uniqueNS("m2-link"))
-	seed := mustRemember(t, h, rememberInput{
+	seed := mustRemember(t, h, RememberInput{
 		Content: "Portkey routes all of our LLM API calls.", Type: "semantic", Namespace: ns,
 	})
-	mustRemember(t, h, rememberInput{
+	mustRemember(t, h, RememberInput{
 		Content:   "The finance team reconciles vendor invoices every month.",
 		Type:      "episodic",
 		Namespace: ns,
@@ -35,7 +35,7 @@ func TestM2ExplicitLinkExpansion(t *testing.T) {
 	})
 
 	out, err := h.doRecall(context.Background(),
-		recallInput{Query: "How do we route our LLM API calls?", Namespaces: []string{ns}})
+		RecallInput{Query: "How do we route our LLM API calls?", Namespaces: []string{ns}})
 	if err != nil {
 		t.Fatalf("recall: %v", err)
 	}
@@ -58,18 +58,18 @@ func TestM2EntityBridgeExpansion(t *testing.T) {
 	h.seedN = 1
 	nsX := string(uniqueNS("m2-ent-x"))
 	nsY := string(uniqueNS("m2-ent-y"))
-	mustRemember(t, h, rememberInput{
+	mustRemember(t, h, RememberInput{
 		Content: "Kafka handles our streaming data ingestion.", Type: "semantic", Namespace: nsX,
 		Entities: []string{"Kafka"},
 	})
-	mustRemember(t, h, rememberInput{
+	mustRemember(t, h, RememberInput{
 		Content: "The quarterly board meeting is scheduled for October.", Type: "episodic", Namespace: nsY,
 		Entities: []string{"Kafka"},
 	})
 
 	// Unscoped: the nsY memory bridges in via the shared Kafka entity.
 	out, err := h.doRecall(context.Background(),
-		recallInput{Query: "How does Kafka handle our streaming ingestion?"})
+		RecallInput{Query: "How does Kafka handle our streaming ingestion?"})
 	if err != nil {
 		t.Fatalf("recall: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestM2EntityBridgeExpansion(t *testing.T) {
 
 	// Scoped to nsX: the cross-namespace bridge is excluded.
 	scoped, err := h.doRecall(context.Background(),
-		recallInput{Query: "How does Kafka handle our streaming ingestion?", Namespaces: []string{nsX}})
+		RecallInput{Query: "How does Kafka handle our streaming ingestion?", Namespaces: []string{nsX}})
 	if err != nil {
 		t.Fatalf("recall scoped: %v", err)
 	}
@@ -104,17 +104,17 @@ func TestM2ScopedRecallExcludesCrossNamespaceLink(t *testing.T) {
 	h.seedN = 1
 	nsA := string(uniqueNS("m2-xlink-a"))
 	nsB := string(uniqueNS("m2-xlink-b"))
-	foreign := mustRemember(t, h, rememberInput{
+	foreign := mustRemember(t, h, RememberInput{
 		Content: "Universe A note about the quarterly revenue plan.", Type: "semantic", Namespace: nsA,
 	})
 	// A memory in nsB that explicitly links across into nsA.
-	mustRemember(t, h, rememberInput{
+	mustRemember(t, h, RememberInput{
 		Content: "Universe B memo that references the other universe.", Type: "episodic", Namespace: nsB,
 		Links: []string{foreign.MemoryID},
 	})
 
 	scoped, err := h.doRecall(context.Background(),
-		recallInput{Query: "Universe B memo referencing the other universe.", Namespaces: []string{nsB}})
+		RecallInput{Query: "Universe B memo referencing the other universe.", Namespaces: []string{nsB}})
 	if err != nil {
 		t.Fatalf("recall: %v", err)
 	}

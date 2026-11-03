@@ -20,21 +20,39 @@ const (
 	serverVersion = "0.0.0-dev"
 )
 
-// serverStore is the full persistence surface NewServer wires in; each handler field then
-// narrows to just what it uses (Store for remember/recall, forgetStore for forget).
-type serverStore interface {
+// ServerStore is the full persistence surface NewTools wires in: Store plus the forget
+// operations; each handler field then narrows to just what it uses.
+type ServerStore interface {
 	Store
-	forgetStore
+	SetForgotten(ctx context.Context, id engram.MemoryID) error
+	Pin(ctx context.Context, id engram.MemoryID) error
+	Delete(ctx context.Context, id engram.MemoryID) error
 }
 
-// NewServer constructs the Engram MCP server on the official Model Context Protocol Go
-// SDK, wiring the domain ports into the remember and recall tool handlers. Each tool is
-// registered with the generic mcpsdk.AddTool, which infers and validates its JSON Schema
-// from the Go input struct (the type gate); the handlers enforce the policy bounds.
-//
-// Serve it over stdio with Serve(ctx, srv).
-func NewServer(embedder engram.Embedder, reranker engram.Reranker, decay engram.DecayModel, store serverStore, clock engram.Clock) *mcpsdk.Server {
-	h := &handlers{
+// Option customises a Tools built by NewTools.
+type Option func(*Tools)
+
+// WithIDGenerator overrides how new memory ids are minted (default: 128 random bits as
+// hex). The eval uses it to get deterministic ids. A nil fn is ignored; fn must be safe
+// for concurrent use because handlers may run in parallel.
+func WithIDGenerator(fn func() (engram.MemoryID, error)) Option {
+	return func(t *Tools) {
+		if fn != nil {
+			t.newID = fn
+		}
+	}
+}
+
+// WithoutRerank disables the rerank stage, so recall results keep the blend order. The
+// eval uses it because no label-free stand-in for the cross-encoder exists.
+func WithoutRerank() Option {
+	return func(t *Tools) { t.reranker = nil }
+}
+
+// NewTools wires the domain ports into the remember, recall and forget pipeline with
+// the production defaults. Call its methods in process, or hand it to NewServer.
+func NewTools(embedder engram.Embedder, reranker engram.Reranker, decay engram.DecayModel, store ServerStore, clock engram.Clock, opts ...Option) *Tools {
+	t := &Tools{
 		embedder:         embedder,
 		reranker:         reranker,
 		decay:            decay,
@@ -52,30 +70,57 @@ func NewServer(embedder engram.Embedder, reranker engram.Reranker, decay engram.
 		log:              slog.Default(),
 		newID:            newMemoryID,
 	}
+	for _, o := range opts {
+		o(t)
+	}
+	return t
+}
 
+// Remember stores a memory, deduplicating within its namespace.
+func (t *Tools) Remember(ctx context.Context, in RememberInput) (RememberOutput, error) {
+	return t.doRemember(ctx, in)
+}
+
+// Recall returns ranked memories for a query with provenance.
+func (t *Tools) Recall(ctx context.Context, in RecallInput) (RecallOutput, error) {
+	return t.doRecall(ctx, in)
+}
+
+// Forget soft-forgets, deletes, pins or supersedes a memory by id.
+func (t *Tools) Forget(ctx context.Context, in ForgetInput) (ForgetOutput, error) {
+	return t.doForget(ctx, in)
+}
+
+// NewServer constructs the Engram MCP server on the official Model Context Protocol Go
+// SDK, registering t's remember, recall and forget tools. Each tool is registered with
+// the generic mcpsdk.AddTool, which infers and validates its JSON Schema from the Go
+// input struct (the type gate); the handlers enforce the policy bounds.
+//
+// Serve it over stdio with Serve(ctx, srv).
+func NewServer(t *Tools) *mcpsdk.Server {
 	srv := mcpsdk.NewServer(&mcpsdk.Implementation{Name: serverName, Version: serverVersion}, nil)
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "remember",
 		Description: "Store a memory (content, type, namespace; optional importance, source, entities). Deduplicates within the namespace, reinforcing a near-identical existing memory instead of inserting.",
-	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, in rememberInput) (*mcpsdk.CallToolResult, rememberOutput, error) {
-		out, err := h.doRemember(ctx, in)
+	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, in RememberInput) (*mcpsdk.CallToolResult, RememberOutput, error) {
+		out, err := t.Remember(ctx, in)
 		return nil, out, err
 	})
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "recall",
 		Description: "Search memories by semantic similarity to a query, optionally restricted to namespaces; returns ranked results with provenance.",
-	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, in recallInput) (*mcpsdk.CallToolResult, recallOutput, error) {
-		out, err := h.doRecall(ctx, in)
+	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, in RecallInput) (*mcpsdk.CallToolResult, RecallOutput, error) {
+		out, err := t.Recall(ctx, in)
 		return nil, out, err
 	})
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "forget",
 		Description: "Forget a memory by id: mode 'soft' (excluded from recall, recoverable), 'hard' (delete), 'pin' (protect from decay), or 'supersede' (mark replaced).",
-	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, in forgetInput) (*mcpsdk.CallToolResult, forgetOutput, error) {
-		out, err := h.doForget(ctx, in)
+	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, in ForgetInput) (*mcpsdk.CallToolResult, ForgetOutput, error) {
+		out, err := t.Forget(ctx, in)
 		return nil, out, err
 	})
 

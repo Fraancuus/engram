@@ -18,12 +18,14 @@ type forgetStore interface {
 	Supersede(ctx context.Context, ids []engram.MemoryID) error
 }
 
-type forgetInput struct {
+// ForgetInput is the argument set of the forget tool.
+type ForgetInput struct {
 	ID   string `json:"id" jsonschema:"id of the memory to act on"`
 	Mode string `json:"mode" jsonschema:"soft (exclude from recall), hard (delete), pin (protect from decay), or supersede (mark replaced)"`
 }
 
-type forgetOutput struct {
+// ForgetOutput is the result of the forget tool.
+type ForgetOutput struct {
 	OK bool `json:"ok"`
 }
 
@@ -31,37 +33,37 @@ type forgetOutput struct {
 // soft/hard/pin a missing id surfaces as a legible ErrNotFound (actionable for the caller);
 // supersede is idempotent and succeeds even for an absent id. Other internal failures are
 // logged and returned sanitized.
-func (h *handlers) doForget(ctx context.Context, in forgetInput) (out forgetOutput, err error) {
+func (t *Tools) doForget(ctx context.Context, in ForgetInput) (out ForgetOutput, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			h.log.Error("forget: recovered panic", "panic", r)
-			out, err = forgetOutput{}, errors.New("forget: internal error")
+			t.log.Error("forget: recovered panic", "panic", r)
+			out, err = ForgetOutput{}, errors.New("forget: internal error")
 		}
 	}()
 
 	if strings.TrimSpace(in.ID) == "" || len(in.ID) > maxEntityBytes {
-		return forgetOutput{}, fmt.Errorf("id must be 1..%d bytes and not blank", maxEntityBytes)
+		return ForgetOutput{}, fmt.Errorf("id must be 1..%d bytes and not blank", maxEntityBytes)
 	}
 	id := engram.MemoryID(in.ID)
 
 	switch in.Mode {
 	case "soft":
-		err = h.forget.SetForgotten(ctx, id)
+		err = t.forget.SetForgotten(ctx, id)
 	case "hard":
-		err = h.forget.Delete(ctx, id)
+		err = t.forget.Delete(ctx, id)
 	case "pin":
-		err = h.forget.Pin(ctx, id)
+		err = t.forget.Pin(ctx, id)
 	case "supersede":
-		err = h.forget.Supersede(ctx, []engram.MemoryID{id})
+		err = t.forget.Supersede(ctx, []engram.MemoryID{id})
 	default:
-		return forgetOutput{}, fmt.Errorf("invalid mode %q: want soft, hard, pin, or supersede", in.Mode)
+		return ForgetOutput{}, fmt.Errorf("invalid mode %q: want soft, hard, pin, or supersede", in.Mode)
 	}
 	if err != nil {
 		if errors.Is(err, engram.ErrNotFound) {
-			return forgetOutput{}, fmt.Errorf("forget %q: %w", id, err)
+			return ForgetOutput{}, fmt.Errorf("forget %q: %w", id, err)
 		}
-		h.log.Error("forget: store op failed", "mode", in.Mode, "err", err)
-		return forgetOutput{}, errors.New("forget: store unavailable")
+		t.log.Error("forget: store op failed", "mode", in.Mode, "err", err)
+		return ForgetOutput{}, errors.New("forget: store unavailable")
 	}
-	return forgetOutput{OK: true}, nil
+	return ForgetOutput{OK: true}, nil
 }

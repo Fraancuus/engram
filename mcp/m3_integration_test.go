@@ -13,19 +13,19 @@ import (
 func TestM3RerankSurfacesDirectAnswer(t *testing.T) {
 	h := liveHandlers(t)
 	ns := string(uniqueNS("m3-rerank"))
-	mustRemember(t, h, rememberInput{
+	mustRemember(t, h, RememberInput{
 		Content:   "France is a country in Western Europe known for its cuisine, wine, and art museums.",
 		Type:      "semantic",
 		Namespace: ns,
 	})
-	answer := mustRemember(t, h, rememberInput{
+	answer := mustRemember(t, h, RememberInput{
 		Content:   "Paris is the capital of France.",
 		Type:      "semantic",
 		Namespace: ns,
 	})
 
 	out, err := h.doRecall(context.Background(),
-		recallInput{Query: "What is the capital of France?", Namespaces: []string{ns}})
+		RecallInput{Query: "What is the capital of France?", Namespaces: []string{ns}})
 	if err != nil {
 		t.Fatalf("recall: %v", err)
 	}
@@ -52,12 +52,12 @@ func TestM3TokenBudgetTrims(t *testing.T) {
 		"A write-ahead log records mutations before applying them for durability.",
 	}
 	for _, c := range contents {
-		mustRemember(t, h, rememberInput{Content: c, Type: "semantic", Namespace: ns})
+		mustRemember(t, h, RememberInput{Content: c, Type: "semantic", Namespace: ns})
 	}
 
 	big := 100
 	out, err := h.doRecall(context.Background(),
-		recallInput{Query: "distributed systems consensus", Namespaces: []string{ns}, K: &big})
+		RecallInput{Query: "distributed systems consensus", Namespaces: []string{ns}, K: &big})
 	if err != nil {
 		t.Fatalf("recall: %v", err)
 	}

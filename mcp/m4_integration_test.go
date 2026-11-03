@@ -19,7 +19,7 @@ func (c clockAt) Now() time.Time { return time.Time(c) }
 func TestM4SoftForgetAndInclude(t *testing.T) {
 	h := liveHandlers(t)
 	ns := string(uniqueNS("m4-soft"))
-	m := mustRemember(t, h, rememberInput{
+	m := mustRemember(t, h, RememberInput{
 		Content: "An old episodic event that should fade with disuse.", Type: "episodic", Namespace: ns,
 	})
 
@@ -27,7 +27,7 @@ func TestM4SoftForgetAndInclude(t *testing.T) {
 	h.clock = clockAt(t0.Add(365 * 24 * time.Hour)) // a year later; episodic S0 is 2 days
 
 	def, err := h.doRecall(context.Background(),
-		recallInput{Query: "old episodic event that fades", Namespaces: []string{ns}})
+		RecallInput{Query: "old episodic event that fades", Namespaces: []string{ns}})
 	if err != nil {
 		t.Fatalf("recall: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestM4SoftForgetAndInclude(t *testing.T) {
 	}
 
 	inc, err := h.doRecall(context.Background(),
-		recallInput{Query: "old episodic event that fades", Namespaces: []string{ns}, IncludeForgotten: true})
+		RecallInput{Query: "old episodic event that fades", Namespaces: []string{ns}, IncludeForgotten: true})
 	if err != nil {
 		t.Fatalf("recall(include_forgotten): %v", err)
 	}
@@ -58,16 +58,16 @@ func TestM4SoftForgetAndInclude(t *testing.T) {
 func TestM4ReinforceOnAccess(t *testing.T) {
 	h := liveHandlers(t)
 	ns := string(uniqueNS("m4-reinforce"))
-	m := mustRemember(t, h, rememberInput{
+	m := mustRemember(t, h, RememberInput{
 		Content: "A durable fact about distributed consensus algorithms.", Type: "semantic", Namespace: ns,
 	})
 
 	if _, err := h.doRecall(context.Background(),
-		recallInput{Query: "distributed consensus algorithms", Namespaces: []string{ns}}); err != nil {
+		RecallInput{Query: "distributed consensus algorithms", Namespaces: []string{ns}}); err != nil {
 		t.Fatalf("recall #1: %v", err)
 	}
 	out, err := h.doRecall(context.Background(),
-		recallInput{Query: "distributed consensus algorithms", Namespaces: []string{ns}})
+		RecallInput{Query: "distributed consensus algorithms", Namespaces: []string{ns}})
 	if err != nil {
 		t.Fatalf("recall #2: %v", err)
 	}

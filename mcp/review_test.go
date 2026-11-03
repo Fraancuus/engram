@@ -100,7 +100,7 @@ func TestDoRecallRecoversPanic(t *testing.T) {
 	t.Parallel()
 	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, &mock.FakeStore{})
 	h.store = panicSearchStore{&mock.FakeStore{}}
-	_, err := h.doRecall(context.Background(), recallInput{Query: "q"})
+	_, err := h.doRecall(context.Background(), RecallInput{Query: "q"})
 	if err == nil {
 		t.Fatal("want error from recovered panic, got nil")
 	}

@@ -73,9 +73,62 @@ The four read-only subagents in `.claude/agents/` exist for what a linter can't 
 - **security-auditor** — for DB queries, MCP inputs, the sidecar boundary, deps, or
   before a release; Cypher injection, input validation, info leakage.
 
+## How work moves
+One change per milestone (PRD §9), one PR per change, Franco merges.
+
+1. **Orient with the graph, not grep.** `graphify-out/graph.json` is the map of this
+   repo. Before the first search or file read for a codebase question run
+   `graphify query "<question>"`; `graphify path "<A>" "<B>"` for how two things relate,
+   `graphify explain "<concept>"` for one thing. Read raw files only for lines the graph
+   already located. After changing code run `graphify update .` (AST only, free).
+   `graphify-out/` is gitignored; rebuild locally with `/graphify .`.
+2. **Specify before coding: superspec.** `/opsx:ff <milestone-slug>` runs brainstorm
+   (superpowers:brainstorming) → proposal → design → delta specs → tasks → plan in
+   `openspec/changes/<slug>/`. The proposal names the milestone and what is out of scope;
+   anything from the v2 list stops here. Rules per artifact: `openspec/config.yaml`.
+3. **Review the plan visually.** After `plan.md`, run `/visual-plan` on it into
+   `plans/<same-slug>/` (Agent-Native Plans MDX, local bridge). Franco reviews there;
+   every decision goes back into `design.md`/`plan.md` before apply.
+4. **Build TDD first.** `/opsx:apply` works the plan with
+   superpowers:test-driven-development and subagent-driven-development. Layer order:
+   domain → `mock/` → adapters → `cmd/`. Small diffs; delete before you add.
+5. **Review, verify, ship.** Run the `.claude/agents/` reviewers on what changed, then
+   `/opsx:verify`, then `/opsx:continue` to push and open the PR. After merge,
+   `/opsx:archive`.
+
+**Model tiers** (set 2026-11-01; the session model orchestrates, decides, and writes
+dispatch briefs; it does not implement or review by itself):
+- Session model: `opus` for the execution loop (`/opsx:apply`, reviews, verify, ship).
+  `fable` is optional for brainstorm, design, and spec rulings, where first-try judgment
+  on open-ended questions matters most.
+- Implementers: `sonnet`; `haiku` only for mechanical one-file edits or docs.
+- `architect` and `security-auditor` agents: `fable` (pinned in their frontmatter); they
+  run rarely and their verdicts gate structure and releases.
+- `reviewer`, `scoping-ux`, task reviewers, and the final whole-branch reviewer: `opus`.
+  When dispatching a generic reviewer, pass `model: opus` explicitly.
+- Scoped re-reviews of a small fix diff: `haiku`.
+- Fix-loop escalation (round 4+): one tier above the stuck implementer.
+Never dispatch a subagent without an explicit model; an omitted model inherits the session's.
+
+Tooling installed by hand, outside Claude Code plugins: graphify
+(`uv tool install graphifyy`, then `graphify install --project`) and the OpenSpec CLI
+(`npm i -g @fission-ai/openspec`). The `superspec` schema lives in
+`openspec/schemas/superspec/`.
+
 ## Verification
 Before claiming work done: `go build ./...`, `go test -race ./...`,
 `golangci-lint run ./...`. CI runs the same plus `govulncheck`, CodeQL, gitleaks,
 and the eval gate.
 
 @docs/engram-go-rules.md
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+Rules:
+- When graphify-out/graph.json exists, run `graphify query "<question>"` before your first grep, search or source-file read for a codebase question, and put this rule in every subagent prompt that explores code. Read raw files only for lines the graph or an earlier read already located. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+- A committed graphify-out/graph.json is rewritten whole on every build, so a large diff to it in a pull request is expected. Do not flag it as churn or suggest skipping the graph rebuild or its hooks.

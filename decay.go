@@ -1,6 +1,7 @@
 package engram
 
 import (
+	"fmt"
 	"math"
 	"time"
 )
@@ -103,3 +104,36 @@ func (NullDecay) Retrievability(Memory, time.Time) float64 { return 1 }
 
 // Stability implements DecayModel: infinite (never decays).
 func (NullDecay) Stability(MemoryType, int, float64) float64 { return math.Inf(1) }
+
+// Decay strategy names, as selected by the eval arms and ENGRAM_DECAY.
+const (
+	DecayTypeAware = "type-aware"
+	DecayUniform   = "uniform"
+	DecayNone      = "none"
+)
+
+// DecayByName returns the DecayModel registered under name.
+func DecayByName(name string) (DecayModel, error) {
+	switch name {
+	case DecayTypeAware:
+		return TypeAwareDecay{}, nil
+	case DecayUniform:
+		return UniformDecay{}, nil
+	case DecayNone:
+		return NullDecay{}, nil
+	}
+	return nil, fmt.Errorf("unknown decay %q: want %s, %s or %s", name, DecayTypeAware, DecayUniform, DecayNone)
+}
+
+// DecayName is the inverse of DecayByName; it returns "" for an unknown implementation.
+func DecayName(d DecayModel) string {
+	switch d.(type) {
+	case TypeAwareDecay:
+		return DecayTypeAware
+	case UniformDecay:
+		return DecayUniform
+	case NullDecay:
+		return DecayNone
+	}
+	return ""
+}

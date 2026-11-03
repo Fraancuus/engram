@@ -38,6 +38,16 @@ linters:
               desc: "domain must not import infrastructure (dependency rule)"
             - pkg: "github.com/Fraancuus/engram/mcp"
               desc: "domain must not import adapters (dependency rule)"
+        engramd:
+          # The service binary must not link the eval fakes or harness.
+          files:
+            - "cmd/engramd/**"
+            - "**/cmd/engramd/**"
+          deny:
+            - pkg: "github.com/Fraancuus/engram/mock"
+              desc: "engramd must not ship the eval fakes"
+            - pkg: "github.com/Fraancuus/engram/eval"
+              desc: "engramd must not ship the eval fakes"
 
 # In v2 the formatters are configured separately from linters. `golangci-lint fmt`
 # applies them; `golangci-lint run` reports any file that still needs formatting.

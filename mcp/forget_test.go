@@ -28,7 +28,7 @@ func TestDoForgetDispatches(t *testing.T) {
 			t.Parallel()
 			st := &mock.FakeStore{}
 			h := testHandlers(&mock.FakeEmbedder{}, st)
-			out, err := h.doForget(context.Background(), forgetInput{ID: "id1", Mode: tt.mode})
+			out, err := h.doForget(context.Background(), ForgetInput{ID: "id1", Mode: tt.mode})
 			if err != nil {
 				t.Fatalf("doForget(%s): %v", tt.mode, err)
 			}
@@ -46,10 +46,10 @@ func TestDoForgetValidation(t *testing.T) {
 	t.Parallel()
 	st := &mock.FakeStore{}
 	h := testHandlers(&mock.FakeEmbedder{}, st)
-	if _, err := h.doForget(context.Background(), forgetInput{ID: "id1", Mode: "nuke"}); err == nil {
+	if _, err := h.doForget(context.Background(), ForgetInput{ID: "id1", Mode: "nuke"}); err == nil {
 		t.Error("want error for invalid mode")
 	}
-	if _, err := h.doForget(context.Background(), forgetInput{ID: "  ", Mode: "soft"}); err == nil {
+	if _, err := h.doForget(context.Background(), ForgetInput{ID: "  ", Mode: "soft"}); err == nil {
 		t.Error("want error for blank id")
 	}
 	if len(st.Forgot)+len(st.Deleted) != 0 {
@@ -61,7 +61,7 @@ func TestDoForgetNotFoundIsLegible(t *testing.T) {
 	t.Parallel()
 	st := &mock.FakeStore{DeleteErr: engram.ErrNotFound}
 	h := testHandlers(&mock.FakeEmbedder{}, st)
-	_, err := h.doForget(context.Background(), forgetInput{ID: "missing", Mode: "hard"})
+	_, err := h.doForget(context.Background(), ForgetInput{ID: "missing", Mode: "hard"})
 	if !errors.Is(err, engram.ErrNotFound) {
 		t.Errorf("doForget(hard, missing) = %v, want wrapped ErrNotFound", err)
 	}
@@ -71,7 +71,7 @@ func TestDoForgetStoreErrorSanitized(t *testing.T) {
 	t.Parallel()
 	st := &mock.FakeStore{SetForgottenErr: errors.New("db-internal-xyz")}
 	h := testHandlers(&mock.FakeEmbedder{}, st)
-	_, err := h.doForget(context.Background(), forgetInput{ID: "id1", Mode: "soft"})
+	_, err := h.doForget(context.Background(), ForgetInput{ID: "id1", Mode: "soft"})
 	if err == nil {
 		t.Fatal("want error when the store fails")
 	}
@@ -84,7 +84,7 @@ func TestDoForgetSoftNotFound(t *testing.T) {
 	t.Parallel()
 	st := &mock.FakeStore{SetForgottenErr: engram.ErrNotFound}
 	h := testHandlers(&mock.FakeEmbedder{}, st)
-	_, err := h.doForget(context.Background(), forgetInput{ID: "missing", Mode: "soft"})
+	_, err := h.doForget(context.Background(), ForgetInput{ID: "missing", Mode: "soft"})
 	if !errors.Is(err, engram.ErrNotFound) {
 		t.Errorf("doForget(soft, missing) = %v, want wrapped ErrNotFound", err)
 	}
