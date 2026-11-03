@@ -82,7 +82,13 @@ version current on the query day}; fact → {the chain's latest version written 
 the query day}, with the query vector built from the chain centroid (version-agnostic), so older
 versions match it closely and only their superseded flag keeps them out; episode → {that episode} at
 any age; bridge → {X, Y}. Queries MUST be scoped to the topic's namespace, except entity-bridge
-queries which pass both namespaces involved. Labels MUST NOT depend on any pipeline output.
+queries which pass both namespaces involved. Labels MUST NOT depend on any pipeline output. A bridge
+label MUST NOT be a memory with a successor: recall excludes a superseded memory in every arm, so a label
+on it would cap every arm's score below what a perfect system could reach.
+
+#### Scenario: No label on a superseded memory
+- **WHEN** a dataset is generated on either mix at seed 42, with fact chains carrying `Supersedes`
+- **THEN** no query's relevant set holds a memory whose successor is written on or before the query day
 
 #### Scenario: Topic-current picks the current version
 - **WHEN** a topic has versions v1 (day 5) and v2 (day 40) and a topic-current query on day 160

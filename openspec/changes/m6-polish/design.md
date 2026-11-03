@@ -210,6 +210,32 @@ and keeps a much smaller store, at a known cost on old episodes and bridges. The
 line 5, "proving the forgetting actually helps", goes. The README also gets both tables, lambda and
 the break-even, the corrected recall description, and the archived path of the M5 design.
 
+### D18. Rulings from the mid-branch review
+
+A five-lens review of the Go diff, with three skeptics trying to refute each serious finding, confirmed
+twelve. Each ruling below changed code or a spec, except where marked as left open. None moves lambda, a
+mix percentage or a D16 prediction, and no eval number informed any of them.
+
+**Fixed.** A correction near a soft-forgotten memory dedups into it, and because M6 applies supersession on
+the dedup path, the old fact is superseded while the correction is lost: recall went from one stale result
+to none. Dedup now also skips soft-forgotten candidates. A write naming `Supersedes` dedups only into its
+own type, because a procedural correction absorbed by an episode would otherwise lose the standard and its
+replacement to the sweep; without `Supersedes`, cross-type dedup stays as it was. A bridge label can no
+longer be a memory with a successor: M6 gave fact versions `Supersedes`, so such a label capped every arm,
+including `none`, below 1.0 on bridge-link. Rejecting those candidates changes random draws for a seed, so
+it lands before the re-baseline. The remainder are tests pinning behaviour D14 calls the decision
+(`DefaultLambda`, the score column at a non-zero lambda, the `-mix` and `-lambda` plumbing behind the README
+tables), the sweep pruning a superseded fact, labels surviving a pruned hop, and literal twin bounds.
+
+**Reworded.** `superseded` reports the ids `remember` asked the store to supersede. Reporting only matched
+ids needs a `Supersede` signature change, which this change rules out. The tool description now says what an
+absent `superseded` means.
+
+**Left open, for Franco.** A typo in `supersedes` is reported as success, and the fix is a store signature
+change. CI has no job running the integration tests, and those tests skip silently without Neo4j, so Task 10
+fails on any skip by hand. `supersedes` can reach another namespace, as `forget` already can. A retried
+correction that dedups drops its `Links`, as dedup always has.
+
 ## Risks / Trade-offs
 
 - [Lambda or the mix reads as chosen to flatter C] → both fixed here before any run; break-even and the stress table printed; `-lambda 0` documented.
