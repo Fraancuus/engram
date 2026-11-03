@@ -61,7 +61,7 @@ func TestDoRememberSupersedesProcedural(t *testing.T) {
 	}
 }
 
-func TestDoRememberSupersedeIgnoredForNonProcedural(t *testing.T) {
+func TestDoRememberSupersedesSemantic(t *testing.T) {
 	t.Parallel()
 	st := &mock.FakeStore{}
 	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
@@ -71,11 +71,164 @@ func TestDoRememberSupersedeIgnoredForNonProcedural(t *testing.T) {
 	if err != nil {
 		t.Fatalf("doRemember: %v", err)
 	}
+	if len(st.Superseded) != 1 || len(st.Superseded[0]) != 1 || st.Superseded[0][0] != "old1" {
+		t.Errorf("Supersede not called with [old1]: %v", st.Superseded)
+	}
+	if len(out.Superseded) != 1 || out.Superseded[0] != "old1" {
+		t.Errorf("output.Superseded = %v, want [old1]", out.Superseded)
+	}
+}
+
+func TestDoRememberSupersedeIgnoredForEpisodic(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	in := validRemember()
+	in.Type = "episodic"
+	in.Supersedes = []string{"old1"}
+	out, err := h.doRemember(context.Background(), in)
+	if err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
 	if len(st.Superseded) != 0 {
-		t.Errorf("Supersede should not run for a non-procedural memory: %v", st.Superseded)
+		t.Errorf("Supersede should not run for an episodic memory: %v", st.Superseded)
 	}
 	if out.Superseded != nil {
 		t.Errorf("output.Superseded = %v, want nil", out.Superseded)
+	}
+}
+
+func cand(id string, score float64, superseded bool) engram.RecallResult {
+	return engram.RecallResult{Memory: engram.Memory{ID: engram.MemoryID(id), Superseded: superseded}, Score: score}
+}
+
+func hasID(ids []engram.MemoryID, id engram.MemoryID) bool {
+	for _, x := range ids {
+		if x == id {
+			return true
+		}
+	}
+	return false
+}
+
+func TestDoRememberDedupSkipsNamedSupersede(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{cand("old", 0.97, false)}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	in := validRemember()
+	in.Supersedes = []string{"old"}
+	out, err := h.doRemember(context.Background(), in)
+	if err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	if out.Deduped || len(st.Puts) != 1 {
+		t.Errorf("Deduped=%v puts=%d, want false/1", out.Deduped, len(st.Puts))
+	}
+	if len(out.Superseded) != 1 || out.Superseded[0] != "old" {
+		t.Errorf("Superseded = %v, want [old]", out.Superseded)
+	}
+	if hasID(st.Reinforced, "old") {
+		t.Errorf("old was reinforced: %v", st.Reinforced)
+	}
+}
+
+func TestDoRememberDedupSkipsSuperseded(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{cand("dead", 0.97, true)}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	out, err := h.doRemember(context.Background(), validRemember())
+	if err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	if out.Deduped || len(st.Puts) != 1 || len(st.Reinforced) != 0 {
+		t.Errorf("Deduped=%v puts=%d reinforced=%v, want false/1/none", out.Deduped, len(st.Puts), st.Reinforced)
+	}
+}
+
+func fallThroughStore() *mock.FakeStore {
+	return &mock.FakeStore{SearchResults: []engram.RecallResult{cand("old", 0.98, false), cand("live", 0.96, false)}}
+}
+
+func TestDoRememberDedupFallsToNextLive(t *testing.T) {
+	t.Parallel()
+	st := fallThroughStore()
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	in := validRemember()
+	in.Supersedes = []string{"old"}
+	out, err := h.doRemember(context.Background(), in)
+	if err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	if !out.Deduped || out.MemoryID != "live" || len(st.Puts) != 0 {
+		t.Errorf("out=%+v puts=%d, want deduped into live with no Put", out, len(st.Puts))
+	}
+	if !hasID(st.Reinforced, "live") || hasID(st.Reinforced, "old") {
+		t.Errorf("Reinforced = %v, want only live", st.Reinforced)
+	}
+}
+
+func TestDoRememberDedupStillSupersedes(t *testing.T) {
+	t.Parallel()
+	st := fallThroughStore()
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	in := validRemember()
+	in.Supersedes = []string{"old"}
+	out, err := h.doRemember(context.Background(), in)
+	if err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	if len(st.Superseded) != 1 || st.Superseded[0][0] != "old" {
+		t.Errorf("Supersede not called with [old]: %v", st.Superseded)
+	}
+	if len(out.Superseded) != 1 || out.Superseded[0] != "old" {
+		t.Errorf("output.Superseded = %v, want [old]", out.Superseded)
+	}
+}
+
+func TestDoRememberDedupBoundaryUnchanged(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{cand("live", defaultDedupThreshold, false)}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	out, err := h.doRemember(context.Background(), validRemember())
+	if err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	if !out.Deduped {
+		t.Errorf("Deduped = false at exactly the threshold")
+	}
+}
+
+func TestDoRememberEpisodicSupersedesKeepsDedup(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{cand("old", 0.97, false)}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	in := validRemember()
+	in.Type = "episodic"
+	in.Supersedes = []string{"old"}
+	out, err := h.doRemember(context.Background(), in)
+	if err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	if !out.Deduped || !hasID(st.Reinforced, "old") || len(st.Superseded) != 0 {
+		t.Errorf("out=%+v reinforced=%v superseded=%v, want deduped, old reinforced, nothing superseded", out, st.Reinforced, st.Superseded)
+	}
+}
+
+func TestDoRememberRetriedCorrectionIdempotent(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{cand("prior", 0.99, false)}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	in := validRemember()
+	in.Supersedes = []string{"old"}
+	out, err := h.doRemember(context.Background(), in)
+	if err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	if !out.Deduped || out.MemoryID != "prior" {
+		t.Errorf("out=%+v, want deduped into prior", out)
+	}
+	if len(st.Superseded) != 1 || st.Superseded[0][0] != "old" || len(out.Superseded) != 1 || out.Superseded[0] != "old" {
+		t.Errorf("superseded=%v out=%v, want [old]", st.Superseded, out.Superseded)
 	}
 }
 
