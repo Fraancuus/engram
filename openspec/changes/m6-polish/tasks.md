@@ -37,16 +37,16 @@ then. No eval run may be used to choose lambda, the mix or `sigmaTwin`.
 
 ## 8. Review before the numbers
 
-- [ ] 8.1 `reviewer` (opus) over the Go diff so far; `security-auditor` (fable) over the Cypher predicate and the `supersedes` handling at the MCP boundary. Resolve every blocking finding before task 9.
+- [x] 8.1 `reviewer` (opus) over the Go diff so far; `security-auditor` (fable) over the Cypher predicate and the `supersedes` handling at the MCP boundary. Resolve every blocking finding before task 9.
 
 ## 9. Integration check
 
-- [ ] 9.1 Bring Neo4j up with `docker compose up -d`, run `go test -race -tags=integration ./neo4j/... ./mcp/... ./sweep/...`. If Neo4j cannot start, report it and do not claim the Cypher predicate was exercised.
+- [x] 9.1 Bring Neo4j up with `docker compose up -d`, run `go test -race -tags=integration ./neo4j/... ./mcp/... ./sweep/...`. If Neo4j cannot start, report it and do not claim the Cypher predicate was exercised.
 
 ## 10. Re-baseline and results
 
-- [ ] 10.1 `go run ./cmd/eval --update-baseline -seed 42` on amd64; `--ci` twice with a byte-identical check on arm C's precision and nDCG.
-- [ ] 10.2 Capture the tables: `-seed 42 -seeds 1` on `agent`, on `stress`, and on `agent -lambda 0`. Write them to `design.md` under "Result at the floor" next to the D16 predictions, reporting any miss as it stands.
+- [x] 10.1 `go run ./cmd/eval --update-baseline -seed 42` on amd64; `--ci` twice with a byte-identical check on arm C's precision and nDCG.
+- [x] 10.2 Capture the tables: `-seed 42 -seeds 1` on `agent`, on `stress`, and on `agent -lambda 0`. Write them to `design.md` under "Result at the floor" next to the D16 predictions, reporting any miss as it stands.
 
 ## 11. Docs
 

@@ -253,8 +253,9 @@ the same PR. Rollback is reverting the PR.
 
 ## Open Questions
 
-`ENGRAM_DECAY` default stays `type-aware` in this change. That decision stays open for Franco until
-the tables exist.
+`ENGRAM_DECAY` default stays `type-aware` in this change. That decision is open for Franco, now that the
+tables exist. The blend discontinuity under "Why type-aware beats none on facts" needs a design decision in
+a follow-up change.
 
 Decided by Franco at the plan review (2026-11-03, before any M6 run): lambda 0.10; agent mix
 35/20/30/5/10; `Supersedes` on every fact chain; print the break-even lambda; `memory_stats` and the
@@ -265,3 +266,76 @@ misbehaving input found; removing `k` from `blend` is the right cut, and the cut
 `rerankResults`; the `DecayModel` contract and clock injection are untouched; nothing makes the arms
 differ by anything but `DecayModel`. One required change, folded into D12: an episodic write's
 `Supersedes` must not bypass dedup.
+
+## Result at the floor (2026-11-04)
+
+Produced at `0466233` on amd64: `go run ./cmd/eval --update-baseline -seed 42`, then `--ci` twice with byte-identical arm C rows. Raw output is in `results/`. Baseline: mix agent, k 5, seed 42, rerank none, precision@5 0.1788, nDCG@5 0.8747.
+
+Agent mix, seed 42, k=5, rerank none, lambda 0.1:
+
+| arm | nDCG@5 | precision@5 | store | edges | score | topic-current | fact | episode-recent | episode-old | bridge-link | bridge-entity |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| none | 0.949 | 0.210 | 5000 | 955 | 0.849 | 1.000 | 0.852 | 0.998 | 0.970 | 1.000 | 0.613 |
+| uniform | 0.937 | 0.204 | 3897 | 457 | 0.859 | 0.989 | 0.900 | 0.998 | 0.800 | 0.865 | 0.564 |
+| type-aware | 0.875 | 0.179 | 1146 | 112 | 0.852 | 1.000 | 1.000 | 1.000 | 0.000 | 0.347 | 0.147 |
+
+Break-even lambda against `none`: uniform 0.055, type-aware 0.096. Recommended: `uniform`.
+
+Stress mix (the M5 mix), seed 42, lambda 0.1:
+
+| arm | nDCG@5 | precision@5 | store | edges | score | topic-current | fact | episode-recent | episode-old | bridge-link | bridge-entity |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| none | 0.919 | 0.225 | 5000 | 955 | 0.819 | 1.000 | 0.813 | 0.989 | 0.990 | 1.000 | 0.606 |
+| uniform | 0.851 | 0.203 | 3876 | 456 | 0.773 | 0.984 | 0.862 | 0.989 | 0.737 | 0.822 | 0.518 |
+| type-aware | 0.671 | 0.144 | 1180 | 114 | 0.647 | 1.000 | 1.000 | 0.993 | 0.067 | 0.294 | 0.204 |
+
+Break-even lambda against `none`: uniform 0.301, type-aware 0.325. Recommended: `none`.
+
+Episode access hit rate at seed 42: none 0.989, uniform 0.991, type-aware 0.995. With `-lambda 0`, `none` is recommended on both mixes.
+
+Agent mix across seeds 42 to 51, one run each at lambda 0.1:
+
+| seed | none nDCG, score | uniform nDCG, score | type-aware nDCG, score | recommended |
+|---|---|---|---|---|
+| 42 | 0.949, 0.849 | 0.937, 0.859 | 0.875, 0.852 | uniform |
+| 43 | 0.944, 0.844 | 0.914, 0.837 | 0.875, 0.853 | type-aware |
+| 44 | 0.941, 0.841 | 0.919, 0.842 | 0.880, 0.857 | type-aware |
+| 45 | 0.949, 0.849 | 0.926, 0.848 | 0.876, 0.853 | type-aware |
+| 46 | 0.931, 0.831 | 0.917, 0.841 | 0.869, 0.846 | type-aware |
+| 47 | 0.945, 0.845 | 0.931, 0.854 | 0.874, 0.850 | type-aware |
+| 48 | 0.946, 0.846 | 0.922, 0.844 | 0.875, 0.852 | type-aware |
+| 49 | 0.947, 0.847 | 0.922, 0.844 | 0.875, 0.851 | type-aware |
+| 50 | 0.944, 0.844 | 0.926, 0.849 | 0.879, 0.857 | type-aware |
+| 51 | 0.945, 0.845 | 0.919, 0.842 | 0.873, 0.850 | type-aware |
+
+Secondary, `-rerank cosine`, agent mix, seed 42: nDCG none 0.961, uniform 0.934; fact 1.000 in every arm; break-even uniform 0.136, type-aware 0.121; recommended `none`. The cosine reranker is a best case, not the production cross-encoder (D3a).
+
+### Predictions against results
+
+The D16 predictions stand as written.
+
+| metric | M5 | predicted | result (seed 42) | held |
+|---|---|---|---|---|
+| type-aware episode-recent nDCG | 0.661 | near 1.0 | 1.000 agent, 0.993 stress | yes |
+| type-aware episode access hit rate | 0.412 | near 0.99 | 0.995 | yes |
+| none fact nDCG | 0.673 | near 1.0 | 0.852 agent, 0.813 stress | no |
+| type-aware fact nDCG | 0.722 | near 1.0, tied with none | 1.000, not tied | half |
+| uniform fact nDCG | 0.648 | below none and type-aware | 0.900, above none | half |
+| none episode-old, stress mix | 0.990 | unchanged within 0.02 | 0.990 | yes |
+| type-aware episode-old | 0.000 | still 0.000 | 0.000 agent, 0.067 stress | half |
+| type-aware store | 1199 | higher | 1146 agent, 1180 stress | no |
+| retrieval-only winner, both mixes | none | none | none | yes |
+| recommendation at lambda 0.10, agent mix | none (nDCG only) | none, break-even near 0.16 | uniform, break-even 0.096 | no |
+
+### Why type-aware beats none on facts
+
+It does not retrieve facts better. Three independent diagnoses agree, and a replay reproduces the fact nDCG in every arm on seeds 42, 43, 44 and on the stress mix. Neighbors excludes seeds, so a memory inside the 50 vector seeds keeps its own similarity, while the same memory just outside inherits `sim_source * weight` through a link. Every generated fact has an explicit weight 1.0 link to its topic's standard, which has the higher importance. So a standard scoring about 1.00 as a seed scores about 1.165 just outside the seeds and outranks the fact: query q0153 scores 1.0044 and 1.1651 for the same standard. `none` keeps about 92 live memories per topic against the cap of 50, so its standard is often outside; `type-aware` keeps about 23, so it never is. Every miss is the target at rank 2 behind that standard, and recall@5 on facts is 1.000 in all arms. The inversion reproduced on a real Neo4j on the `none` arm at seed 42: 41 misses against the mock's 40.
+
+Consequences:
+- D12's "C cannot beat A on nDCG in any class" holds in substance but not as run: without this discontinuity none reaches 1.000 on facts. The reason D12 gives for uniform is wrong: uniform's latest versions were pruned in none of its fact queries, and its gap is the same inversion.
+- With links from facts to standards removed, or with a reranker stage, `none` reaches fact 1.000 and is recommended on seeds 42 to 44. So lambda 0.10 sits between a result that recommends `type-aware` and one that recommends `none`, and the discontinuity decides which. The real cross-encoder could not be run: eval content is generator ids, not text.
+- Repair needs a design decision. Scoring seeds through links as well makes every arm far worse (fact 0.708 in `none` and `type-aware`). It is M2 blend behaviour and out of scope here, so no constant was changed after seeing these numbers.
+
+### What the numbers support
+
+Type-aware forgetting does not retrieve better than never forgetting. On the agent mix it gives up about 0.07 nDCG for a store at 23% of the size, and on the stress mix about 0.25. The cost falls on old episodes and bridges, and the gain is store size with procedural memory protected. At lambda 0.10 the three arms score within about 0.02 and the winner depends on the seed and on a blend discontinuity, so the table recommends no arm with confidence. `ENGRAM_DECAY` stays `type-aware`, and that choice stays open for Franco.

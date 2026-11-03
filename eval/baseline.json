@@ -11,8 +11,9 @@
     "entities": 1200,
     "queries": 500,
     "days": 180,
-    "dim": 128
+    "dim": 128,
+    "mix": "agent"
   },
-  "precision_at_k": 0.1268,
-  "ndcg_at_k": 0.5135
+  "precision_at_k": 0.1788,
+  "ndcg_at_k": 0.8747
 }

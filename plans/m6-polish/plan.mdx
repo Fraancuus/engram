@@ -224,6 +224,10 @@ Layer order runs domain, then mock, adapters, eval and cmd. Implementers are `so
 
 `go build ./...`, `go test -race ./...`, `golangci-lint run ./...`, then `go run ./cmd/eval --update-baseline -seed 42` on amd64 and `go run ./cmd/eval --ci` twice with byte-identical arm C rows. Tables come from `-seed 42 -seeds 1` on `agent`, on `-mix stress`, and with `-lambda 0`, and they go into `design.md` beside the predictions. `go test -race -tags=integration` runs against Docker Neo4j to exercise the Cypher predicate. The one PR carries code, archive and synced specs; "ready to merge" is said only once the archive commit is on the branch.
 
+### Result
+
+The first run contradicted the warning above and several predictions. `none` reached 0.852 on facts against 1.000 for `type-aware`, because of a discontinuity in blend at the seed cap rather than any retrieval benefit from forgetting. At lambda 0.10 the arms score within about 0.02 and the winner depends on the seed. `openspec/changes/m6-polish/design.md`, section "Result at the floor", has the tables, the predictions against results, and the diagnosis.
+
 ### Decisions
 
 Confirmed at the plan review on 2026-11-03, before any M6 eval run.
