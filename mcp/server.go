@@ -102,7 +102,7 @@ func NewServer(t *Tools) *mcpsdk.Server {
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "remember",
-		Description: "Store a memory (content, type, namespace; optional importance, source, entities). Deduplicates within the namespace, reinforcing a near-identical existing memory instead of inserting.",
+		Description: "Store a memory (content, type, namespace; optional importance, source, entities). Deduplicates within the namespace, reinforcing a near-identical existing memory instead of inserting. With supersedes, the superseded field echoes the ids it asked the store to replace; if it is absent after naming ids, the replace failed and the same write should be retried.",
 	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, in RememberInput) (*mcpsdk.CallToolResult, RememberOutput, error) {
 		out, err := t.Remember(ctx, in)
 		return nil, out, err

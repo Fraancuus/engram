@@ -163,7 +163,7 @@ func (t *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberO
 		t.log.Error("remember: search failed", "err", err)
 		return RememberOutput{}, errors.New("remember: store unavailable")
 	}
-	if target, ok := t.dedupTarget(candidates, replaces); ok {
+	if target, ok := t.dedupTarget(candidates, replaces, mt); ok {
 		if err := t.store.Reinforce(ctx, target.ID, t.clock.Now()); err != nil {
 			t.log.Error("remember: reinforce failed", "err", err)
 			return RememberOutput{}, errors.New("remember: store unavailable")
@@ -230,14 +230,16 @@ func (t *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberO
 }
 
 // dedupTarget returns the best candidate a new memory should be merged into: the first, in
-// score order, at or above the dedup threshold that is neither superseded nor being replaced.
+// score order, at or above the dedup threshold that is live (not superseded or soft-forgotten)
+// and not being replaced. A replacement dedups only into its own type, so a procedural
+// correction never folds into a near-identical episode.
 // shortcut: Search returns autoLinkK=5 candidates, 5 skipped ones hide a live duplicate at rank 6, raise autoLinkK if that shows up
-func (t *Tools) dedupTarget(cands []engram.RecallResult, replaces []string) (engram.RecallResult, bool) {
+func (t *Tools) dedupTarget(cands []engram.RecallResult, replaces []string, mt engram.MemoryType) (engram.RecallResult, bool) {
 	for _, c := range cands {
 		if c.Score < t.dedupThreshold {
 			break
 		}
-		if c.Superseded || slices.Contains(replaces, string(c.ID)) {
+		if c.Superseded || c.Forgotten || slices.Contains(replaces, string(c.ID)) || (len(replaces) > 0 && c.Type != mt) {
 			continue
 		}
 		return c, true
@@ -256,7 +258,7 @@ func (t *Tools) applySupersedes(ctx context.Context, ids []string) []string {
 		mids[i] = engram.MemoryID(sid)
 	}
 	if err := t.store.Supersede(ctx, mids); err != nil {
-		t.log.Error("remember: supersede failed (memory stored)", "err", err)
+		t.log.Error("remember: supersede failed (memory stored)", "err", err, "ids", ids)
 		return nil
 	}
 	return ids

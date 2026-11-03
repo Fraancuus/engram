@@ -468,6 +468,9 @@ func TestRecallKAboveDefaultPool(t *testing.T) {
 	if len(out.Results) != 100 {
 		t.Errorf("results = %d, want 100", len(out.Results))
 	}
+	if st.LastSearchK != 150 {
+		t.Errorf("search k = %d, want 150", st.LastSearchK)
+	}
 }
 
 func TestRecallAllDeadIsEmpty(t *testing.T) {
@@ -551,11 +554,11 @@ func TestPropagateThresholdBoundary(t *testing.T) {
 	}
 	now := h.clock.Now()
 	for id, want := range map[engram.MemoryID]bool{"at": true, "under": false, "explicit": true} {
-		res, err := st.Search(ctx, nil, orth(map[engram.MemoryID]int{"at": 1, "under": 2, "explicit": 3}[id]), 1)
-		if err != nil || len(res) == 0 {
-			t.Fatalf("search %s: %v", id, err)
+		m, ok := st.Snapshot(id)
+		if !ok {
+			t.Fatalf("snapshot %s: missing", id)
 		}
-		if got := res[0].LastAccessed.Equal(now); got != want {
+		if got := m.LastAccessed.Equal(now); got != want {
 			t.Errorf("%s refreshed = %v, want %v", id, got, want)
 		}
 	}

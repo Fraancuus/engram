@@ -3,8 +3,11 @@ package mcp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -99,16 +102,7 @@ func TestDoRememberSupersedeIgnoredForEpisodic(t *testing.T) {
 }
 
 func cand(id string, score float64, superseded bool) engram.RecallResult {
-	return engram.RecallResult{Memory: engram.Memory{ID: engram.MemoryID(id), Superseded: superseded}, Score: score}
-}
-
-func hasID(ids []engram.MemoryID, id engram.MemoryID) bool {
-	for _, x := range ids {
-		if x == id {
-			return true
-		}
-	}
-	return false
+	return engram.RecallResult{Memory: engram.Memory{ID: engram.MemoryID(id), Type: engram.Semantic, Superseded: superseded}, Score: score}
 }
 
 func TestDoRememberDedupSkipsNamedSupersede(t *testing.T) {
@@ -127,7 +121,7 @@ func TestDoRememberDedupSkipsNamedSupersede(t *testing.T) {
 	if len(out.Superseded) != 1 || out.Superseded[0] != "old" {
 		t.Errorf("Superseded = %v, want [old]", out.Superseded)
 	}
-	if hasID(st.Reinforced, "old") {
+	if slices.Contains(st.Reinforced, "old") {
 		t.Errorf("old was reinforced: %v", st.Reinforced)
 	}
 }
@@ -162,7 +156,7 @@ func TestDoRememberDedupFallsToNextLive(t *testing.T) {
 	if !out.Deduped || out.MemoryID != "live" || len(st.Puts) != 0 {
 		t.Errorf("out=%+v puts=%d, want deduped into live with no Put", out, len(st.Puts))
 	}
-	if !hasID(st.Reinforced, "live") || hasID(st.Reinforced, "old") {
+	if !slices.Contains(st.Reinforced, "live") || slices.Contains(st.Reinforced, "old") {
 		t.Errorf("Reinforced = %v, want only live", st.Reinforced)
 	}
 }
@@ -209,7 +203,7 @@ func TestDoRememberEpisodicSupersedesKeepsDedup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("doRemember: %v", err)
 	}
-	if !out.Deduped || !hasID(st.Reinforced, "old") || len(st.Superseded) != 0 {
+	if !out.Deduped || !slices.Contains(st.Reinforced, "old") || len(st.Superseded) != 0 {
 		t.Errorf("out=%+v reinforced=%v superseded=%v, want deduped, old reinforced, nothing superseded", out, st.Reinforced, st.Superseded)
 	}
 }
@@ -524,5 +518,198 @@ func TestDoRememberAutoLinkAtThreshold(t *testing.T) {
 	edges := st.LinkedEdges["test-id"]
 	if len(edges) != 1 || edges[0].To != "n1" || edges[0].Weight != 0.925 {
 		t.Errorf("auto-links = %+v, want only [{n1 0.925}]", edges)
+	}
+}
+
+// vecEmbedder maps content to a fixed vector, so a real MemStore sees controlled similarities.
+type vecEmbedder map[string]engram.Vector
+
+func (e vecEmbedder) Embed(_ context.Context, text string) (engram.Vector, error) {
+	return e[text], nil
+}
+
+// seqIDs mints "id1", "id2", ... for deterministic ids.
+func seqIDs() func() (engram.MemoryID, error) {
+	n := 0
+	return func() (engram.MemoryID, error) {
+		n++
+		return engram.MemoryID(fmt.Sprintf("id%d", n)), nil
+	}
+}
+
+func TestDoRememberDedupSkipsForgotten(t *testing.T) {
+	t.Parallel()
+	c := cand("gone", 0.97, false)
+	c.Forgotten = true
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{c}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	out, err := h.doRemember(context.Background(), validRemember())
+	if err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	if out.Deduped || len(st.Puts) != 1 || len(st.Reinforced) != 0 {
+		t.Errorf("Deduped=%v puts=%d reinforced=%v, want false/1/none", out.Deduped, len(st.Puts), st.Reinforced)
+	}
+}
+
+func TestRememberCorrectionNearForgottenIsRecallable(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := mock.NewMemStore()
+	emb := vecEmbedder{
+		"old":        {0, 0, 1},
+		"F":          {1, 0, 0},
+		"correction": {0.95, 0, 0.3122}, // cos 0.95 against F: index score ~0.975
+	}
+	h := NewTools(emb, nil, engram.TypeAwareDecay{}, st, fixedClock{}, WithIDGenerator(seqIDs()), WithoutRerank())
+	for _, c := range []string{"old", "F"} {
+		if _, err := h.Remember(ctx, RememberInput{Content: c, Type: "semantic", Namespace: "ns"}); err != nil {
+			t.Fatalf("remember %s: %v", c, err)
+		}
+	}
+	if _, err := h.Forget(ctx, ForgetInput{ID: "id2", Mode: "soft"}); err != nil {
+		t.Fatalf("forget: %v", err)
+	}
+	out, err := h.Remember(ctx, RememberInput{Content: "correction", Type: "semantic", Namespace: "ns", Supersedes: []string{"id1"}})
+	if err != nil {
+		t.Fatalf("remember correction: %v", err)
+	}
+	if out.Deduped {
+		t.Fatal("correction deduped into a soft-forgotten memory and was lost")
+	}
+	rec, err := h.Recall(ctx, RecallInput{Query: "correction", Namespaces: []string{"ns"}})
+	if err != nil {
+		t.Fatalf("recall: %v", err)
+	}
+	if len(rec.Results) == 0 || rec.Results[0].ID != out.MemoryID {
+		t.Errorf("recall = %+v, want the correction %s first", rec.Results, out.MemoryID)
+	}
+	if m, _ := st.Snapshot("id1"); !m.Superseded {
+		t.Error("old was not superseded")
+	}
+	if m, _ := st.Snapshot("id2"); !m.Forgotten {
+		t.Error("F lost its Forgotten flag")
+	}
+}
+
+func TestDoRememberReplacementSkipsOtherType(t *testing.T) {
+	t.Parallel()
+	c := cand("ep", 1.0, false)
+	c.Type = engram.Episodic
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{c}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	in := validRemember()
+	in.Type = "procedural"
+	in.Supersedes = []string{"std"}
+	out, err := h.doRemember(context.Background(), in)
+	if err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	if out.Deduped || len(st.Puts) != 1 || len(st.Reinforced) != 0 {
+		t.Errorf("Deduped=%v puts=%d reinforced=%v, want false/1/none", out.Deduped, len(st.Puts), st.Reinforced)
+	}
+	if len(out.Superseded) != 1 || out.Superseded[0] != "std" {
+		t.Errorf("Superseded = %v, want [std]", out.Superseded)
+	}
+}
+
+func TestDoRememberCrossTypeDedupWithoutReplaces(t *testing.T) {
+	t.Parallel()
+	c := cand("ep", 0.97, false)
+	c.Type = engram.Episodic
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{c}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	in := validRemember()
+	in.Type = "procedural"
+	out, err := h.doRemember(context.Background(), in)
+	if err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	if !out.Deduped || out.MemoryID != "ep" {
+		t.Errorf("out = %+v, want deduped into ep", out)
+	}
+}
+
+func TestDoRememberSupersedeFailureOnDedup(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SupersedeErr: errors.New("db-down"), SearchResults: []engram.RecallResult{cand("live", 0.99, false)}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	in := validRemember()
+	in.Supersedes = []string{"old"}
+	out, err := h.doRemember(context.Background(), in)
+	if err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	if !out.Deduped || out.Superseded != nil || !slices.Contains(st.Reinforced, "live") {
+		t.Errorf("out = %+v reinforced=%v, want deduped, no Superseded, live reinforced", out, st.Reinforced)
+	}
+}
+
+func TestDoRememberAbsentSupersedeTarget(t *testing.T) {
+	t.Parallel()
+	st := mock.NewMemStore()
+	emb := vecEmbedder{"hello world": {1, 0}}
+	h := NewTools(emb, nil, engram.TypeAwareDecay{}, st, fixedClock{}, WithIDGenerator(seqIDs()), WithoutRerank())
+	in := validRemember()
+	in.Supersedes = []string{"missing"}
+	out, err := h.Remember(context.Background(), in)
+	if err != nil {
+		t.Fatalf("remember: %v", err)
+	}
+	if _, ok := st.Snapshot(engram.MemoryID(out.MemoryID)); !ok || out.Deduped {
+		t.Error("memory was not stored")
+	}
+	if len(out.Superseded) != 1 || out.Superseded[0] != "missing" {
+		t.Errorf("Superseded = %v, want [missing]", out.Superseded)
+	}
+}
+
+func TestDoRememberDedupStopsAtThresholdAfterSkip(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{cand("old", 0.98, false), cand("related", 0.9499, false)}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	in := validRemember()
+	in.Supersedes = []string{"old"}
+	out, err := h.doRemember(context.Background(), in)
+	if err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	if out.Deduped || len(st.Puts) != 1 || slices.Contains(st.Reinforced, "related") {
+		t.Errorf("Deduped=%v puts=%d reinforced=%v, want false/1/related untouched", out.Deduped, len(st.Puts), st.Reinforced)
+	}
+}
+
+func TestDoRememberNoDetection(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{cand("older", 0.94, false)}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	out, err := h.doRemember(context.Background(), validRemember())
+	if err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	if out.Superseded != nil || len(st.Superseded) != 0 {
+		t.Errorf("Superseded = %v / %v, want none without an explicit supersedes", out.Superseded, st.Superseded)
+	}
+}
+
+func TestNewToolsShippedWeights(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := mock.NewMemStore()
+	emb := vecEmbedder{"fact": {1, 0}, "q": {0, 1}} // orthogonal: index score exactly 0.5
+	h := NewTools(emb, nil, engram.TypeAwareDecay{}, st, fixedClock{}, WithIDGenerator(seqIDs()), WithoutRerank())
+	imp := 0.4
+	if _, err := h.Remember(ctx, RememberInput{Content: "fact", Type: "semantic", Namespace: "ns", Importance: &imp}); err != nil {
+		t.Fatalf("remember: %v", err)
+	}
+	m, _ := st.Snapshot("id1")
+	r := engram.TypeAwareDecay{}.Retrievability(m, fixedClock{}.Now())
+	rec, err := h.Recall(ctx, RecallInput{Query: "q", Namespaces: []string{"ns"}})
+	if err != nil || len(rec.Results) != 1 {
+		t.Fatalf("recall = %+v, %v, want one result", rec.Results, err)
+	}
+	want := 0.5 + 0.3*imp + 0.01*r
+	if got := rec.Results[0].Score; math.Abs(got-want) > 1e-9 {
+		t.Errorf("score = %v, want %v", got, want)
 	}
 }
