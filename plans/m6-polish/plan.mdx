@@ -1,0 +1,289 @@
+---
+title: "M6 Polish: correcting the eval and the claim"
+kind: plan
+localOnly: true
+---
+
+### Summary
+
+After this change, retrievability stops penalising live memories, stale facts clear through explicit supersession, link thresholds sit on the store's real similarity scale, and `go run ./cmd/eval` states which query mix and which store cost its recommendation rests on. The README then says only what the new tables support. This delivers the eval-correction and README parts of milestone M6. Capabilities added: `recall-ranking`, `memory-supersession`, `similarity-thresholds`. Capabilities modified: `eval-dataset`, `eval-harness`, `eval-ci-gate`, `memory-store-fake`. Out of scope: `memory_stats` and the demo recording (see Open Questions), changing the `ENGRAM_DECAY` default, the `-rerank cosine` secondary table, sweep cost in the report, similarity-based staleness detection, and everything on the v2 list.
+
+The report will look like this. The bracketed values are unknown until the first run.
+
+<Code
+  id="report-shape"
+  language="text"
+  code={"rerank: none, mix: agent, lambda: 0.1\narm         ndcg@5  ...  store  score\nnone        [ ]          5000   [ ]\nuniform     [ ]          [ ]    [ ]\ntype-aware  [ ]          [ ]    [ ]\n\nbreak-even lambda vs none: uniform [ ], type-aware [ ]\nrecommended: [arm] (ENGRAM_DECAY=[arm]) on mix agent, lambda 0.1\n"}
+/>
+
+<Callout id="key-finding" tone="warning">
+
+**After this change, forgetting cannot beat never-forgetting on retrieval in any query class.** Supersession runs in every arm, and recall drops superseded memories in every arm, so `none` no longer has stale facts to trip over. Its fact nDCG should climb from 0.673 toward 1.0, level with `type-aware`. The store weight then decides A versus C. A rough estimate on the agent mix puts `none` near 0.98 and `type-aware` near 0.87 at about 30% of the store, so the break-even lambda is near 0.16. That makes the lambda value a decision about what the recommendation will say, so it belongs in Open Questions before the first run.
+
+</Callout>
+
+### Retrieval: filter first, tiebreak only
+
+The M5 run showed a permanent standard (R = 1) outranking a two-day-old episode the caller asked for: episode-recent nDCG 0.661, and episode access hit rate 0.412 against 0.989 under `none`. Two changes fix that. `defaultWRet` drops from 0.5 to 0.01, so R can reorder only memories already within 0.01 of each other. It stays a plain scalar so the sort remains a total order; a "within 0.01" comparator is not transitive and would break `sort.Slice`. Under `NullDecay` R is constant, so arm A's order is exactly sim + 0.3 importance.
+
+The filter also moves ahead of the pool cut, because a filter that runs after truncation still lets dead memories take pool slots.
+
+<Diagram id="recall-pipeline" frame="hide" caption="The pool cut moves after the filter, and it still comes before the reranker. Seeds stay capped at 50 before the filter because R cannot run inside the vector index.">
+
+```html
+<div class="diagram-panel" data-rough style="display:grid;gap:12px;padding:12px">
+  <div class="diagram-card" data-rough style="padding:10px">
+    <div class="diagram-pill">Today</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">
+      <div class="diagram-node">search + neighbors</div>
+      <div class="diagram-node">blend, cut to pool of 20</div>
+      <div class="diagram-node">filter dead</div>
+      <div class="diagram-node">score: sim + 0.3 imp + 0.5 R</div>
+      <div class="diagram-node">rerank</div>
+    </div>
+    <div class="diagram-muted" style="margin-top:8px">Dead memories hold pool slots; R outweighs relevance.</div>
+  </div>
+  <div class="diagram-card" data-rough style="padding:10px">
+    <div class="diagram-pill">After M6</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">
+      <div class="diagram-node">search + neighbors</div>
+      <div class="diagram-node">blend</div>
+      <div class="diagram-node">filter dead</div>
+      <div class="diagram-node">score: sim + 0.3 imp + 0.01 R</div>
+      <div class="diagram-node">cut to pool of 20</div>
+      <div class="diagram-node">rerank</div>
+    </div>
+    <div class="diagram-muted" style="margin-top:8px">Only live memories compete; R breaks near-ties.</div>
+  </div>
+</div>
+```
+
+</Diagram>
+
+### Supersession that actually replaces
+
+`remember` applies `Supersedes` to semantic writes as well as procedural ones, and the generator sets it on every fact chain. Detection by similarity stays v2. An episodic write's `Supersedes` is treated as absent throughout, so it cannot affect dedup. Recalling a chain-mate no longer refreshes an old version: `PropagateReinforce` skips superseded targets in both stores, using one Cypher predicate on a property Neo4j already holds, and skipped targets do not consume the cap of 20.
+
+There is also a data-loss bug on this path that the eval could never show. `doRemember` dedups and returns before it applies `Supersedes`. A correction such as "deploys on Tuesday" to "deploys on Thursday" can embed above raw cosine 0.90, and then the new content is dropped, the old memory is reinforced, and the replace never happens. The generator's chain band stays under 0.90, so no eval run would reach this. Dedup now skips a candidate that is already superseded or named in `Supersedes`, and supersession applies on the dedup path too, which also makes a retried correction idempotent.
+
+<Diff
+  id="dedup-diff"
+  filename="mcp/remember.go"
+  language="go"
+  mode="split"
+  before={"if len(candidates) > 0 && candidates[0].Score >= t.dedupThreshold {\n\t// reinforce candidates[0], return Deduped\n}\n// ...insert...\nif mt == engram.Procedural && len(in.Supersedes) > 0 {\n\t// supersede\n}\n"}
+  after={"replaces := in.Supersedes\nif mt == engram.Episodic {\n\treplaces = nil\n}\nif c, ok := t.dedupTarget(candidates, replaces); ok {\n\t// reinforce c, apply supersedes, return Deduped\n}\n// ...insert...\nout.Superseded = t.applySupersedes(ctx, replaces)\n"}
+  annotations={[
+    { side: "after", lines: "1-4", label: "One condition", note: "Dedup and supersession both key off replaces, so an episodic write cannot bypass dedup." },
+    { side: "after", lines: "5-7", label: "Skip what is being replaced", note: "dedupTarget skips superseded and named candidates; the first live one at or above the threshold decides." },
+  ]}
+/>
+
+### Thresholds on the real scale
+
+The Neo4j index returns (1 + cos) / 2, so the M1 and M2 constants meant less than they appeared to. M4 set `propagateThreshold` equal to `linkThreshold`, and this keeps that relation. Explicit links stay at weight 1.0 and always propagate. Stored edges keep their weights, so those below 0.925 still expand and stop propagating; no migration runs.
+
+<Table
+  id="thresholds"
+  columns={["Constant", "Today", "Raw cosine", "After", "Raw cosine"]}
+  rows={[
+    ["defaultDedupThreshold", "0.95", "0.90", "0.95", "0.90"],
+    ["linkThreshold", "0.85", "0.70", "0.925", "0.85"],
+    ["propagateThreshold", "0.85", "0.70", "0.925", "0.85"],
+  ]}
+  density="compact"
+/>
+
+The auto-link point moves to raw 0.85, so generator twins need their own band of [0.86, 0.89] to keep auto-linking without deduping. `sigmaTwin` drops from 1.5 to roughly 0.95, tuned against `TestTwinRange` only. Chain versions keep [0.74, 0.88]. Expect fewer edges than M5's 1,048 in every arm.
+
+### The instrument: named mix and store cost
+
+The M5 mix decided the M5 winner while staying hidden: 40% of queries asked for things the design means to forget. `Params` gains `Mix`, so the baseline records it and the existing stale guard catches a mismatch with no new code. Each mix is its own simulation, because a query reinforces what it returns, so re-weighting one run would misreport the store. `-mix` picks one per invocation and the README carries both tables.
+
+<Table
+  id="mixes"
+  columns={["Preset", "topic-current", "fact", "episode-recent", "episode-old", "bridge"]}
+  rows={[
+    ["agent (primary, default)", "35", "20", "30", "5", "10"],
+    ["stress (the M5 mix)", "25", "15", "20", "15", "25"],
+  ]}
+  density="compact"
+/>
+
+`agent` is an assumption, not a measurement: no real agent traces exist yet. An agent mostly asks for the current way of doing something and for what just happened, sometimes for a fact, and rarely for old chatter or a multi-hop association.
+
+The recommendation score is nDCG minus lambda times (store / store of `none`). Lambda defaults to 0.10, printed in the table, overridable with `-lambda`, and `-lambda 0` gives the retrieval-only answer. The tie rule stays: within 0.005, the smaller store wins. Store cost is a value judgement, because the in-memory fake has flat latency and measures nothing here. The report therefore also prints the lambda at which each decaying arm ties `none`, so a reader can apply their own.
+
+### Predictions, written before any run
+
+These are committed before the first M6 eval run, so git history shows lambda and the mix were not chosen from results. Any miss is reported next to its prediction and left standing. Seed 42, k=5, rerank none.
+
+<Table
+  id="predictions"
+  columns={["Metric", "M5", "Predicted"]}
+  rows={[
+    ["type-aware episode-recent nDCG", "0.661", "near 1.0"],
+    ["type-aware episode access hit rate", "0.412", "near 0.99"],
+    ["none fact nDCG", "0.673", "near 1.0"],
+    ["type-aware fact nDCG", "0.722", "near 1.0, tied with none"],
+    ["uniform fact nDCG", "0.648", "below none and type-aware"],
+    ["none episode-old, stress mix", "0.990", "unchanged within 0.02"],
+    ["type-aware episode-old", "0.000", "still 0.000"],
+    ["type-aware store", "1199", "higher: reinforcement reaches episodes, offset by pruned versions"],
+    ["retrieval-only winner, both mixes", "none", "none"],
+    ["recommendation at lambda 0.10, agent mix", "none (nDCG only)", "none, break-even near 0.16"],
+  ]}
+  density="compact"
+/>
+
+### Effect on the A/B/C comparison and the CI gate
+
+The gate's logic does not change: arm C against its own past, never against A or B, tolerance 0.02. Numbers move, so it is red by design from the ranking task until the re-baseline task. A baseline with no `mix` counts as stale rather than as a regression.
+
+<Table
+  id="abc-effect"
+  columns={["Change", "A/B/C comparison", "CI gate"]}
+  rows={[
+    ["Bounded tiebreak, filter first", "B and C stop losing fresh episodes; A's order changes only where the pool cut moved", "C's precision rises; re-baselined"],
+    ["Semantic supersession", "A and C converge on facts; uniform stays lower; no class left where forgetting beats none", "C's fact precision rises"],
+    ["Propagation skip", "Superseded versions prune under B and C; A keeps them", "Part of the re-baseline"],
+    ["Thresholds", "Fewer edges in every arm; less auto-link reach; explicit links untouched", "Part of the re-baseline"],
+    ["Named mix", "Can change the order of the arms, so both tables ship", "Runs the baseline's mix; update refuses any non-primary mix"],
+    ["Store-cost score", "Can change the recommendation with no retrieval number moving, and the report says so", "None; the gate compares precision only"],
+  ]}
+  density="compact"
+/>
+
+### Files
+
+No new package, port or interface. The domain ports `Embedder`, `Reranker`, `DecayModel` and `Clock` are consumed unchanged, and `mcp.Store` keeps its signatures. An architect review of the blend change found no misbehaving input for the 0.01 term and confirmed the arms still differ only by `DecayModel`.
+
+<FileTree
+  id="files"
+  entries={[
+    { path: "mcp/recall.go", change: "modified", note: "defaultWRet 0.01; blend loses k; pool cut moves after the filter; propagateThreshold 0.925." },
+    { path: "mcp/remember.go", change: "modified", note: "Semantic Supersedes; dedupTarget; applySupersedes; linkThreshold 0.925." },
+    { path: "mock/memstore.go", change: "modified", note: "PropagateReinforce skips superseded targets." },
+    { path: "neo4j/store.go", change: "modified", note: "One parameterized predicate in PropagateReinforce." },
+    { path: "eval/params.go", change: "modified", note: "Params.Mix, presets, ParseMix." },
+    { path: "eval/schedule.go", change: "modified", note: "buildQueries reads the preset." },
+    { path: "eval/dataset.go", change: "modified", note: "Fact versions carry Supersedes; twin band in bandScore." },
+    { path: "eval/vectors.go", change: "modified", note: "minTwinCos, maxTwinCos, sigmaTwin; comment rewritten." },
+    { path: "eval/report.go", change: "modified", note: "Score, break-even, header and recommendation line." },
+    { path: "eval/run.go", change: "modified", note: "Results.Lambda." },
+    { path: "eval/baseline.go", change: "modified", note: "Stale message names every field." },
+    { path: "eval/baseline.json", change: "modified", note: "Regenerated on amd64, gains params.mix." },
+    { path: "cmd/eval/main.go", change: "modified", note: "-mix and -lambda flags." },
+    { path: "README.md", change: "modified", note: "Claim, tables, recall description, archived M5 path." },
+    { path: "docs/engram-prd-v1.md", change: "modified", note: "M6 status line naming what stays open." },
+  ]}
+/>
+
+### Tasks
+
+Layer order runs domain, then mock, adapters, eval and cmd. Implementers are `sonnet`, task reviewers `opus`, each task test-first under `go test -race`. Full steps and test names are in `openspec/changes/m6-polish/plan.md`.
+
+<Table
+  id="tasks"
+  columns={["#", "Task", "Proved by"]}
+  rows={[
+    ["1", "Both stores skip superseded targets in propagation", "TestMemStorePropagateSkipsSuperseded, TestMemStorePropagateCapIgnoresSuperseded, TestStorePropagateReinforce"],
+    ["2", "Pre-pool filter and bounded tiebreak", "TestRecallBoundedTiebreak, TestRecallDeadCandidatesDoNotCrowdPool, TestRecallNullDecayOrder"],
+    ["3", "Semantic supersession and dedup bypass", "TestDoRememberDedupSkipsNamedSupersede, TestDoRememberDedupStillSupersedes, TestDoRememberEpisodicSupersedesKeepsDedup"],
+    ["4", "Thresholds and twin band", "TestPropagateThresholdBoundary, TestTwinRange"],
+    ["5", "Named query mix", "TestQueryMixAgent, TestQueryMixStress, TestMixKeepsCorpus, TestScaledKeepsMix"],
+    ["6", "Fact chains carry Supersedes", "Topic composition test, TestWriteSupersedesPrunedPredecessor"],
+    ["7", "Recommendation score and report", "TestRecommendStoreCostFlips, TestRecommendZeroStoreBaseline, TestBreakEven, TestReportNamesMix"],
+    ["8", "Gate message and flags", "TestCheckGateStale, TestCheckGateNoMixIsStale, TestGateIgnoresLambda, TestRunRejectsBadLambda"],
+    ["9", "Mid-branch reviewer and security-auditor", "Every blocking finding resolved"],
+    ["10", "Integration tests against Neo4j", "go test -race -tags=integration on neo4j, mcp and sweep"],
+    ["11", "Re-baseline, capture tables", "--ci twice, byte-identical arm C"],
+    ["12", "README and PRD status", "No claim beyond the tables"],
+    ["13", "Verify, ship, archive on this branch", "Archive commit on the branch before saying ready to merge"],
+  ]}
+  density="compact"
+/>
+
+### Risks
+
+<Table
+  id="risks"
+  columns={["Risk", "Mitigation"]}
+  rows={[
+    ["Lambda or the mix reads as chosen to flatter type-aware", "Both fixed before any run; break-even and the stress table printed; -lambda 0 documented"],
+    ["A 0.01 additive term is not literally a tiebreak", "Bounded to the same 0.01; a table test pins gaps of 0.009 and 0.011; architect confirmed"],
+    ["Fewer auto-links weaken real recall", "Raw 0.85 is the specified value; explicit links unaffected; edge counts reported"],
+    ["Five skipped dedup candidates hide a live duplicate at rank 6", "Accepted and noted in a shortcut comment; a duplicate costs less than a lost correction"],
+    ["Retuning sigmaTwin moves frozen geometry", "Only twin pairs move; tuned to a band test with no eval output read"],
+    ["The new baseline may not reproduce on Linux", "The PR's CI eval job on ubuntu is the proof, as it was for M5"],
+  ]}
+  density="compact"
+/>
+
+### Verification
+
+`go build ./...`, `go test -race ./...`, `golangci-lint run ./...`, then `go run ./cmd/eval --update-baseline -seed 42` on amd64 and `go run ./cmd/eval --ci` twice with byte-identical arm C rows. Tables come from `-seed 42 -seeds 1` on `agent`, on `-mix stress`, and with `-lambda 0`, and they go into `design.md` beside the predictions. `go test -race -tags=integration` runs against Docker Neo4j to exercise the Cypher predicate. The one PR carries code, archive and synced specs; "ready to merge" is said only once the archive commit is on the branch.
+
+### Open Questions
+
+<QuestionForm
+  id="open-questions"
+  questions={[
+    {
+      id: "lambda",
+      title: "What should the default lambda be?",
+      subtitle: "A value judgement to settle before the first run. It is not changed afterwards. The estimated break-even against none is about 0.16.",
+      mode: "single",
+      options: [
+        { id: "l010", label: "0.10", detail: "A 10x larger store is worth about 0.09 nDCG. On the estimate, the recommendation stays none.", recommended: true },
+        { id: "l020", label: "0.20", detail: "Store size counts twice as much. On the estimate, the recommendation becomes type-aware." },
+        { id: "l005", label: "0.05", detail: "Store size barely matters. The recommendation stays none." },
+      ],
+      required: true,
+    },
+    {
+      id: "agent-mix",
+      title: "Is 35/20/30/5/10 the right agent mix?",
+      subtitle: "Topic-current, fact, episode-recent, episode-old, bridge. Each number is an assumption, so a better-informed guess beats mine.",
+      mode: "single",
+      options: [
+        { id: "keep", label: "Keep 35/20/30/5/10", recommended: true },
+      ],
+      required: true,
+    },
+    {
+      id: "chain-coverage",
+      title: "Should the generator set Supersedes on every fact chain?",
+      subtitle: "Every chain removes all stale facts, which leaves no query class where forgetting beats none. Real callers will sometimes forget to pass it.",
+      mode: "single",
+      options: [
+        { id: "every", label: "Every chain", detail: "Matches the launch scope. The cleanest statement of what explicit supersession does.", recommended: true },
+        { id: "most", label: "Most chains, about 70%", detail: "Keeps some implicit staleness as a realistic caller error, which hands forgetting a place to help. More to defend." },
+      ],
+      required: true,
+    },
+    {
+      id: "break-even",
+      title: "Should the report print the break-even lambda?",
+      subtitle: "Not in the launch scope. It costs one function and one report line.",
+      mode: "single",
+      options: [
+        { id: "keep", label: "Print it", detail: "Readers can see how close the recommendation sits to the constant.", recommended: true },
+        { id: "strike", label: "Leave it out", detail: "Smaller report; the sensitivity stays implicit." },
+      ],
+      required: true,
+    },
+    {
+      id: "m6-rest",
+      title: "PRD M6 also lists memory_stats and the demo recording. Where do they go?",
+      subtitle: "v1 is not done without a real agent using the MCP server end to end.",
+      mode: "single",
+      options: [
+        { id: "follow-up", label: "A follow-up change after this PR", detail: "Keeps this PR to the eval correction. memory_stats is a new MCP tool and needs its own review.", recommended: true },
+        { id: "this-pr", label: "Add them to this change", detail: "One milestone, one PR, as the repo rule states, at the cost of a much larger review." },
+      ],
+      required: true,
+    },
+  ]}
+  submitLabel="Send answers"
+/>
