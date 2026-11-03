@@ -20,9 +20,9 @@ const dimDefault = 128
 // thresholds (dedup 0.95, auto-link and propagate 0.925) apply to that scale, so in
 // raw cosine the dedup point is 0.90 and the link point is 0.85. Hence: ordinary
 // pairs stay below the link point, twins sit in [minTwinCos, maxTwinCos] between the
-// link and dedup points so they auto-link, chain versions sit in [minLinkedCos,
-// maxLinkedCos]; they carry explicit links, and any above the link point also
-// auto-link, and nothing reaches the dedup point.
+// link and dedup points so they auto-link, and chain versions sit in
+// [minLinkedCos, maxLinkedCos]. Chain versions carry explicit links, and any
+// above the link point also auto-link. Nothing reaches the dedup point.
 const (
 	// sigmaInTopic scales the per-memory noise added to a topic centroid.
 	sigmaInTopic = 0.97

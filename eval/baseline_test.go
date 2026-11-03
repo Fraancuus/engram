@@ -109,7 +109,7 @@ func TestBaselineRoundTripAndArch(t *testing.T) {
 		t.Fatalf("got %+v, %v; want %+v", got, err, want)
 	}
 	raw, _ := os.ReadFile(path) // #nosec G304 -- test temp path
-	for _, k := range []string{`"precision_at_k"`, `"ndcg_at_k"`, `"goarch"`, `"params"`, `"rerank"`} {
+	for _, k := range []string{`"precision_at_k"`, `"ndcg_at_k"`, `"goarch"`, `"params"`, `"rerank"`, `"mix"`, `"seed"`} {
 		if !strings.Contains(string(raw), k) {
 			t.Errorf("missing key %s", k)
 		}
@@ -190,7 +190,7 @@ func TestCheckGateStale(t *testing.T) {
 			t.Errorf("%s: want stale error", name)
 			continue
 		}
-		for _, s := range []string{"baseline stale", "--update-baseline", "seed", "mix", "rerank", "k"} {
+		for _, s := range []string{"baseline stale", "--update-baseline", "seed", "mix", "rerank", "or k"} {
 			if !strings.Contains(err.Error(), s) {
 				t.Errorf("%s: error %q missing %q", name, err, s)
 			}

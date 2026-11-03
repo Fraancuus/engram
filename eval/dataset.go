@@ -344,8 +344,8 @@ func (d *Dataset) bestDraw(i int, ts topicSpan, cents []engram.Vector, draw func
 // as a fraction of the band's half-width: at most 1 means every pair is inside
 // its band. The band is [minTwinCos, maxTwinCos] for a twin pair,
 // [minLinkedCos, maxLinkedCos] for two versions of one fact chain and
-// [minOrdinaryCos, maxOrdinaryCos] for any other pair. This enforces the auto-link and dedup scales (see vectors.go) by
-// construction.
+// [minOrdinaryCos, maxOrdinaryCos] for any other pair. This enforces the
+// auto-link and dedup scales (see vectors.go) by construction.
 func (d *Dataset) bandScore(i int, ts topicSpan) float64 {
 	mi := d.Memories[i]
 	worst := 0.0

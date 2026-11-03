@@ -321,12 +321,47 @@ func TestAccessHitSummaryAndTable(t *testing.T) {
 	}
 }
 
+func TestDefaultLambda(t *testing.T) {
+	t.Parallel()
+	if DefaultLambda != 0.10 {
+		t.Fatalf("DefaultLambda = %v, want 0.10", DefaultLambda)
+	}
+}
+
 func TestRecommendStoreCostFlips(t *testing.T) {
 	t.Parallel()
 	r := fakeResults(0.98, 0.1, 0.90, 5000, 5000, 1500)
 	r.Lambda = 0.20
 	if got := Recommend(r); got != engram.DecayTypeAware {
 		t.Fatalf("got %s want type-aware", got)
+	}
+	// The scores behind the flip: none 0.98 - 0.20*1 = 0.78, type-aware
+	// 0.90 - 0.20*0.3 = 0.84.
+	base := storeBaseline(r)
+	for name, want := range map[string]float64{engram.DecayNone: 0.78, engram.DecayTypeAware: 0.84} {
+		if got := armScore(r.Summary(name), base, r.Lambda); math.Abs(got-want) > 1e-9 {
+			t.Errorf("%s score = %v, want %v", name, got, want)
+		}
+	}
+	var buf bytes.Buffer
+	WriteTable(&buf, r)
+	for name, want := range map[string]string{engram.DecayNone: "0.780", engram.DecayTypeAware: "0.840"} {
+		fields, line := lineFields(buf.String(), name)
+		if line < 0 {
+			t.Fatalf("no %s row in:\n%s", name, buf.String())
+		}
+		if got := fields[14]; got != want {
+			t.Errorf("%s row score = %s, want %s (row %v)", name, got, want, fields)
+		}
+	}
+}
+
+func TestRecommendHugeLambda(t *testing.T) {
+	t.Parallel()
+	r := fakeResults(0.98, 0.90, 0.90, 5000, 5000, 1500)
+	r.Lambda = 1e308
+	if got := Recommend(r); got == "" {
+		t.Fatal("Recommend returned no arm for a huge lambda")
 	}
 }
 
@@ -345,7 +380,7 @@ func TestRecommendNoNoneArm(t *testing.T) {
 	if got := storeBaseline(r); got != 4000 {
 		t.Fatalf("baseline = %v want 4000 (largest arm)", got)
 	}
-	r.Lambda = 0.20 // costs 0.05 vs 0.0125: type-aware 0.8675 beats uniform 0.85
+	r.Lambda = 0.20 // costs 0.20 vs 0.05: type-aware 0.83 beats uniform 0.70
 	if got := Recommend(r); got != engram.DecayTypeAware {
 		t.Fatalf("got %s want type-aware", got)
 	}
@@ -404,7 +439,8 @@ func TestReportBreakEvenLine(t *testing.T) {
 	r := fakeResults(0.98, 0.90, 0.90, 5000, 5000, 1500)
 	var buf bytes.Buffer
 	WriteTable(&buf, r)
-	want := "break-even lambda vs none: uniform n/a, type-aware 0.114\n"
+	// The two summary lines sit together, one blank line after the last table.
+	want := "\n\nbreak-even lambda vs none: uniform n/a, type-aware 0.114\nrecommended: "
 	if !strings.Contains(buf.String(), want) {
 		t.Errorf("missing %q in:\n%s", want, buf.String())
 	}
@@ -413,6 +449,22 @@ func TestReportBreakEvenLine(t *testing.T) {
 	WriteTable(&buf, r)
 	if strings.Contains(buf.String(), "break-even") {
 		t.Errorf("break-even line without arm none in:\n%s", buf.String())
+	}
+}
+
+func TestReportNoBreakEvenWithOnlyNone(t *testing.T) {
+	t.Parallel()
+	r := fakeResults(0.98, 0.90, 0.90, 5000, 5000, 1500)
+	delete(r.Arms, engram.DecayUniform)
+	delete(r.Arms, engram.DecayTypeAware)
+	var buf bytes.Buffer
+	WriteTable(&buf, r)
+	out := buf.String()
+	if strings.Contains(out, "break-even") {
+		t.Errorf("break-even line with only arm none in:\n%s", out)
+	}
+	if !strings.Contains(out, "\n\nrecommended: none ") {
+		t.Errorf("recommended line not set off by one blank line in:\n%s", out)
 	}
 }
 

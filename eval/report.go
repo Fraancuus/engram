@@ -38,7 +38,8 @@ func armScore(s Summary, base, lambda float64) float64 {
 	if base <= 0 {
 		return s.NDCG.Mean
 	}
-	return s.NDCG.Mean - lambda*s.FinalSize.Mean/base
+	// Divide first: lambda * size could overflow for a huge finite lambda.
+	return s.NDCG.Mean - lambda*(s.FinalSize.Mean/base)
 }
 
 // breakEven returns the lambda at which arm's score equals none's, or false
@@ -150,11 +151,11 @@ func WriteTable(w io.Writer, r *Results) {
 	}
 	_ = tw.Flush()
 
+	var parts []string
 	if len(r.Arms[engram.DecayNone]) > 0 {
 		none := r.Summary(engram.DecayNone)
-		var parts []string
-		for _, name := range armOrder[1:] {
-			if len(r.Arms[name]) == 0 {
+		for _, name := range armOrder {
+			if name == engram.DecayNone || len(r.Arms[name]) == 0 {
 				continue
 			}
 			if l, ok := breakEven(none, r.Summary(name)); ok {
@@ -163,11 +164,13 @@ func WriteTable(w io.Writer, r *Results) {
 				parts = append(parts, name+" n/a")
 			}
 		}
-		_, _ = fmt.Fprintf(w, "\nbreak-even lambda vs none: %s\n", strings.Join(parts, ", "))
 	}
-
+	_, _ = fmt.Fprint(w, "\n")
+	if len(parts) > 0 {
+		_, _ = fmt.Fprintf(w, "break-even lambda vs none: %s\n", strings.Join(parts, ", "))
+	}
 	rec := Recommend(r)
-	_, _ = fmt.Fprintf(w, "\nrecommended: %s (ENGRAM_DECAY=%s) on mix %s, lambda %g\n", rec, rec, r.Params.Mix, r.Lambda)
+	_, _ = fmt.Fprintf(w, "recommended: %s (ENGRAM_DECAY=%s) on mix %s, lambda %g\n", rec, rec, r.Params.Mix, r.Lambda)
 }
 
 // WriteJSON writes r as indented JSON. Durations marshal as nanoseconds.

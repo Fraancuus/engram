@@ -62,7 +62,7 @@ func (p Params) Scaled(n int) Params {
 	return p
 }
 
-// Validate reports the first dimension of p that is below its floor.
+// Validate reports an unknown mix, then the first dimension of p below its floor.
 func (p Params) Validate() error {
 	if _, err := ParseMix(p.Mix); err != nil {
 		return err

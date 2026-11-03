@@ -194,3 +194,24 @@ func TestFloorEntityPool(t *testing.T) {
 	}
 	t.Logf("entity pool %d", len(d.Entities))
 }
+
+// A bridge label that has a successor by query time is demoted by recall in every
+// arm, so the query would score a miss no arm could avoid.
+func TestNoLabelOnSupersededMemory(t *testing.T) {
+	t.Parallel()
+	for name, d := range map[string]*Dataset{"agent": floorDS(t), "stress": stressDS(t)} {
+		succ := map[string]int{} // GID -> write day of its successor
+		for _, m := range d.Memories {
+			if m.Supersedes != "" {
+				succ[m.Supersedes] = m.WriteDay
+			}
+		}
+		for _, q := range d.Queries {
+			for _, g := range q.Relevant {
+				if day, ok := succ[g]; ok && day <= q.Day {
+					t.Fatalf("%s mix: %s (%v, day %d) labels %s, superseded on day %d", name, q.ID, q.Class, q.Day, g, day)
+				}
+			}
+		}
+	}
+}

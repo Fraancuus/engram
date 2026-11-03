@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Fraancuus/engram"
+	"github.com/Fraancuus/engram/mcp"
 	"github.com/Fraancuus/engram/mock"
 )
 
@@ -314,30 +315,38 @@ func TestWriteSupersedesPrunedPredecessor(t *testing.T) {
 	a := newArm(engram.UniformDecay{}, ds, RerankNone)
 	ctx := context.Background()
 	var put func(m Memory)
-	put = func(m Memory) { // dependencies first: a write may only link to what exists
+	putDeps := func(m Memory) { // dependencies first: a write may only link to what exists
 		for _, g := range m.Links {
-			if _, ok := a.ids[g]; !ok {
-				dep, _ := ds.Lookup(g)
-				put(dep)
+			if _, ok := a.ids[g]; ok {
+				continue
 			}
+			dep, ok := ds.Lookup(g)
+			if !ok {
+				t.Fatalf("%s links unknown gid %s", m.GID, g)
+			}
+			put(dep)
 		}
+	}
+	put = func(m Memory) {
+		putDeps(m)
 		if err := a.write(ctx, m); err != nil {
 			t.Fatalf("write %s: %v", m.GID, err)
 		}
 	}
 	put(v1)
-	for _, g := range v2.Links { // everything v2 links must exist; only v1 is then pruned
-		if _, ok := a.ids[g]; !ok {
-			dep, _ := ds.Lookup(g)
-			put(dep)
-		}
-	}
+	putDeps(v2) // everything v2 links must exist; only v1 is then pruned
 	if err := a.store.Delete(ctx, engram.MemoryID(a.ids[v1.GID])); err != nil {
 		t.Fatalf("delete v1: %v", err)
 	}
 	// v2 also links v1, which is gone: the write must not fail on either edge.
 	if err := a.write(ctx, v2); err != nil {
 		t.Fatalf("write v2 over pruned v1: %v", err)
+	}
+	if _, ok := a.store.Snapshot(engram.MemoryID(a.ids[v1.GID])); ok {
+		t.Error("pruned v1 is back in the store")
+	}
+	if _, ok := a.store.Snapshot(engram.MemoryID(a.ids[v2.GID])); !ok {
+		t.Error("v2 missing from the store after the write")
 	}
 }
 
@@ -363,6 +372,21 @@ func TestAccessEmptyRecallIsMiss(t *testing.T) {
 		t.Skip("tiny dataset writes every namespace on day 0")
 	}
 	ds.Accesses = []Access{{GID: target.GID, Day: 0}}
+	// Precondition: replay day 0 (where the access fires) and repeat its recall;
+	// it must return nothing, or the miss below would prove nothing.
+	ctx := context.Background()
+	a := newArm(engram.NullDecay{}, &ds, RerankNone)
+	if err := a.day(ctx, &ds, 0, 5, newAcc()); err != nil {
+		t.Fatalf("day 0: %v", err)
+	}
+	one := accessK
+	pre, err := a.tools.Recall(ctx, mcp.RecallInput{Query: target.Content, Namespaces: []string{string(target.Namespace)}, K: &one})
+	if err != nil {
+		t.Fatalf("precondition recall: %v", err)
+	}
+	if len(pre.Results) != 0 {
+		t.Fatalf("precondition: recall returned %d results, want none", len(pre.Results))
+	}
 	res, err := runArm(context.Background(), engram.DecayNone, engram.NullDecay{}, &ds, 5, RerankNone)
 	if err != nil {
 		t.Fatalf("runArm: %v", err)
@@ -372,5 +396,56 @@ func TestAccessEmptyRecallIsMiss(t *testing.T) {
 	}
 	if h, ok := res.AccessHit[target.Kind]; !ok || h != 0 {
 		t.Errorf("AccessHit = %v (present %v), want 0 present", h, ok)
+	}
+}
+
+// A hop pruned from the store still counts in the label set: the query is scored
+// against both labels, so losing one caps recall at 0.5.
+func TestPrunedHopKeepsLabels(t *testing.T) {
+	t.Parallel()
+	ds := tinyDataset(t)
+	var q Query
+	for _, c := range ds.Queries {
+		if c.Class != QBridgeLink && c.Class != QBridgeEntity {
+			continue
+		}
+		x, _ := ds.Lookup(c.Relevant[0])
+		y, _ := ds.Lookup(c.Relevant[1])
+		if x.WriteDay < c.Day && y.WriteDay < c.Day {
+			q = c
+			break
+		}
+	}
+	if q.ID == "" {
+		t.Fatal("no bridge query with both labels written before its day")
+	}
+	a := newArm(engram.NullDecay{}, ds, RerankNone)
+	acc := newAcc()
+	for d := 0; d < q.Day; d++ {
+		if err := a.day(context.Background(), ds, d, 5, acc); err != nil {
+			t.Fatalf("day %d: %v", d, err)
+		}
+	}
+	ctx := context.Background()
+	if err := a.store.Delete(ctx, engram.MemoryID(a.ids[q.Relevant[0]])); err != nil {
+		t.Fatalf("delete hop X: %v", err)
+	}
+	a.clock.Set(dayTime(q.Day))
+	acc = newAcc()
+	if err := a.query(ctx, ds, q, 5, acc); err != nil {
+		t.Fatalf("query over a pruned hop: %v", err)
+	}
+	if len(acc.rec) != 1 || acc.rec[0] > 0.5 {
+		t.Fatalf("recall = %v, want one score at most 0.5 (both labels count)", acc.rec)
+	}
+}
+
+func TestBuildQueriesUnknownMix(t *testing.T) {
+	t.Parallel()
+	p := tinyParams()
+	p.Mix = "weekend"
+	_, err := generateUnchecked(p)
+	if err == nil || !strings.Contains(err.Error(), "weekend") {
+		t.Fatalf("err = %v, want an error naming the mix \"weekend\"", err)
 	}
 }
