@@ -15,7 +15,7 @@
 - **Branch**: `feat/m5-eval` (renamed from `feature/feat-m6` before the first push)
 - **Base branch**: `main`
 - **Final state**: `pr-open`
-- **PR URL**: `PENDING`
+- **PR URL**: `https://github.com/Fraancuus/engram/pull/31`
 
 ---
 
@@ -28,7 +28,7 @@
 
 ## PR comment
 
-- **Comment status**: `PENDING`
+- **Comment status**: `posted`
 
 ---
 
