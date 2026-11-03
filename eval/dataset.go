@@ -20,7 +20,7 @@ type Kind int
 // Memory kinds.
 const (
 	KindStandard Kind = iota // procedural, versioned
-	KindFact                 // semantic, write-once
+	KindFact                 // semantic, versioned in chains: each version supersedes its predecessor
 	KindEpisode              // episodic
 )
 
@@ -90,7 +90,7 @@ type Memory struct {
 	Importance float64
 	Entities   []string
 	Links      []string // GIDs written no later than this memory
-	Supersedes string   // GID of the previous standard version
+	Supersedes string   // GID of the previous version in the standard or fact chain; empty for v1
 	WriteDay   int
 	Twin       string // GID of the sibling episode this one is a near-copy of
 }
@@ -203,6 +203,9 @@ func (d *Dataset) buildMemories(r *rand.Rand) {
 			var chain []int
 			for v := 1; v <= n; v++ {
 				m := Memory{GID: fmt.Sprintf("t%03d/fact/c%d/v%d", t, c+1, v), Type: engram.Semantic, Kind: KindFact, Version: v, Chain: c + 1, Importance: 0.5}
+				if v > 1 {
+					m.Supersedes = d.Memories[chain[v-2]].GID
+				}
 				chain = append(chain, add(m))
 			}
 			ts.facts = append(ts.facts, chain...)

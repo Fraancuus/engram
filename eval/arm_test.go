@@ -296,3 +296,47 @@ func TestAccessHitRate(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteSupersedesPrunedPredecessor(t *testing.T) {
+	t.Parallel()
+	ds := tinyDataset(t)
+	var v1, v2 Memory
+	for _, m := range ds.Memories {
+		if m.Kind == KindFact && m.Version == 2 {
+			v2 = m
+			v1, _ = ds.Lookup(m.Supersedes)
+			break
+		}
+	}
+	if v1.GID == "" {
+		t.Fatal("no fact v2 with a Supersedes predecessor")
+	}
+	a := newArm(engram.UniformDecay{}, ds, RerankNone)
+	ctx := context.Background()
+	var put func(m Memory)
+	put = func(m Memory) { // dependencies first: a write may only link to what exists
+		for _, g := range m.Links {
+			if _, ok := a.ids[g]; !ok {
+				dep, _ := ds.Lookup(g)
+				put(dep)
+			}
+		}
+		if err := a.write(ctx, m); err != nil {
+			t.Fatalf("write %s: %v", m.GID, err)
+		}
+	}
+	put(v1)
+	for _, g := range v2.Links { // everything v2 links must exist; only v1 is then pruned
+		if _, ok := a.ids[g]; !ok {
+			dep, _ := ds.Lookup(g)
+			put(dep)
+		}
+	}
+	if err := a.store.Delete(ctx, engram.MemoryID(a.ids[v1.GID])); err != nil {
+		t.Fatalf("delete v1: %v", err)
+	}
+	// v2 also links v1, which is gone: the write must not fail on either edge.
+	if err := a.write(ctx, v2); err != nil {
+		t.Fatalf("write v2 over pruned v1: %v", err)
+	}
+}

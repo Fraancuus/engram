@@ -108,9 +108,16 @@ func TestTopicComposition(t *testing.T) {
 				t.Fatalf("%s: type/importance", m.GID)
 			}
 		case KindFact:
+			prev := ""
+			if ch := tp.chains[m.Chain]; len(ch) > 0 {
+				prev = ch[len(ch)-1].GID
+			}
 			tp.chains[m.Chain] = append(tp.chains[m.Chain], m)
-			if m.Type != engram.Semantic || m.Importance != 0.5 || m.Supersedes != "" {
-				t.Fatalf("%s: type/importance/supersedes", m.GID)
+			if m.Type != engram.Semantic || m.Importance != 0.5 {
+				t.Fatalf("%s: type/importance", m.GID)
+			}
+			if m.Supersedes != prev {
+				t.Fatalf("%s: supersedes %q, want chain predecessor %q", m.GID, m.Supersedes, prev)
 			}
 		case KindEpisode:
 			tp.eps = append(tp.eps, m)
