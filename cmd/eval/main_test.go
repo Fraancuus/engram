@@ -138,7 +138,11 @@ func writeTestBaseline(t *testing.T, mix string) string {
 	b := eval.Baseline{K: 3, Seed: 7, GOARCH: "amd64", Rerank: "none", Params: eval.Floor(), PrecisionAtK: 0.5, NDCGAtK: 0.5}
 	b.Params.Mix = mix
 	path := filepath.Join(t.TempDir(), "base.json")
-	if err := eval.WriteBaseline(path, b); err != nil {
+	data, err := json.Marshal(b) // not WriteBaseline: it refuses non-amd64 hosts
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -163,8 +167,8 @@ func TestRunPlumbsFlags(t *testing.T) {
 		{"default lambda", func(*testing.T) []string { return nil }, 0,
 			[]string{"lambda: 0.1\n", "lambda 0.1\n"}, nil, eval.MixAgent, 0, 0},
 		{"ci adopts baseline mix", func(t *testing.T) []string {
-			return []string{"--ci", "-mix", "agent", "-baseline", writeTestBaseline(t, eval.MixStress)}
-		}, 0, []string{"eval gate passed"}, []string{"ignoring -mix"}, eval.MixStress, 7, 3},
+			return []string{"--ci", "-mix", "agent", "-rerank", "cosine", "-baseline", writeTestBaseline(t, eval.MixStress)}
+		}, 0, []string{"eval gate passed"}, []string{"ignoring -mix", "ignoring -rerank"}, eval.MixStress, 7, 3},
 		{"ci no-mix baseline is stale", func(t *testing.T) []string {
 			return []string{"--ci", "-baseline", writeTestBaseline(t, "")}
 		}, 1, nil, []string{"baseline stale"}, eval.MixAgent, 0, 0},
@@ -200,12 +204,12 @@ func TestRunPlumbsFlags(t *testing.T) {
 	}
 }
 
-// Not parallel: it swaps the package-level runEval and checkArch.
+// Not parallel: it swaps the package-level runEval.
 func TestRunUpdateBaselinePlumbsSeedAndMix(t *testing.T) {
+	if eval.CheckBaselineArch() != nil {
+		t.Skip("non-amd64 host")
+	}
 	stubRunEval(t)
-	old := checkArch
-	checkArch = func() error { return nil }
-	t.Cleanup(func() { checkArch = old })
 	path := filepath.Join(t.TempDir(), "b.json")
 	var out, errb bytes.Buffer
 	if code := run([]string{"--update-baseline", "-seed", "42", "-baseline", path}, &out, &errb); code != 0 {
