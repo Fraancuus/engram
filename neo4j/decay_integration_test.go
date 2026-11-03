@@ -128,12 +128,16 @@ func TestStorePropagateReinforce(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	ns := engram.Namespace(string(uniqueID("itest-prop")))
-	src, strong, weak := uniqueID("src"), uniqueID("strong"), uniqueID("weak")
+	src, strong, weak, stale := uniqueID("src"), uniqueID("strong"), uniqueID("weak"), uniqueID("stale")
 	old := time.Now().UTC().Add(-100 * 24 * time.Hour)
 	putBare(t, s, src, ns)
 	putAt(t, s, strong, ns, old)
 	putAt(t, s, weak, ns, old)
-	if err := s.Link(ctx, src, []engram.Link{{To: strong, Weight: 0.9}, {To: weak, Weight: 0.5}}); err != nil {
+	putAt(t, s, stale, ns, old)
+	if err := s.Supersede(ctx, []engram.MemoryID{stale}); err != nil {
+		t.Fatalf("Supersede: %v", err)
+	}
+	if err := s.Link(ctx, src, []engram.Link{{To: strong, Weight: 0.9}, {To: weak, Weight: 0.5}, {To: stale, Weight: 1.0}}); err != nil {
 		t.Fatalf("Link: %v", err)
 	}
 	now := time.Now().UTC()
@@ -153,5 +157,12 @@ func TestStorePropagateReinforce(t *testing.T) {
 	}
 	if gw.LastAccessed.After(old.Add(time.Hour)) {
 		t.Errorf("weak-edge neighbor should not be refreshed: %v", gw.LastAccessed)
+	}
+	gst, err := s.Get(ctx, stale)
+	if err != nil {
+		t.Fatalf("Get stale: %v", err)
+	}
+	if gst.LastAccessed.After(old.Add(time.Hour)) {
+		t.Errorf("superseded neighbor should not be refreshed: %v", gst.LastAccessed)
 	}
 }

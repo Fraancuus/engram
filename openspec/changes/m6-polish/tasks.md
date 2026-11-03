@@ -4,15 +4,15 @@ then. No eval run may be used to choose lambda, the mix or `sigmaTwin`.
 
 ## 1. Domain (root package)
 
-- [ ] 1.1 Pin the superseded-semantic curve already in `decay.go`: table cases in `decay_test.go` for `TypeAwareDecay` and `UniformDecay` at fixed virtual times, semantic superseded S = 2 d, R just above and below 0.05. Test: `TestRetrievabilitySupersededSemantic`. No production change expected; if one is needed, stop and report.
+- [x] 1.1 Pin the superseded-semantic curve already in `decay.go`: table cases in `decay_test.go` for `TypeAwareDecay` and `UniformDecay` at fixed virtual times, semantic superseded S = 2 d, R just above and below 0.05. Test: `TestRetrievabilitySupersededSemantic`. No production change expected; if one is needed, stop and report.
 
 ## 2. Mock store
 
-- [ ] 2.1 `mock.MemStore.PropagateReinforce` skips superseded targets without consuming the cap. Test: `TestMemStorePropagateSkipsSuperseded`, including 25 edges with the 5 heaviest superseded.
+- [x] 2.1 `mock.MemStore.PropagateReinforce` skips superseded targets without consuming the cap. Test: `TestMemStorePropagateSkipsSuperseded`, including 25 edges with the 5 heaviest superseded.
 
 ## 3. Adapters: recall ranking and supersession
 
-- [ ] 3.1 `neo4j.Store.PropagateReinforce` adds the superseded predicate to its parameterized Cypher, before `LIMIT` so skipped targets do not consume the cap. Test: extend `TestStorePropagateReinforce` under the `integration` tag.
+- [x] 3.1 `neo4j.Store.PropagateReinforce` adds the superseded predicate to its parameterized Cypher, before `LIMIT` so skipped targets do not consume the cap. Test: extend `TestStorePropagateReinforce` under the `integration` tag.
 - [ ] 3.2 `mcp/recall.go`: `defaultWRet` 0.01, `blend` loses `k`, truncate to the pool after `scoreAndFilter`. Tests: `TestRecallBoundedTiebreak` (0.009 and 0.011 gaps), `TestRecallFreshEpisodeBeatsStandard`, `TestRecallDeadCandidatesDoNotCrowdPool`, `TestRecallSoftThresholdBoundary`, `TestRecallNullDecayOrder`, `TestRecallKAboveDefaultPool`, `TestRecallAllDeadIsEmpty`, `TestDoRecallIncludeForgottenRanksDead`, updated `mcp/blend_test.go`.
 - [ ] 3.3 `mcp/remember.go`: `Supersedes` applies to semantic writes; dedup skips candidates superseded or named in `Supersedes`; field description updated. Tests: `TestDoRememberSupersedesSemantic`, `TestDoRememberSupersedeIgnoredForEpisodic` (replaces the non-procedural test), `TestDoRememberDedupSkipsNamedSupersede`, `TestDoRememberDedupSkipsSuperseded`, `TestDoRememberDedupFallsToNextLive`, `TestDoRememberDedupStillSupersedes`, `TestDoRememberDedupBoundaryUnchanged`, `TestDoRememberEpisodicSupersedesKeepsDedup`, `TestDoRememberRetriedCorrectionIdempotent`.
 - [ ] 3.4 `linkThreshold` and `propagateThreshold` become 0.925, comments state the raw-cosine equivalents, and the twin band moves in the same task so the tree stays green: `minTwinCos` 0.86, `maxTwinCos` 0.89, `sigmaTwin` retuned against the band test only, `bandScore` uses the twin band, `eval/vectors.go` comment rewritten. Tests: updated `mcp/remember_test.go` boundary cases at 0.925 and 0.9249, `TestPropagateThresholdBoundary`, updated `TestTwinRange` in `eval/dataset_test.go`. Check `go vet -tags=integration ./...` and fix any integration vectors that assumed 0.85.
