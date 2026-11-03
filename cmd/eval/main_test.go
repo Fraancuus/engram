@@ -157,30 +157,55 @@ func TestRunPlumbsFlags(t *testing.T) {
 		wantOut  []string
 		wantErr  []string
 		wantMix  string
-		wantSeed int64 // 0 means unchecked
-		wantK    int   // 0 means unchecked
+		wantSeed int64                             // 0 means unchecked
+		wantK    int                               // 0 means unchecked
+		after    func(t *testing.T, args []string) // optional; the baseline path is the last arg
 	}{
 		{"mix stress", func(*testing.T) []string { return []string{"-mix", "stress"} }, 0,
-			[]string{"mix: stress"}, nil, eval.MixStress, 0, 0},
+			[]string{"mix: stress"}, nil, eval.MixStress, 0, 0, nil},
 		{"lambda zero", func(*testing.T) []string { return []string{"-lambda", "0"} }, 0,
-			[]string{"lambda: 0\n", "lambda 0\n"}, nil, eval.MixAgent, 0, 0},
+			[]string{"lambda: 0\n", "lambda 0\n"}, nil, eval.MixAgent, 0, 0, nil},
 		{"default lambda", func(*testing.T) []string { return nil }, 0,
-			[]string{"lambda: 0.1\n", "lambda 0.1\n"}, nil, eval.MixAgent, 0, 0},
+			[]string{"lambda: 0.1\n", "lambda 0.1\n"}, nil, eval.MixAgent, 0, 0, nil},
 		{"ci adopts baseline mix", func(t *testing.T) []string {
 			return []string{"--ci", "-mix", "agent", "-rerank", "cosine", "-baseline", writeTestBaseline(t, eval.MixStress)}
-		}, 0, []string{"eval gate passed"}, []string{"ignoring -mix", "ignoring -rerank"}, eval.MixStress, 7, 3},
+		}, 0, []string{"eval gate passed"}, []string{"ignoring -mix", "ignoring -rerank"}, eval.MixStress, 7, 3, nil},
 		{"ci no-mix baseline is stale", func(t *testing.T) []string {
 			return []string{"--ci", "-baseline", writeTestBaseline(t, "")}
-		}, 1, nil, []string{"baseline stale"}, eval.MixAgent, 0, 0},
+		}, 1, nil, []string{"baseline stale"}, eval.MixAgent, 0, 0, nil},
 		{"ci no-mix baseline ignores -mix stress", func(t *testing.T) []string {
 			return []string{"--ci", "-mix", "stress", "-baseline", writeTestBaseline(t, "")}
-		}, 1, nil, []string{"baseline stale"}, eval.MixAgent, 0, 0},
+		}, 1, nil, []string{"baseline stale", "ignoring -mix"}, eval.MixAgent, 0, 0, nil},
+		{"update-baseline plumbs seed and mix", func(t *testing.T) []string {
+			if eval.CheckBaselineArch() != nil {
+				t.Skip("non-amd64 host")
+			}
+			return []string{"--update-baseline", "-seed", "42", "-baseline", filepath.Join(t.TempDir(), "b.json")}
+		}, 0, nil, nil, eval.MixAgent, 0, 0, func(t *testing.T, args []string) {
+			data, err := os.ReadFile(args[len(args)-1]) // #nosec G304 -- test temp path
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got struct {
+				Seed   int64 `json:"seed"`
+				Params struct {
+					Mix string `json:"mix"`
+				} `json:"params"`
+			}
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Seed != 42 || got.Params.Mix != eval.MixAgent {
+				t.Errorf("baseline seed %d mix %q, want 42 agent:\n%s", got.Seed, got.Params.Mix, data)
+			}
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p, seeds, k, _ := stubRunEval(t)
 			var out, errb bytes.Buffer
-			code := run(tt.args(t), &out, &errb)
+			args := tt.args(t)
+			code := run(args, &out, &errb)
 			if code != tt.wantCode {
 				t.Fatalf("code %d, want %d; stderr %q", code, tt.wantCode, errb.String())
 			}
@@ -197,38 +222,12 @@ func TestRunPlumbsFlags(t *testing.T) {
 					t.Errorf("stderr lacks %q: %q", w, errb.String())
 				}
 			}
+			if tt.after != nil {
+				tt.after(t, args)
+			}
 			if tt.wantSeed != 0 && (!slices.Equal(*seeds, []int64{tt.wantSeed}) || *k != tt.wantK) {
 				t.Errorf("seeds %v k %d, want [%d] %d", *seeds, *k, tt.wantSeed, tt.wantK)
 			}
 		})
-	}
-}
-
-// Not parallel: it swaps the package-level runEval.
-func TestRunUpdateBaselinePlumbsSeedAndMix(t *testing.T) {
-	if eval.CheckBaselineArch() != nil {
-		t.Skip("non-amd64 host")
-	}
-	stubRunEval(t)
-	path := filepath.Join(t.TempDir(), "b.json")
-	var out, errb bytes.Buffer
-	if code := run([]string{"--update-baseline", "-seed", "42", "-baseline", path}, &out, &errb); code != 0 {
-		t.Fatalf("code %d stderr %q", code, errb.String())
-	}
-	data, err := os.ReadFile(path) // #nosec G304 -- test temp path
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got struct {
-		Seed   int64 `json:"seed"`
-		Params struct {
-			Mix string `json:"mix"`
-		} `json:"params"`
-	}
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatal(err)
-	}
-	if got.Seed != 42 || got.Params.Mix != eval.MixAgent {
-		t.Errorf("baseline seed %d mix %q, want 42 agent:\n%s", got.Seed, got.Params.Mix, data)
 	}
 }

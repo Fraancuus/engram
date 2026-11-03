@@ -114,8 +114,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		flags.Visit(func(f *flag.Flag) {
-			// -mix is noted below, only when the baseline's mix is what ran.
-			if f.Name == "seed" || f.Name == "k" || f.Name == "rerank" {
+			if f.Name == "seed" || f.Name == "k" || f.Name == "rerank" || f.Name == "mix" {
 				_, _ = fmt.Fprintf(stderr, "note: --ci uses the baseline's %s, ignoring -%s\n", f.Name, f.Name)
 			}
 		})
@@ -125,11 +124,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		p.Mix = eval.MixAgent
 		if base.Params.Mix != "" {
 			p.Mix = base.Params.Mix
-			flags.Visit(func(f *flag.Flag) {
-				if f.Name == "mix" {
-					_, _ = fmt.Fprintf(stderr, "note: --ci uses the baseline's mix, ignoring -mix\n")
-				}
-			})
 		}
 	}
 
