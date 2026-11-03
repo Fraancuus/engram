@@ -345,12 +345,20 @@ func TestRecommendStoreCostFlips(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	WriteTable(&buf, r)
+	header, hl := lineFields(buf.String(), "arm")
+	if hl < 0 {
+		t.Fatalf("no header row in:\n%s", buf.String())
+	}
+	scoreCol := slices.Index(header, "score")
+	if scoreCol < 0 {
+		t.Fatalf("no score column in header %v", header)
+	}
 	for name, want := range map[string]string{engram.DecayNone: "0.780", engram.DecayTypeAware: "0.840"} {
 		fields, line := lineFields(buf.String(), name)
 		if line < 0 {
 			t.Fatalf("no %s row in:\n%s", name, buf.String())
 		}
-		if got := fields[14]; got != want {
+		if got := fields[scoreCol]; got != want {
 			t.Errorf("%s row score = %s, want %s (row %v)", name, got, want, fields)
 		}
 	}
@@ -360,8 +368,8 @@ func TestRecommendHugeLambda(t *testing.T) {
 	t.Parallel()
 	r := fakeResults(0.98, 0.90, 0.90, 5000, 5000, 1500)
 	r.Lambda = 1e308
-	if got := Recommend(r); got == "" {
-		t.Fatal("Recommend returned no arm for a huge lambda")
+	if got := Recommend(r); got != engram.DecayTypeAware {
+		t.Fatalf("Recommend = %q for a huge lambda, want %s", got, engram.DecayTypeAware)
 	}
 }
 

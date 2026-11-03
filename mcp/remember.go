@@ -212,7 +212,7 @@ func (t *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberO
 	// Auto-link to the sufficiently-similar candidates, plus any explicit links.
 	var links []engram.Link
 	for _, c := range candidates {
-		if c.Score >= linkThreshold {
+		if c.Score >= linkThreshold && !c.Forgotten {
 			links = append(links, engram.Link{To: c.ID, Weight: c.Score})
 		}
 	}

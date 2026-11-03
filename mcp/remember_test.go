@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -692,24 +691,59 @@ func TestDoRememberNoDetection(t *testing.T) {
 	}
 }
 
-func TestNewToolsShippedWeights(t *testing.T) {
+func TestAutoLinkSkipsForgotten(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := mock.NewMemStore()
-	emb := vecEmbedder{"fact": {1, 0}, "q": {0, 1}} // orthogonal: index score exactly 0.5
-	h := NewTools(emb, nil, engram.TypeAwareDecay{}, st, fixedClock{}, WithIDGenerator(seqIDs()), WithoutRerank())
-	imp := 0.4
-	if _, err := h.Remember(ctx, RememberInput{Content: "fact", Type: "semantic", Namespace: "ns", Importance: &imp}); err != nil {
-		t.Fatalf("remember: %v", err)
+	emb := vecEmbedder{"F": {1, 0, 0}, "near": {0.95, 0, 0.3122}} // cos 0.95: above the auto-link point
+	now := time.Unix(1_700_000_000, 0).UTC()
+	clk := &steppedClock{t: now}
+	h := NewTools(emb, nil, engram.TypeAwareDecay{}, st, clk, WithIDGenerator(seqIDs()), WithoutRerank())
+	if _, err := h.Remember(ctx, RememberInput{Content: "F", Type: "semantic", Namespace: "ns"}); err != nil {
+		t.Fatalf("remember F: %v", err)
 	}
-	m, _ := st.Snapshot("id1")
-	r := engram.TypeAwareDecay{}.Retrievability(m, fixedClock{}.Now())
-	rec, err := h.Recall(ctx, RecallInput{Query: "q", Namespaces: []string{"ns"}})
-	if err != nil || len(rec.Results) != 1 {
-		t.Fatalf("recall = %+v, %v, want one result", rec.Results, err)
+	if _, err := h.Forget(ctx, ForgetInput{ID: "id1", Mode: "soft"}); err != nil {
+		t.Fatalf("forget: %v", err)
 	}
-	want := 0.5 + 0.3*imp + 0.01*r
-	if got := rec.Results[0].Score; math.Abs(got-want) > 1e-9 {
-		t.Errorf("score = %v, want %v", got, want)
+	clk.advance(24 * time.Hour)
+	if _, err := h.Remember(ctx, RememberInput{Content: "near", Type: "semantic", Namespace: "ns"}); err != nil {
+		t.Fatalf("remember near: %v", err)
+	}
+	before, _ := st.Snapshot("id1")
+	clk.advance(24 * time.Hour)
+	if _, err := h.Recall(ctx, RecallInput{Query: "near", Namespaces: []string{"ns"}}); err != nil {
+		t.Fatalf("recall: %v", err)
+	}
+	after, _ := st.Snapshot("id1")
+	if !after.LastAccessed.Equal(before.LastAccessed) {
+		t.Errorf("forgotten memory LastAccessed %v -> %v, want unchanged", before.LastAccessed, after.LastAccessed)
+	}
+}
+
+// steppedClock is a test clock whose time only moves when advance is called.
+type steppedClock struct{ t time.Time }
+
+func (c *steppedClock) Now() time.Time          { return c.t }
+func (c *steppedClock) advance(d time.Duration) { c.t = c.t.Add(d) }
+
+func TestDoRememberReplacementWalksPastOtherType(t *testing.T) {
+	t.Parallel()
+	ep := cand("ep", 1.0, false)
+	ep.Type = engram.Episodic
+	sem := cand("sem", 0.97, false)
+	sem.Type = engram.Semantic
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{ep, sem}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	in := validRemember()
+	in.Supersedes = []string{"std"}
+	out, err := h.doRemember(context.Background(), in)
+	if err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	if !out.Deduped || out.MemoryID != "sem" {
+		t.Errorf("out = %+v, want deduped into sem", out)
+	}
+	if len(out.Superseded) != 1 || out.Superseded[0] != "std" {
+		t.Errorf("Superseded = %v, want [std]", out.Superseded)
 	}
 }

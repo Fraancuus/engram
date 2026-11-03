@@ -4,7 +4,7 @@
 `remember` MUST apply `supersedes` when the memory type is procedural or semantic, and MUST report
 in `superseded` the ids it asked the store to supersede; an id that matches no memory is a no-op the
 reply does not distinguish. A failed supersede MUST NOT fail the write and MUST leave `superseded`
-absent, and the `remember` tool description MUST say that an absent `superseded` after naming ids means
+absent, and the `remember` tool description MUST say that an absent `superseded` after a procedural or semantic write names ids means
 the replace failed and the same write should be retried. An episodic write MUST ignore the field and
 MUST NOT report it. Supersession is explicit only: the system MUST NOT infer it from similarity.
 
@@ -55,6 +55,10 @@ whether the write inserts or dedups.
 #### Scenario: Re-remember after a soft forget
 - **WHEN** a `remember` with no `supersedes` scores 0.97 against a soft-forgotten memory, and no live candidate reaches 0.95
 - **THEN** a new live memory is stored and the forgotten memory is not reinforced
+
+#### Scenario: No auto-link to a soft-forgotten memory
+- **WHEN** a new memory scores at or above the auto-link point against a soft-forgotten memory
+- **THEN** no link is written, so recalling the new memory does not refresh the forgotten one
 
 #### Scenario: Replacement does not dedup across types
 - **WHEN** a procedural `remember` with `supersedes: [std]` scores 1.0 against a live episode

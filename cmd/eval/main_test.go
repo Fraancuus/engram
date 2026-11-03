@@ -180,7 +180,7 @@ func TestRunPlumbsFlags(t *testing.T) {
 			if eval.CheckBaselineArch() != nil {
 				t.Skip("non-amd64 host")
 			}
-			return []string{"--update-baseline", "-seed", "42", "-baseline", filepath.Join(t.TempDir(), "b.json")}
+			return []string{"--update-baseline", "-seed", "43", "-baseline", filepath.Join(t.TempDir(), "b.json")}
 		}, 0, nil, nil, eval.MixAgent, 0, 0, func(t *testing.T, args []string) {
 			data, err := os.ReadFile(args[len(args)-1]) // #nosec G304 -- test temp path
 			if err != nil {
@@ -195,8 +195,8 @@ func TestRunPlumbsFlags(t *testing.T) {
 			if err := json.Unmarshal(data, &got); err != nil {
 				t.Fatal(err)
 			}
-			if got.Seed != 42 || got.Params.Mix != eval.MixAgent {
-				t.Errorf("baseline seed %d mix %q, want 42 agent:\n%s", got.Seed, got.Params.Mix, data)
+			if got.Seed != 43 || got.Params.Mix != eval.MixAgent {
+				t.Errorf("baseline seed %d mix %q, want 43 agent:\n%s", got.Seed, got.Params.Mix, data)
 			}
 		}},
 	}

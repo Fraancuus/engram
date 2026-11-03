@@ -409,8 +409,11 @@ func TestPrunedHopKeepsLabels(t *testing.T) {
 		if c.Class != QBridgeLink && c.Class != QBridgeEntity {
 			continue
 		}
-		x, _ := ds.Lookup(c.Relevant[0])
-		y, _ := ds.Lookup(c.Relevant[1])
+		x, okx := ds.Lookup(c.Relevant[0])
+		y, oky := ds.Lookup(c.Relevant[1])
+		if !okx || !oky {
+			t.Fatalf("query %s: Lookup miss for a relevant id %v", c.ID, c.Relevant)
+		}
 		if x.WriteDay < c.Day && y.WriteDay < c.Day {
 			q = c
 			break

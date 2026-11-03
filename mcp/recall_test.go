@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -561,5 +562,27 @@ func TestPropagateThresholdBoundary(t *testing.T) {
 		if got := m.LastAccessed.Equal(now); got != want {
 			t.Errorf("%s refreshed = %v, want %v", id, got, want)
 		}
+	}
+}
+
+func TestNewToolsShippedWeights(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := mock.NewMemStore()
+	emb := vecEmbedder{"fact": {1, 0}, "q": {0, 1}} // orthogonal: index score exactly 0.5
+	h := NewTools(emb, nil, engram.TypeAwareDecay{}, st, fixedClock{}, WithIDGenerator(seqIDs()), WithoutRerank())
+	imp := 0.4
+	if _, err := h.Remember(ctx, RememberInput{Content: "fact", Type: "semantic", Namespace: "ns", Importance: &imp}); err != nil {
+		t.Fatalf("remember: %v", err)
+	}
+	m, _ := st.Snapshot("id1")
+	r := engram.TypeAwareDecay{}.Retrievability(m, fixedClock{}.Now())
+	rec, err := h.Recall(ctx, RecallInput{Query: "q", Namespaces: []string{"ns"}})
+	if err != nil || len(rec.Results) != 1 {
+		t.Fatalf("recall = %+v, %v, want one result", rec.Results, err)
+	}
+	want := 0.5 + 0.3*imp + 0.01*r
+	if got := rec.Results[0].Score; math.Abs(got-want) > 1e-9 {
+		t.Errorf("score = %v, want %v", got, want)
 	}
 }
