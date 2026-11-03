@@ -22,7 +22,7 @@ func TestBlendScoresLinkAndBridge(t *testing.T) {
 		{Memory: engram.Memory{ID: "L"}, SourceID: "s1", Via: "link", Weight: 0.5},
 		{Memory: engram.Memory{ID: "E"}, SourceID: "s1", Via: "entity:Redis", Weight: 1.0},
 	}
-	out := blend(seeds, neighbors, 10, 0.5)
+	out := blend(seeds, neighbors, 0.5)
 	if r, ok := findResult(out, "s1"); !ok || r.Score != 0.8 || r.RetrievedVia != "vector" {
 		t.Errorf("seed s1 = %+v (ok=%v), want score 0.8 via vector", r, ok)
 	}
@@ -42,25 +42,25 @@ func TestBlendKeepsMaxScorePath(t *testing.T) {
 	}
 	// x is reachable as a link from s1 at 0.9*0.5 = 0.45, below its own seed score 0.6.
 	neighbors := []engram.Neighbor{{Memory: engram.Memory{ID: "x"}, SourceID: "s1", Via: "link", Weight: 0.5}}
-	out := blend(seeds, neighbors, 10, 0.5)
+	out := blend(seeds, neighbors, 0.5)
 	if r, _ := findResult(out, "x"); r.Score != 0.6 || r.RetrievedVia != "vector" {
 		t.Errorf("x = %+v, want score 0.6 via vector (max path wins)", r)
 	}
 }
 
-func TestBlendTopKAndTiebreak(t *testing.T) {
+func TestBlendOrderAndTiebreak(t *testing.T) {
 	t.Parallel()
 	seeds := []engram.RecallResult{
 		{Memory: engram.Memory{ID: "b"}, Score: 0.5},
 		{Memory: engram.Memory{ID: "a"}, Score: 0.5}, // ties with b; "a" sorts first
 		{Memory: engram.Memory{ID: "c"}, Score: 0.9},
 	}
-	out := blend(seeds, nil, 2, 0.5)
-	if len(out) != 2 {
-		t.Fatalf("len = %d, want 2 (top-k)", len(out))
+	out := blend(seeds, nil, 0.5)
+	if len(out) != 3 {
+		t.Fatalf("len = %d, want 3 (no truncation)", len(out))
 	}
-	if out[0].ID != "c" || out[1].ID != "a" {
-		t.Errorf("order = [%s %s], want [c a] (score desc, id tiebreak)", out[0].ID, out[1].ID)
+	if out[0].ID != "c" || out[1].ID != "a" || out[2].ID != "b" {
+		t.Errorf("order = [%s %s %s], want [c a b] (score desc, id tiebreak)", out[0].ID, out[1].ID, out[2].ID)
 	}
 }
 
@@ -70,7 +70,7 @@ func TestBlendEmptySeeds(t *testing.T) {
 	// via the recall path (seeds feed Neighbors), but blend must not panic and must yield
 	// a defined result.
 	neighbors := []engram.Neighbor{{Memory: engram.Memory{ID: "n"}, SourceID: "missing", Via: "link", Weight: 0.9}}
-	out := blend(nil, neighbors, 10, 0.5)
+	out := blend(nil, neighbors, 0.5)
 	if len(out) != 1 || out[0].Score != 0 || out[0].RetrievedVia != "link" {
 		t.Errorf("blend(nil seeds) = %+v, want one result score 0 via link", out)
 	}

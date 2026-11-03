@@ -28,11 +28,13 @@ const (
 	defaultMaxTokens        = 2048
 
 	// Decay-weighted blend: score = wSim·sim + wImp·importance + wRet·retrievability.
-	// softThreshold is the retrievability below which a memory is soft-forgotten; a recalled
-	// memory refreshes strong-edge (weight >= propagateThreshold) neighbors.
+	// Retrievability is a filter plus a bounded tiebreak: softThreshold drops soft-forgotten
+	// memories before the pool is cut, and wRet is small enough that R can only reorder
+	// scores that already sit within 0.01 of each other. A recalled memory refreshes
+	// strong-edge (weight >= propagateThreshold) neighbors.
 	defaultWSim        = 1.0
 	defaultWImp        = 0.3
-	defaultWRet        = 0.5
+	defaultWRet        = 0.01
 	defaultSoftThresh  = 0.05
 	propagateThreshold = 0.85
 )
@@ -124,14 +126,17 @@ func (t *Tools) doRecall(ctx context.Context, in RecallInput) (out RecallOutput,
 		t.log.Error("recall: neighbors failed", "err", err)
 		return RecallOutput{}, errors.New("recall: store unavailable")
 	}
-	// Blend selects a candidate pool (>= k so the reranker has room to reorder), the
-	// reranker decides the final order, then we take k and trim under the token budget.
+	// Dead candidates are filtered before the pool is cut so they cannot crowd out live
+	// ones. The pool is >= k so the reranker has room to reorder; the reranker decides the
+	// final order, then we take k and trim under the token budget.
 	poolSize := k
 	if t.rerankCandidates > poolSize {
 		poolSize = t.rerankCandidates
 	}
-	cands := blend(seeds, neighbors, poolSize, bridgePenalty)
-	cands = t.scoreAndFilter(cands, now, in.IncludeForgotten)
+	cands := t.scoreAndFilter(blend(seeds, neighbors, bridgePenalty), now, in.IncludeForgotten)
+	if len(cands) > poolSize {
+		cands = cands[:poolSize]
+	}
 	ranked := t.rerankResults(ctx, in.Query, cands)
 	if len(ranked) > k {
 		ranked = ranked[:k]
@@ -162,8 +167,8 @@ func (t *Tools) doRecall(ctx context.Context, in RecallInput) (out RecallOutput,
 // blend merges vector seeds and expansion neighbors into one ranked list by propagated
 // scoring: a link neighbor scores sim_source*weight, an entity bridge scores
 // sim_source*bridgePenalty, and a memory reached multiple ways keeps its highest score.
-// Results are sorted by score (id-tiebroken) and truncated to k.
-func blend(seeds []engram.RecallResult, neighbors []engram.Neighbor, k int, bridgePenalty float64) []engram.RecallResult {
+// Results are sorted by score (id-tiebroken); the caller filters and cuts the pool.
+func blend(seeds []engram.RecallResult, neighbors []engram.Neighbor, bridgePenalty float64) []engram.RecallResult {
 	seedSim := make(map[engram.MemoryID]float64, len(seeds))
 	best := make(map[engram.MemoryID]engram.RecallResult, len(seeds))
 	for _, s := range seeds {
@@ -191,9 +196,6 @@ func blend(seeds []engram.RecallResult, neighbors []engram.Neighbor, k int, brid
 		}
 		return out[i].ID < out[j].ID
 	})
-	if len(out) > k {
-		out = out[:k]
-	}
 	return out
 }
 
@@ -246,7 +248,8 @@ func packBudget(rs []engram.RecallResult, maxTokens int) []engram.RecallResult {
 
 // scoreAndFilter applies the decay-weighted blend and the soft-forget filter: it drops
 // superseded/forgotten/below-threshold-retrievability candidates (unless includeForgotten)
-// and re-scores the rest as wSim·sim + wImp·importance + wRet·retrievability.
+// and re-scores the rest as wSim·sim + wImp·importance + wRet·retrievability. The filter
+// is the main use of retrievability; wRet only breaks near-ties between survivors.
 func (t *Tools) scoreAndFilter(cands []engram.RecallResult, now time.Time, includeForgotten bool) []engram.RecallResult {
 	out := make([]engram.RecallResult, 0, len(cands))
 	for _, c := range cands {

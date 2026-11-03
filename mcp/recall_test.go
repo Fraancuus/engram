@@ -70,7 +70,7 @@ func TestDoRecallClampsK(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			// Search fetches a fixed seed set (seedN); the k clamp is applied at blend, so
+			// Search fetches a fixed seed set (seedN); the k clamp is applied after the filter, so
 			// assert the result count.
 			st := &mock.FakeStore{SearchResults: manySeeds(120)}
 			h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
@@ -327,5 +327,177 @@ func TestDoRecallReinforceFailureDoesNotFailRecall(t *testing.T) {
 	}
 	if len(out.Results) != 1 {
 		t.Errorf("results = %d, want 1 (reinforce failure is non-fatal)", len(out.Results))
+	}
+}
+
+// rByID is a DecayModel returning a fixed retrievability per memory id (0 if absent).
+type rByID map[engram.MemoryID]float64
+
+func (r rByID) Retrievability(m engram.Memory, _ time.Time) float64 { return r[m.ID] }
+
+func (rByID) Stability(engram.MemoryType, int, float64) float64 { return 1 }
+
+// blendHandlers returns handlers with the production blend weights and no reranker: the
+// cross-encoder is the final authority on order, and these tests are about the blend.
+func blendHandlers(st *mock.FakeStore, d engram.DecayModel) *Tools {
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	h.reranker = nil
+	h.decay = d
+	h.wImp, h.wRet = defaultWImp, defaultWRet
+	return h
+}
+
+func TestRecallFreshEpisodeBeatsStandard(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{
+		{Memory: engram.Memory{ID: "std", Content: "s", Importance: 0.7}, Score: 0.80},
+		{Memory: engram.Memory{ID: "ep", Content: "e", Importance: 0.4}, Score: 0.95},
+	}}
+	h := blendHandlers(st, rByID{"ep": 0.7, "std": 1.0})
+	out, err := h.doRecall(context.Background(), RecallInput{Query: "q"})
+	if err != nil {
+		t.Fatalf("doRecall: %v", err)
+	}
+	if got := resultIDs(out); len(got) != 2 || got[0] != "ep" {
+		t.Errorf("order = %v, want episode first", got)
+	}
+}
+
+func TestRecallBoundedTiebreak(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		gap       float64 // how far the dead-ish candidate's raw score leads
+		wantFirst string
+	}{
+		{"gap inside R weight reorders", 0.009, "fresh"},
+		{"gap outside R weight keeps order", 0.011, "stale"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			st := &mock.FakeStore{SearchResults: []engram.RecallResult{
+				{Memory: engram.Memory{ID: "fresh", Content: "f"}, Score: 0.80},
+				{Memory: engram.Memory{ID: "stale", Content: "s"}, Score: 0.80 + tt.gap},
+			}}
+			h := blendHandlers(st, rByID{"fresh": 1.0, "stale": 0.05})
+			out, err := h.doRecall(context.Background(), RecallInput{Query: "q"})
+			if err != nil {
+				t.Fatalf("doRecall: %v", err)
+			}
+			if got := resultIDs(out); len(got) != 2 || got[0] != tt.wantFirst {
+				t.Errorf("order = %v, want %s first", got, tt.wantFirst)
+			}
+		})
+	}
+}
+
+func TestRecallDeadCandidatesDoNotCrowdPool(t *testing.T) {
+	t.Parallel()
+	var seeds []engram.RecallResult
+	for i := 0; i < 20; i++ {
+		seeds = append(seeds, engram.RecallResult{
+			Memory: engram.Memory{ID: engram.MemoryID(fmt.Sprintf("dead%02d", i)), Content: "d", Superseded: true}, Score: 0.9})
+	}
+	for i := 0; i < 5; i++ {
+		seeds = append(seeds, engram.RecallResult{
+			Memory: engram.Memory{ID: engram.MemoryID(fmt.Sprintf("live%02d", i)), Content: "l"}, Score: 0.5})
+	}
+	h := blendHandlers(&mock.FakeStore{SearchResults: seeds}, mock.FakeDecay{R: 1})
+	k := 5
+	out, err := h.doRecall(context.Background(), RecallInput{Query: "q", K: &k})
+	if err != nil {
+		t.Fatalf("doRecall: %v", err)
+	}
+	if len(out.Results) != 5 {
+		t.Fatalf("results = %v, want the 5 live ones", resultIDs(out))
+	}
+	for _, id := range resultIDs(out) {
+		if !strings.HasPrefix(id, "live") {
+			t.Errorf("dead candidate %s crowded into results", id)
+		}
+	}
+}
+
+func TestRecallSoftThresholdBoundary(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{
+		{Memory: engram.Memory{ID: "at", Content: "a"}, Score: 0.9},
+		{Memory: engram.Memory{ID: "below", Content: "b"}, Score: 0.9},
+	}}
+	h := blendHandlers(st, rByID{"at": 0.05, "below": 0.0499})
+	out, err := h.doRecall(context.Background(), RecallInput{Query: "q"})
+	if err != nil {
+		t.Fatalf("doRecall: %v", err)
+	}
+	if got := resultIDs(out); len(got) != 1 || got[0] != "at" {
+		t.Errorf("results = %v, want [at] (R 0.05 kept, 0.0499 dropped)", got)
+	}
+}
+
+func TestRecallNullDecayOrder(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{
+		{Memory: engram.Memory{ID: "a", Content: "a", Importance: 0.0}, Score: 0.70}, // 0.70
+		{Memory: engram.Memory{ID: "b", Content: "b", Importance: 1.0}, Score: 0.50}, // 0.80
+		{Memory: engram.Memory{ID: "c", Content: "c", Importance: 0.5}, Score: 0.60}, // 0.75
+		{Memory: engram.Memory{ID: "d", Content: "d", Importance: 0.2}, Score: 0.90}, // 0.96
+	}}
+	h := blendHandlers(st, engram.NullDecay{})
+	out, err := h.doRecall(context.Background(), RecallInput{Query: "q"})
+	if err != nil {
+		t.Fatalf("doRecall: %v", err)
+	}
+	want := []string{"d", "b", "c", "a"}
+	got := resultIDs(out)
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("order = %v, want %v (sim + 0.3 importance)", got, want)
+	}
+}
+
+func TestRecallKAboveDefaultPool(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: manySeeds(150)}
+	h := blendHandlers(st, mock.FakeDecay{R: 1})
+	h.seedN = 150
+	k := 100
+	out, err := h.doRecall(context.Background(), RecallInput{Query: "q", K: &k})
+	if err != nil {
+		t.Fatalf("doRecall: %v", err)
+	}
+	if len(out.Results) != 100 {
+		t.Errorf("results = %d, want 100", len(out.Results))
+	}
+}
+
+func TestRecallAllDeadIsEmpty(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{
+		{Memory: engram.Memory{ID: "a", Content: "a"}, Score: 0.9},
+		{Memory: engram.Memory{ID: "b", Content: "b"}, Score: 0.8},
+	}}
+	h := blendHandlers(st, rByID{"a": 0.01, "b": 0.02})
+	out, err := h.doRecall(context.Background(), RecallInput{Query: "q"})
+	if err != nil {
+		t.Fatalf("doRecall: %v", err)
+	}
+	if len(out.Results) != 0 || len(st.Reinforced) != 0 {
+		t.Errorf("results=%v reinforced=%v, want both empty", resultIDs(out), st.Reinforced)
+	}
+}
+
+func TestDoRecallIncludeForgottenRanksDead(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{
+		{Memory: engram.Memory{ID: "low", Content: "l", Superseded: true}, Score: 0.5},
+		{Memory: engram.Memory{ID: "high", Content: "h", Superseded: true}, Score: 0.9},
+	}}
+	h := blendHandlers(st, rByID{}) // R 0 for both
+	out, err := h.doRecall(context.Background(), RecallInput{Query: "q", IncludeForgotten: true})
+	if err != nil {
+		t.Fatalf("doRecall: %v", err)
+	}
+	if got := resultIDs(out); fmt.Sprint(got) != "[high low]" {
+		t.Errorf("order = %v, want [high low] ranked by score", got)
 	}
 }
