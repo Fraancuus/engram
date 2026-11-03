@@ -109,7 +109,7 @@ func TestReportTableColumns(t *testing.T) {
 	r.Params.Mix = MixAgent
 	WriteTable(&buf, r)
 	out := buf.String()
-	if !strings.HasPrefix(out, "rerank: none  mix: agent  lambda: 0\n") {
+	if !strings.HasPrefix(out, "rerank: none, mix: agent, lambda: 0\n") {
 		t.Errorf("missing rerank line in:\n%s", out)
 	}
 	wantHeader := []string{"arm", "precision@5", "recall@5", "ndcg@5", "mrr", "procedural", "semantic", "episodic",

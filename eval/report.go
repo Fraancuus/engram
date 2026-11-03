@@ -91,7 +91,7 @@ func ms(s Stats) string { return fmt.Sprintf("%.1f±%.1f ms", s.Mean, s.Std) }
 // WriteTable prints one row per arm (mean±std over seeds), the per-class
 // nDCG/MRR table, and the recommendation line.
 func WriteTable(w io.Writer, r *Results) {
-	_, _ = fmt.Fprintf(w, "rerank: %s  mix: %s  lambda: %g\n", r.Rerank, r.Params.Mix, r.Lambda)
+	_, _ = fmt.Fprintf(w, "rerank: %s, mix: %s, lambda: %g\n", r.Rerank, r.Params.Mix, r.Lambda)
 	base := storeBaseline(r)
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintf(tw, "arm\tprecision@%d\trecall@%d\tndcg@%d\tmrr\tprocedural\tsemantic\tepisodic\tbridge-link\tbridge-entity\tvia-vector\tvia-link\tvia-entity\tstore\tscore\tedges\tbridges\tp50\tp95\n", r.K, r.K, r.K)

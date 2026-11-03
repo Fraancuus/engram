@@ -340,3 +340,37 @@ func TestWriteSupersedesPrunedPredecessor(t *testing.T) {
 		t.Fatalf("write v2 over pruned v1: %v", err)
 	}
 }
+
+// An access whose recall returns nothing still counts in the denominator: it is a
+// recorded miss, not a skipped access.
+func TestAccessEmptyRecallIsMiss(t *testing.T) {
+	t.Parallel()
+	ds := *tinyDataset(t)
+	first := map[engram.Namespace]int{}
+	for _, m := range ds.Memories {
+		if w, ok := first[m.Namespace]; !ok || m.WriteDay < w {
+			first[m.Namespace] = m.WriteDay
+		}
+	}
+	var target Memory
+	for _, m := range ds.Memories {
+		if first[m.Namespace] > 0 {
+			target = m
+			break
+		}
+	}
+	if target.GID == "" {
+		t.Skip("tiny dataset writes every namespace on day 0")
+	}
+	ds.Accesses = []Access{{GID: target.GID, Day: 0}}
+	res, err := runArm(context.Background(), engram.DecayNone, engram.NullDecay{}, &ds, 5, RerankNone)
+	if err != nil {
+		t.Fatalf("runArm: %v", err)
+	}
+	if res.AccessN[target.Kind] != 1 {
+		t.Errorf("AccessN = %d, want 1", res.AccessN[target.Kind])
+	}
+	if h, ok := res.AccessHit[target.Kind]; !ok || h != 0 {
+		t.Errorf("AccessHit = %v (present %v), want 0 present", h, ok)
+	}
+}
