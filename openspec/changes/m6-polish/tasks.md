@@ -29,11 +29,11 @@ then. No eval run may be used to choose lambda, the mix or `sigmaTwin`.
 
 ## 6. Eval: gate
 
-- [ ] 6.1 `CheckGate`'s message names seed, params including mix, rerank and k. Tests: table `TestCheckGateStale` covering each field, `TestCheckGateNoMixIsStale` (a baseline with no mix), `TestCheckGateStaleBeatsRegression`, and `TestGateIgnoresLambda`.
+- [x] 6.1 `CheckGate`'s message names seed, params including mix, rerank and k. Tests: table `TestCheckGateStale` covering each field, `TestCheckGateNoMixIsStale` (a baseline with no mix), `TestCheckGateStaleBeatsRegression`, and `TestGateIgnoresLambda`.
 
 ## 7. Command
 
-- [ ] 7.1 `cmd/eval`: `-mix` (default agent; unknown exits 2), `-lambda` (default `DefaultLambda`; negative, NaN or infinite exits 2), `--ci` runs the baseline's mix with a note if `-mix` was passed, `--update-baseline` refuses a non-primary mix. Tests in `cmd/eval/main_test.go`: `TestRunRejectsBadLambda`, `TestRunRejectsUnknownMix`, `TestUpdateBaselineRefusesStress`.
+- [x] 7.1 `cmd/eval`: `-mix` (default agent; unknown exits 2), `-lambda` (default `DefaultLambda`; negative, NaN or infinite exits 2), `--ci` runs the baseline's mix with a note if `-mix` was passed, `--update-baseline` refuses a non-primary mix. Tests in `cmd/eval/main_test.go`: `TestRunRejectsBadLambda`, `TestRunRejectsUnknownMix`, `TestUpdateBaselineRefusesStress`.
 
 ## 8. Review before the numbers
 

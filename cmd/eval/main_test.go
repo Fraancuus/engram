@@ -77,3 +77,31 @@ func TestMainBadBaselineNoUpdateHint(t *testing.T) {
 		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
 }
+
+func TestRunRejectsBadLambda(t *testing.T) {
+	for _, l := range []string{"-0.1", "NaN", "Inf"} {
+		var out, errb bytes.Buffer
+		if code := run([]string{"-lambda", l}, &out, &errb); code != 2 || out.Len() != 0 || !strings.Contains(errb.String(), "lambda") {
+			t.Errorf("%s: code %d stdout %q stderr %q", l, code, out.String(), errb.String())
+		}
+	}
+}
+
+func TestRunRejectsUnknownMix(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"-mix", "weekend"}, &out, &errb); code != 2 || out.Len() != 0 || !strings.Contains(errb.String(), "weekend") {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+func TestUpdateBaselineRefusesStress(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "b.json")
+	var out, errb bytes.Buffer
+	code := run([]string{"--update-baseline", "-mix", "stress", "-baseline", path}, &out, &errb)
+	if code != 1 || out.Len() != 0 || !strings.Contains(errb.String(), "agent") {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Error("baseline written")
+	}
+}

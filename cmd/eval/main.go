@@ -3,8 +3,10 @@
 // reports precision@k, recall@k, nDCG and per-class breakdowns.
 //
 // With --ci it runs the floor corpus with the committed baseline's seed, k and
-// rerank mode and exits 1 if type-aware precision@k regressed beyond tolerance.
-// With --update-baseline it rewrites that baseline.
+// rerank mode and mix, and exits 1 if type-aware precision@k regressed beyond
+// tolerance. With --update-baseline it rewrites that baseline, primary mix only.
+// -mix picks the query class mix preset and -lambda weighs store size in the
+// report's recommendation; neither affects the gate verdict.
 package main
 
 import (
@@ -14,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 
 	"github.com/Fraancuus/engram"
@@ -51,6 +54,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	k := flags.Int("k", 5, "results per query")
 	days := flags.Int("days", 180, "simulated days (must be the floor under --ci/--update-baseline)")
 	rerank := flags.String("rerank", "none", "rerank mode: none or cosine")
+	mix := flags.String("mix", eval.MixAgent, "query class mix preset: agent or stress")
+	lambda := flags.Float64("lambda", eval.DefaultLambda, "store-cost weight in the recommendation (non-negative)")
 	jsonPath := flags.String("json", "", "also write full results as JSON to this path")
 	basePath := flags.String("baseline", "eval/baseline.json", "baseline file")
 	if err := flags.Parse(args); err != nil {
@@ -61,7 +66,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, err)
 		return 2
 	}
+	if *lambda < 0 || math.IsNaN(*lambda) || math.IsInf(*lambda, 0) {
+		_, _ = fmt.Fprintf(stderr, "-lambda must be a finite, non-negative number, got %v\n", *lambda)
+		return 2
+	}
+	if _, err := eval.ParseMix(*mix); err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 2
+	}
 	p := eval.Floor().Scaled(*scale)
+	p.Mix = *mix
 	p.Days = *days
 	gated := *ci || *update
 	if gated && (*scale != 1 || *days != eval.Floor().Days) {
@@ -71,6 +85,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if *ci && *update {
 		_, _ = fmt.Fprintln(stderr, "--ci and --update-baseline are mutually exclusive")
 		return 2
+	}
+	if *update && *mix != eval.MixAgent {
+		_, _ = fmt.Fprintf(stderr, "--update-baseline writes the primary mix: omit -mix or use -mix %s\n", eval.MixAgent)
+		return 1
 	}
 	if *update {
 		if err := checkArch(); err != nil {
@@ -93,11 +111,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		flags.Visit(func(f *flag.Flag) {
-			if f.Name == "seed" || f.Name == "k" || f.Name == "rerank" {
+			if f.Name == "seed" || f.Name == "k" || f.Name == "rerank" || f.Name == "mix" {
 				_, _ = fmt.Fprintf(stderr, "note: --ci uses the baseline's %s, ignoring -%s\n", f.Name, f.Name)
 			}
 		})
 		*seed, *k = base.Seed, base.K
+		// An empty baseline mix stays at the primary so CheckGate calls it stale.
+		if base.Params.Mix != "" {
+			p.Mix = base.Params.Mix
+		}
 	}
 
 	res, err := eval.Run(context.Background(), p, seedsFor(*seed, *nSeeds, gated), *k, mode)
@@ -105,6 +127,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "eval: %v\n", err)
 		return 1
 	}
+	res.Lambda = *lambda
 	eval.WriteTable(stdout, res)
 
 	if *jsonPath != "" {
