@@ -705,16 +705,26 @@ func TestAutoLinkSkipsForgotten(t *testing.T) {
 	if _, err := h.Forget(ctx, ForgetInput{ID: "id1", Mode: "soft"}); err != nil {
 		t.Fatalf("forget: %v", err)
 	}
+	before, ok := st.Snapshot("id1")
+	if !ok {
+		t.Fatal("snapshot before near write: id1 missing")
+	}
 	clk.advance(24 * time.Hour)
 	if _, err := h.Remember(ctx, RememberInput{Content: "near", Type: "semantic", Namespace: "ns"}); err != nil {
 		t.Fatalf("remember near: %v", err)
 	}
-	before, _ := st.Snapshot("id1")
 	clk.advance(24 * time.Hour)
-	if _, err := h.Recall(ctx, RecallInput{Query: "near", Namespaces: []string{"ns"}}); err != nil {
+	got, err := h.Recall(ctx, RecallInput{Query: "near", Namespaces: []string{"ns"}})
+	if err != nil {
 		t.Fatalf("recall: %v", err)
 	}
-	after, _ := st.Snapshot("id1")
+	if len(got.Results) == 0 || got.Results[0].Content != "near" {
+		t.Fatalf("recall = %+v, want the near copy first", got.Results)
+	}
+	after, ok := st.Snapshot("id1")
+	if !ok {
+		t.Fatal("snapshot after recall: id1 missing")
+	}
 	if !after.LastAccessed.Equal(before.LastAccessed) {
 		t.Errorf("forgotten memory LastAccessed %v -> %v, want unchanged", before.LastAccessed, after.LastAccessed)
 	}
@@ -745,5 +755,11 @@ func TestDoRememberReplacementWalksPastOtherType(t *testing.T) {
 	}
 	if len(out.Superseded) != 1 || out.Superseded[0] != "std" {
 		t.Errorf("Superseded = %v, want [std]", out.Superseded)
+	}
+	if len(st.Reinforced) != 1 || st.Reinforced[0] != "sem" {
+		t.Errorf("Reinforced = %v, want exactly [sem]", st.Reinforced)
+	}
+	if len(st.Superseded) == 0 || !slices.Contains(st.Superseded[0], "std") {
+		t.Errorf("store Superseded = %v, want a call containing std", st.Superseded)
 	}
 }

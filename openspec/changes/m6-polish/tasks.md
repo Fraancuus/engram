@@ -50,8 +50,8 @@ then. No eval run may be used to choose lambda, the mix or `sigmaTwin`.
 
 ## 11. Docs
 
-- [ ] 11.1 `README.md`: claim from D17, both tables, lambda and break-even, recall description, flags, archived M5 path, status and roadmap lines. PRD M6 status line, naming what remains open.
-- [ ] 11.2 `graphify update .`, confirm nothing in `graphify-out/` is staged.
+- [x] 11.1 `README.md`: claim from D17, both tables, lambda and break-even, recall description, flags, archived M5 path, status and roadmap lines. PRD M6 status line, naming what remains open.
+- [x] 11.2 `graphify update .`, confirm nothing in `graphify-out/` is staged.
 
 ## 12. Verify, ship, archive
 
