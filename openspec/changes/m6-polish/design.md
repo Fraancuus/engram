@@ -131,7 +131,7 @@ with `Lambda` 0 reduces to the M5 rule, so `-lambda 0` shows the retrieval-only 
 measures it. 0.10 is a round figure that treats a 10x larger store as worth about 0.09 nDCG. It is
 written here before any M6 run and will not be changed to reach a result.
 
-**Break-even line (my addition, strike it at review if unwanted).** A rough estimate from the M5
+**Break-even line.** A rough estimate from the M5
 per-class numbers on the agent mix puts `none` near 0.98 and `type-aware` near 0.87 at about 30% of
 the store, a break-even near 0.16. That is close enough to any round lambda that the constant alone
 could look like the verdict. The report therefore prints the lambda at which each decaying arm ties
@@ -148,7 +148,8 @@ recommended: <arm> (ENGRAM_DECAY=<arm>) on mix agent, lambda 0.1
 ```
 
 On that estimate lambda 0.10 still recommends `none`, and a lambda above about 0.16 would recommend
-`type-aware`. So the value is the decision: Franco should confirm or change it before the first run.
+`type-aware`. So the value is the decision: Franco confirmed 0.10 at the plan review on 2026-11-03,
+before the first run and with that estimate in front of him.
 
 **A/B/C:** this can change the recommendation without changing any retrieval number, and the report
 says so openly. **Gate:** none. The gate compares precision only.
@@ -226,8 +227,12 @@ the same PR. Rollback is reverting the PR.
 
 ## Open Questions
 
-1. Franco: `memory_stats` and the demo stay out of this change. Confirm a follow-up change for them.
-2. Franco: `ENGRAM_DECAY` default stays `type-aware` here. The decision stays open until the tables exist.
+`ENGRAM_DECAY` default stays `type-aware` in this change. That decision stays open for Franco until
+the tables exist.
+
+Decided by Franco at the plan review (2026-11-03, before any M6 run): lambda 0.10; agent mix
+35/20/30/5/10; `Supersedes` on every fact chain; print the break-even lambda; `memory_stats` and the
+demo recording go to a follow-up change after this PR.
 
 Resolved by the architect agent (fable, 2026-11-03): the bounded additive term stands with no
 misbehaving input found; removing `k` from `blend` is the right cut, and the cut must precede

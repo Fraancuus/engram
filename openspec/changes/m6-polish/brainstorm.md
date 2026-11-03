@@ -90,15 +90,13 @@ No new package, no new port, no new interface.
 ## Key Decisions
 
 - Franco's: scope, order, store weight, explicit-only supersession, generator sets it on chains.
-- My calls, for review: lambda = 0.10; agent mix 35/20/30/5/10; printing the break-even lambda;
-  the bounded additive tiebreak; both thresholds at 0.925; the dedup bypass; `-mix` running one
-  mix per invocation; arm A staying the store baseline.
+- Proposed here and confirmed by Franco at the plan review (2026-11-03): lambda = 0.10; agent mix
+  35/20/30/5/10; `Supersedes` on every fact chain; printing the break-even lambda; `memory_stats`
+  and the demo recording in a follow-up change after this PR.
+- My calls: the bounded additive tiebreak; both thresholds at 0.925; the dedup bypass; `-mix`
+  running one mix per invocation; arm A staying the store baseline.
 
 ## Open Questions
 
-For Franco at the visual-plan review:
-
-1. PRD section 9 lists `memory_stats` and the demo recording under M6; the launch scope does not.
-   This change leaves them out, and v1 is not done without the demo. Confirm a follow-up change.
-2. `ENGRAM_DECAY` stays `type-aware` by default in this change whatever the table recommends. The
-   README says choosing the default is an M6 decision, and it stays Franco's after the numbers.
+`ENGRAM_DECAY` stays `type-aware` by default in this change whatever the table recommends. The
+README says choosing the default is an M6 decision, and it stays Franco's after the numbers.

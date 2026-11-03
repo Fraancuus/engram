@@ -6,7 +6,7 @@ localOnly: true
 
 ### Summary
 
-After this change, retrievability stops penalising live memories, stale facts clear through explicit supersession, link thresholds sit on the store's real similarity scale, and `go run ./cmd/eval` states which query mix and which store cost its recommendation rests on. The README then says only what the new tables support. This delivers the eval-correction and README parts of milestone M6. Capabilities added: `recall-ranking`, `memory-supersession`, `similarity-thresholds`. Capabilities modified: `eval-dataset`, `eval-harness`, `eval-ci-gate`, `memory-store-fake`. Out of scope: `memory_stats` and the demo recording (see Open Questions), changing the `ENGRAM_DECAY` default, the `-rerank cosine` secondary table, sweep cost in the report, similarity-based staleness detection, and everything on the v2 list.
+After this change, retrievability stops penalising live memories, stale facts clear through explicit supersession, link thresholds sit on the store's real similarity scale, and `go run ./cmd/eval` states which query mix and which store cost its recommendation rests on. The README then says only what the new tables support. This delivers the eval-correction and README parts of milestone M6. Capabilities added: `recall-ranking`, `memory-supersession`, `similarity-thresholds`. Capabilities modified: `eval-dataset`, `eval-harness`, `eval-ci-gate`, `memory-store-fake`. Out of scope: `memory_stats` and the demo recording (a follow-up change after this PR), changing the `ENGRAM_DECAY` default, the `-rerank cosine` secondary table, sweep cost in the report, similarity-based staleness detection, and everything on the v2 list.
 
 The report will look like this. The bracketed values are unknown until the first run.
 
@@ -18,7 +18,7 @@ The report will look like this. The bracketed values are unknown until the first
 
 <Callout id="key-finding" tone="warning">
 
-**After this change, forgetting cannot beat never-forgetting on retrieval in any query class.** Supersession runs in every arm, and recall drops superseded memories in every arm, so `none` no longer has stale facts to trip over. Its fact nDCG should climb from 0.673 toward 1.0, level with `type-aware`. The store weight then decides A versus C. A rough estimate on the agent mix puts `none` near 0.98 and `type-aware` near 0.87 at about 30% of the store, so the break-even lambda is near 0.16. That makes the lambda value a decision about what the recommendation will say, so it belongs in Open Questions before the first run.
+**After this change, forgetting cannot beat never-forgetting on retrieval in any query class.** Supersession runs in every arm, and recall drops superseded memories in every arm, so `none` no longer has stale facts to trip over. Its fact nDCG should climb from 0.673 toward 1.0, level with `type-aware`. The store weight then decides A versus C. A rough estimate on the agent mix puts `none` near 0.98 and `type-aware` near 0.87 at about 30% of the store, so the break-even lambda is near 0.16. That makes the lambda value a decision about what the recommendation will say, so it is fixed at 0.10 before the first run and will not change afterwards.
 
 </Callout>
 
@@ -224,66 +224,19 @@ Layer order runs domain, then mock, adapters, eval and cmd. Implementers are `so
 
 `go build ./...`, `go test -race ./...`, `golangci-lint run ./...`, then `go run ./cmd/eval --update-baseline -seed 42` on amd64 and `go run ./cmd/eval --ci` twice with byte-identical arm C rows. Tables come from `-seed 42 -seeds 1` on `agent`, on `-mix stress`, and with `-lambda 0`, and they go into `design.md` beside the predictions. `go test -race -tags=integration` runs against Docker Neo4j to exercise the Cypher predicate. The one PR carries code, archive and synced specs; "ready to merge" is said only once the archive commit is on the branch.
 
-### Open Questions
+### Decisions
 
-<QuestionForm
-  id="open-questions"
-  questions={[
-    {
-      id: "lambda",
-      title: "What should the default lambda be?",
-      subtitle: "A value judgement to settle before the first run. It is not changed afterwards. The estimated break-even against none is about 0.16.",
-      mode: "single",
-      options: [
-        { id: "l010", label: "0.10", detail: "A 10x larger store is worth about 0.09 nDCG. On the estimate, the recommendation stays none.", recommended: true },
-        { id: "l020", label: "0.20", detail: "Store size counts twice as much. On the estimate, the recommendation becomes type-aware." },
-        { id: "l005", label: "0.05", detail: "Store size barely matters. The recommendation stays none." },
-      ],
-      required: true,
-    },
-    {
-      id: "agent-mix",
-      title: "Is 35/20/30/5/10 the right agent mix?",
-      subtitle: "Topic-current, fact, episode-recent, episode-old, bridge. Each number is an assumption, so a better-informed guess beats mine.",
-      mode: "single",
-      options: [
-        { id: "keep", label: "Keep 35/20/30/5/10", recommended: true },
-      ],
-      required: true,
-    },
-    {
-      id: "chain-coverage",
-      title: "Should the generator set Supersedes on every fact chain?",
-      subtitle: "Every chain removes all stale facts, which leaves no query class where forgetting beats none. Real callers will sometimes forget to pass it.",
-      mode: "single",
-      options: [
-        { id: "every", label: "Every chain", detail: "Matches the launch scope. The cleanest statement of what explicit supersession does.", recommended: true },
-        { id: "most", label: "Most chains, about 70%", detail: "Keeps some implicit staleness as a realistic caller error, which hands forgetting a place to help. More to defend." },
-      ],
-      required: true,
-    },
-    {
-      id: "break-even",
-      title: "Should the report print the break-even lambda?",
-      subtitle: "Not in the launch scope. It costs one function and one report line.",
-      mode: "single",
-      options: [
-        { id: "keep", label: "Print it", detail: "Readers can see how close the recommendation sits to the constant.", recommended: true },
-        { id: "strike", label: "Leave it out", detail: "Smaller report; the sensitivity stays implicit." },
-      ],
-      required: true,
-    },
-    {
-      id: "m6-rest",
-      title: "PRD M6 also lists memory_stats and the demo recording. Where do they go?",
-      subtitle: "v1 is not done without a real agent using the MCP server end to end.",
-      mode: "single",
-      options: [
-        { id: "follow-up", label: "A follow-up change after this PR", detail: "Keeps this PR to the eval correction. memory_stats is a new MCP tool and needs its own review.", recommended: true },
-        { id: "this-pr", label: "Add them to this change", detail: "One milestone, one PR, as the repo rule states, at the cost of a much larger review." },
-      ],
-      required: true,
-    },
+Confirmed at the plan review on 2026-11-03, before any M6 eval run.
+
+<Table
+  id="decisions"
+  columns={["Question", "Decision"]}
+  rows={[
+    ["Default lambda", "0.10. On the estimate the recommendation stays none, and -lambda overrides it"],
+    ["Agent mix", "35/20/30/5/10"],
+    ["Supersedes in the generator", "Every fact chain"],
+    ["Break-even lambda in the report", "Printed"],
+    ["memory_stats and the demo recording", "A follow-up change after this PR"],
   ]}
-  submitLabel="Send answers"
+  density="compact"
 />
