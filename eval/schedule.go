@@ -101,7 +101,11 @@ func (d *Dataset) latestAt(chain []int, day int) int {
 func (d *Dataset) buildQueries(r *rand.Rand, g *graphInfo) error {
 	p := d.Params
 	last := p.Days - 1
-	nTopic, nFact, nRecent, nOld := p.Queries*25/100, p.Queries*15/100, p.Queries*20/100, p.Queries*15/100
+	pct, ok := mixPcts[p.Mix]
+	if !ok {
+		return fmt.Errorf("build queries: unknown mix %q", p.Mix)
+	}
+	nTopic, nFact, nRecent, nOld := p.Queries*pct[0]/100, p.Queries*pct[1]/100, p.Queries*pct[2]/100, p.Queries*pct[3]/100
 	nBridge := p.Queries - nTopic - nFact - nRecent - nOld
 	nLink := nBridge / 2
 

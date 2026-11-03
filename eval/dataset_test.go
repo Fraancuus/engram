@@ -70,7 +70,7 @@ func TestGenerateRejectsBelowFloor(t *testing.T) {
 
 func TestGenerateUncheckedSmall(t *testing.T) {
 	t.Parallel()
-	p := Params{Seed: 5, Namespaces: 2, Topics: 6, Memories: 120, Entities: 12, Queries: 40, Days: 180, Dim: 32}
+	p := Params{Seed: 5, Namespaces: 2, Topics: 6, Memories: 120, Entities: 12, Queries: 40, Days: 180, Dim: 32, Mix: MixAgent}
 	d, err := generateUnchecked(p)
 	if err != nil {
 		t.Fatal(err)
@@ -333,7 +333,7 @@ func TestNoDedupCollisionsSeeds(t *testing.T) {
 
 func TestGenerateUncheckedRejectsTinyDim(t *testing.T) {
 	t.Parallel()
-	p := Params{Seed: 5, Namespaces: 2, Topics: 6, Memories: 120, Entities: 12, Queries: 40, Days: 180, Dim: 4}
+	p := Params{Seed: 5, Namespaces: 2, Topics: 6, Memories: 120, Entities: 12, Queries: 40, Days: 180, Dim: 4, Mix: MixAgent}
 	if _, err := generateUnchecked(p); err == nil {
 		t.Fatal("expected error for dim 4")
 	}

@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/Fraancuus/engram"
@@ -75,17 +76,54 @@ func TestScheduleWindows(t *testing.T) {
 	}
 }
 
-func TestQueryMix(t *testing.T) {
-	t.Parallel()
-	d := floorDS(t)
+func classCounts(d *Dataset) map[QueryClass]int {
 	got := map[QueryClass]int{}
 	for _, q := range d.Queries {
 		got[q.Class]++
 	}
-	near := func(n, want int) bool { return n >= want-2 && n <= want+2 }
+	return got
+}
+
+func near(n, want int) bool { return n >= want-2 && n <= want+2 }
+
+func TestQueryMixAgent(t *testing.T) {
+	t.Parallel()
+	got := classCounts(floorDS(t))
+	if !near(got[QTopicCurrent], 175) || !near(got[QFact], 100) || !near(got[QEpisodeRecent], 150) ||
+		!near(got[QEpisodeOld], 25) || !near(got[QBridgeLink]+got[QBridgeEntity], 50) {
+		t.Fatalf("agent query mix %v", got)
+	}
+	if !near(got[QBridgeLink], 25) || !near(got[QBridgeEntity], 25) {
+		t.Fatalf("bridge split %v", got)
+	}
+}
+
+func stressDS(t *testing.T) *Dataset {
+	t.Helper()
+	p := Floor()
+	p.Seed, p.Mix = 42, MixStress
+	d, err := Generate(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func TestQueryMixStress(t *testing.T) {
+	t.Parallel()
+	got := classCounts(stressDS(t))
 	if !near(got[QTopicCurrent], 125) || !near(got[QFact], 75) || !near(got[QEpisodeRecent], 100) ||
 		!near(got[QEpisodeOld], 75) || !near(got[QBridgeLink]+got[QBridgeEntity], 125) {
-		t.Fatalf("query mix %v", got)
+		t.Fatalf("stress query mix %v", got)
+	}
+}
+
+func TestMixKeepsCorpus(t *testing.T) {
+	t.Parallel()
+	a, b := floorDS(t), stressDS(t)
+	if !reflect.DeepEqual(a.Memories, b.Memories) || !reflect.DeepEqual(a.Entities, b.Entities) ||
+		!reflect.DeepEqual(a.Accesses, b.Accesses) {
+		t.Fatal("mix changed the corpus")
 	}
 }
 

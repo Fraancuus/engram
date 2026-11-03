@@ -15,13 +15,37 @@ type Params struct {
 	Queries    int   `json:"queries"`
 	Days       int   `json:"days"`
 	Dim        int   `json:"dim"`
+	// Mix names the query class mix; a plain string so Params stays comparable.
+	Mix string `json:"mix"`
+}
+
+// Query mix preset names.
+const (
+	// MixAgent is the primary mix, weighted to what an agent asks.
+	MixAgent = "agent"
+	// MixStress is the original even-handed mix that stresses every class.
+	MixStress = "stress"
+)
+
+// mixPcts are class percentages: topic, fact, recent, old; bridge takes the remainder.
+var mixPcts = map[string][4]int{
+	MixAgent:  {35, 20, 30, 5},
+	MixStress: {25, 15, 20, 15},
+}
+
+// ParseMix validates a mix preset name.
+func ParseMix(s string) (string, error) {
+	if _, ok := mixPcts[s]; !ok {
+		return "", fmt.Errorf("unknown mix %q: want %s or %s", s, MixAgent, MixStress)
+	}
+	return s, nil
 }
 
 // Floor returns the minimum corpus size the eval accepts (Seed 0).
 func Floor() Params {
 	return Params{
 		Namespaces: 3, Topics: 50, Memories: 5000, Entities: 1200,
-		Queries: 500, Days: 180, Dim: 128,
+		Queries: 500, Days: 180, Dim: 128, Mix: MixAgent,
 	}
 }
 
@@ -40,6 +64,9 @@ func (p Params) Scaled(n int) Params {
 
 // Validate reports the first dimension of p that is below its floor.
 func (p Params) Validate() error {
+	if _, err := ParseMix(p.Mix); err != nil {
+		return err
+	}
 	f := Floor()
 	for _, d := range []struct {
 		name      string

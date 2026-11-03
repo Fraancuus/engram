@@ -19,7 +19,7 @@ then. No eval run may be used to choose lambda, the mix or `sigmaTwin`.
 
 ## 4. Eval: generator
 
-- [ ] 4.1 `Params.Mix`, `MixAgent`, `MixStress`, the preset table, `Floor` sets agent, `Validate` rejects an unknown mix, `buildQueries` reads the preset. Tests: `TestQueryMixAgent`, `TestQueryMixStress`, `TestParamsRejectUnknownMix`, `TestParseMix`, `TestScaledKeepsMix`, `TestMixKeepsCorpus` (same memories, vectors, links, write days and accesses across mixes).
+- [x] 4.1 `Params.Mix`, `MixAgent`, `MixStress`, the preset table, `Floor` sets agent, `Validate` rejects an unknown mix, `buildQueries` reads the preset. Tests: `TestQueryMixAgent`, `TestQueryMixStress`, `TestParamsRejectUnknownMix`, `TestParseMix`, `TestScaledKeepsMix`, `TestMixKeepsCorpus` (same memories, vectors, links, write days and accesses across mixes).
 - [ ] 4.2 Fact versions after the first carry `Supersedes`; update the `Memory.Supersedes` comment. Tests: updated topic composition test, `TestWriteSupersedesPrunedPredecessor` (an arm where a predecessor is gone at write time). Run `eval/dataset_test.go` and `eval/arm_test.go`; arm tests pinned to the old stale-fact behaviour change with a reason in the commit message.
 
 ## 5. Eval: report and recommendation
