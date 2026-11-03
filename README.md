@@ -60,7 +60,7 @@ across universes for associative recall.
 
 Three arms over a labelled dataset with virtualized time: **none** (no decay),
 **uniform** decay, and **type-aware** decay with supersession. Metrics: precision@k,
-recall@k, nDCG/MRR, latency, store size, and nDCG per query class. Relevance is judged
+recall@k, nDCG/MRR, latency, store size, and type-stratified recall. Relevance is judged
 against ground-truth labels owned by the dataset generator, never the reranker scoring
 itself. The dataset is synthetic; see
 [M5](openspec/changes/archive/2026-11-03-m5-eval/design.md) and
