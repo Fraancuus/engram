@@ -501,3 +501,30 @@ func TestDoRecallIncludeForgottenRanksDead(t *testing.T) {
 		t.Errorf("order = %v, want [high low] ranked by score", got)
 	}
 }
+
+func TestRecallPoolCutsToRerankCandidates(t *testing.T) {
+	t.Parallel()
+	seeds := []engram.RecallResult{
+		{Memory: engram.Memory{ID: "dead", Content: "dead", Superseded: true}, Score: 0.99},
+	}
+	for i := 0; i < 25; i++ {
+		seeds = append(seeds, engram.RecallResult{
+			Memory: engram.Memory{ID: engram.MemoryID(fmt.Sprintf("live%02d", i)), Content: fmt.Sprintf("live%02d", i)},
+			Score:  0.5})
+	}
+	h := blendHandlers(&mock.FakeStore{SearchResults: seeds}, mock.FakeDecay{R: 1})
+	fr := &mock.FakeReranker{}
+	h.reranker = fr
+	k := 5
+	if _, err := h.doRecall(context.Background(), RecallInput{Query: "q", K: &k}); err != nil {
+		t.Fatalf("doRecall: %v", err)
+	}
+	if len(fr.LastDocs) != defaultRerankCandidates {
+		t.Errorf("reranker got %d docs, want %d", len(fr.LastDocs), defaultRerankCandidates)
+	}
+	for _, d := range fr.LastDocs {
+		if d == "dead" {
+			t.Error("superseded candidate reached the reranker")
+		}
+	}
+}
