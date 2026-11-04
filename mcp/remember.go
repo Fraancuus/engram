@@ -26,7 +26,7 @@ type Store interface {
 	Supersede(ctx context.Context, ids []engram.MemoryID) error
 }
 
-// Tools holds the dependencies shared by the remember, recall and forget tools. It is the
+// Tools holds the dependencies shared by the remember, recall, forget and memory_stats tools. It is the
 // in-process entry point to the retrieval pipeline; NewServer exposes it over MCP.
 type Tools struct {
 	embedder         engram.Embedder
@@ -34,6 +34,9 @@ type Tools struct {
 	decay            engram.DecayModel
 	store            Store
 	forget           forgetStore
+	stats            statsStore
+	sweepStats       func() engram.SweepStats
+	statsRowCap      int
 	clock            engram.Clock
 	dedupThreshold   float64
 	seedN            int

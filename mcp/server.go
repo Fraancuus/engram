@@ -20,10 +20,12 @@ const (
 	serverVersion = "0.0.0-dev"
 )
 
-// ServerStore is the full persistence surface NewTools wires in: Store plus the forget
-// operations; each handler field then narrows to just what it uses.
+// ServerStore is the full persistence surface NewTools wires in: Store, the forget
+// operations and the read-only stats queries; each handler field then narrows to just
+// what it uses.
 type ServerStore interface {
 	Store
+	statsStore
 	SetForgotten(ctx context.Context, id engram.MemoryID) error
 	Pin(ctx context.Context, id engram.MemoryID) error
 	Delete(ctx context.Context, id engram.MemoryID) error
@@ -49,8 +51,18 @@ func WithoutRerank() Option {
 	return func(t *Tools) { t.reranker = nil }
 }
 
-// NewTools wires the domain ports into the remember, recall and forget pipeline with
-// the production defaults. Call its methods in process, or hand it to NewServer.
+// WithSweepStats supplies the decay sweep's stats to memory_stats (default: none, so the
+// tool reports the empty values). A nil fn is ignored; fn must be safe for concurrent use.
+func WithSweepStats(fn func() engram.SweepStats) Option {
+	return func(t *Tools) {
+		if fn != nil {
+			t.sweepStats = fn
+		}
+	}
+}
+
+// NewTools wires the domain ports into the remember, recall, forget and memory_stats
+// pipeline with the production defaults. Call its methods in process, or hand it to NewServer.
 func NewTools(embedder engram.Embedder, reranker engram.Reranker, decay engram.DecayModel, store ServerStore, clock engram.Clock, opts ...Option) *Tools {
 	t := &Tools{
 		embedder:         embedder,
@@ -58,6 +70,8 @@ func NewTools(embedder engram.Embedder, reranker engram.Reranker, decay engram.D
 		decay:            decay,
 		store:            store,
 		forget:           store,
+		stats:            store,
+		statsRowCap:      defaultStatsRowCap,
 		clock:            clock,
 		dedupThreshold:   defaultDedupThreshold,
 		seedN:            defaultSeedN,
@@ -91,8 +105,13 @@ func (t *Tools) Forget(ctx context.Context, in ForgetInput) (ForgetOutput, error
 	return t.doForget(ctx, in)
 }
 
+// MemoryStats reports counts, retrievability, store size and sweep state, read-only.
+func (t *Tools) MemoryStats(ctx context.Context, in MemoryStatsInput) (MemoryStatsOutput, error) {
+	return t.doMemoryStats(ctx, in)
+}
+
 // NewServer constructs the Engram MCP server on the official Model Context Protocol Go
-// SDK, registering t's remember, recall and forget tools. Each tool is registered with
+// SDK, registering t's remember, recall, forget and memory_stats tools. Each tool is registered with
 // the generic mcpsdk.AddTool, which infers and validates its JSON Schema from the Go
 // input struct (the type gate); the handlers enforce the policy bounds.
 //
@@ -121,6 +140,15 @@ func NewServer(t *Tools) *mcpsdk.Server {
 		Description: "Forget a memory by id: mode 'soft' (excluded from recall, recoverable), 'hard' (delete), 'pin' (protect from decay), or 'supersede' (mark replaced).",
 	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, in ForgetInput) (*mcpsdk.CallToolResult, ForgetOutput, error) {
 		out, err := t.Forget(ctx, in)
+		return nil, out, err
+	})
+
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name:        "memory_stats",
+		Description: "Report how many memories exist and how fresh they are, store-wide or for one namespace. Returns no content and, unlike recall, never reinforces. Counts cover all rows; live, superseded, forgotten and pinned overlap. The retrievability histogram and below_recall_threshold cover live rows, sampled when truncated is true. Scoped edge and bridge counts include those touching the namespace. Sweep stats are store-wide since process start, and read null and 0 until the first hourly sweep. An unknown namespace returns empty counts, not an error.",
+		Annotations: &mcpsdk.ToolAnnotations{ReadOnlyHint: true},
+	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, in MemoryStatsInput) (*mcpsdk.CallToolResult, MemoryStatsOutput, error) {
+		out, err := t.MemoryStats(ctx, in)
 		return nil, out, err
 	})
 

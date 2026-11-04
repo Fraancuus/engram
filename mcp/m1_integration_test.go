@@ -45,6 +45,8 @@ func liveHandlers(t *testing.T) *Tools {
 		decay:            engram.TypeAwareDecay{},
 		store:            store,
 		forget:           store,
+		stats:            store,
+		statsRowCap:      defaultStatsRowCap,
 		clock:            fixedClock{},
 		dedupThreshold:   defaultDedupThreshold,
 		seedN:            defaultSeedN,
