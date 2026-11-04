@@ -22,6 +22,7 @@ type statsRow struct {
 	typ       engram.MemoryType
 	sup, forg bool
 	pinned    bool
+	lastAcc   time.Time // zero means now
 }
 
 func putRows(t *testing.T, s *eneo4j.Store, rows []statsRow) {
@@ -34,6 +35,9 @@ func putRows(t *testing.T, s *eneo4j.Store, rows []statsRow) {
 			Embedding: embedding(384), Importance: 0.5, Stability: 2, AccessCount: 3,
 			CreatedAt: now, LastAccessed: now,
 			Superseded: r.sup, Forgotten: r.forg, Pinned: r.pinned,
+		}
+		if !r.lastAcc.IsZero() {
+			m.LastAccessed = r.lastAcc
 		}
 		if err := s.Put(ctx, m); err != nil {
 			t.Fatalf("Put %s: %v", r.id, err)
@@ -176,13 +180,15 @@ func TestStoreLiveMemoriesOrderProjectionLimit(t *testing.T) {
 	a := engram.Namespace(string(uniqueID("stats-live")))
 	other := engram.Namespace(string(uniqueID("stats-other")))
 	p := string(uniqueID("lm"))
+	// Distinct from CreatedAt and from the other rows, so a wrong column cannot pass.
+	lastAcc := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Millisecond)
 	// Dropped filters would change the first two results: the forgotten-only, other
 	// namespace and superseded rows all sort ahead of the live ones.
 	putRows(t, s, []statsRow{
 		{id: engram.MemoryID(p + "-0-forg"), ns: a, typ: engram.Episodic, forg: true},
 		{id: engram.MemoryID(p + "-1-other"), ns: other, typ: engram.Episodic},
 		{id: engram.MemoryID(p + "-2-sup"), ns: a, typ: engram.Episodic, sup: true},
-		{id: engram.MemoryID(p + "-4-live"), ns: a, typ: engram.Semantic, pinned: true},
+		{id: engram.MemoryID(p + "-4-live"), ns: a, typ: engram.Semantic, pinned: true, lastAcc: lastAcc},
 		{id: engram.MemoryID(p + "-3-live"), ns: a, typ: engram.Episodic},
 		{id: engram.MemoryID(p + "-5-live"), ns: a, typ: engram.Episodic},
 	})
@@ -196,6 +202,9 @@ func TestStoreLiveMemoriesOrderProjectionLimit(t *testing.T) {
 	m := got[1]
 	if m.Content != "" || m.Source != "" || m.Embedding != nil {
 		t.Errorf("projection leaked content/source/embedding: %+v", m)
+	}
+	if !m.LastAccessed.Equal(lastAcc) {
+		t.Errorf("LastAccessed = %v, want %v", m.LastAccessed, lastAcc)
 	}
 	if !m.Pinned || m.Importance != 0.5 || m.Stability != 2 || m.AccessCount != 3 || m.Type != engram.Semantic {
 		t.Errorf("projection lost fields: %+v", m)
