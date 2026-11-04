@@ -109,7 +109,7 @@ func TestBaselineRoundTripAndArch(t *testing.T) {
 		t.Fatalf("got %+v, %v; want %+v", got, err, want)
 	}
 	raw, _ := os.ReadFile(path) // #nosec G304 -- test temp path
-	for _, k := range []string{`"precision_at_k"`, `"ndcg_at_k"`, `"goarch"`, `"params"`, `"rerank"`} {
+	for _, k := range []string{`"precision_at_k"`, `"ndcg_at_k"`, `"goarch"`, `"params"`, `"rerank"`, `"mix"`, `"seed"`} {
 		if !strings.Contains(string(raw), k) {
 			t.Errorf("missing key %s", k)
 		}
@@ -171,6 +171,62 @@ func TestLoadBaselineRejectsZero(t *testing.T) {
 func TestGateRoundsRunSide(t *testing.T) {
 	// 0.52995 rounds to 0.5300, exactly baseline - tol.
 	if err := CheckGate(precResults(0, 0, 0.52995), baseAt(0.55), GateTolerance); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCheckGateStale(t *testing.T) {
+	for name, mut := range map[string]func(*Baseline){
+		"seed":     func(b *Baseline) { b.Seed++ },
+		"memories": func(b *Baseline) { b.Params.Memories++ },
+		"mix":      func(b *Baseline) { b.Params.Mix = MixStress },
+		"rerank":   func(b *Baseline) { b.Rerank = "cosine" },
+		"k":        func(b *Baseline) { b.K = 10 },
+	} {
+		b := baseAt(0.55)
+		mut(&b)
+		err := CheckGate(precResults(0, 0, 0.60), b, GateTolerance)
+		if err == nil {
+			t.Errorf("%s: want stale error", name)
+			continue
+		}
+		for _, s := range []string{"baseline stale", "--update-baseline", "seed", "mix", "rerank", "or k"} {
+			if !strings.Contains(err.Error(), s) {
+				t.Errorf("%s: error %q missing %q", name, err, s)
+			}
+		}
+	}
+}
+
+func TestCheckGateNoMixIsStale(t *testing.T) {
+	b := baseAt(0.55)
+	b.Params.Mix = ""
+	err := CheckGate(precResults(0, 0, 0.60), b, GateTolerance)
+	if err == nil || !strings.Contains(err.Error(), "baseline stale") {
+		t.Fatalf("want stale error, got %v", err)
+	}
+}
+
+func TestCheckGateStaleBeatsRegression(t *testing.T) {
+	b := baseAt(0.90)
+	b.Rerank = "cosine"
+	err := CheckGate(precResults(0, 0, 0.10), b, GateTolerance)
+	if err == nil || !strings.Contains(err.Error(), "baseline stale") {
+		t.Fatalf("want stale error, got %v", err)
+	}
+}
+
+func TestGateIgnoresLambda(t *testing.T) {
+	a, c := precResults(0, 0, 0.52), precResults(0, 0, 0.52)
+	a.Lambda, c.Lambda = 0.1, 5
+	if (CheckGate(a, baseAt(0.55), GateTolerance) == nil) != (CheckGate(c, baseAt(0.55), GateTolerance) == nil) {
+		t.Fatal("lambda changed the verdict")
+	}
+	a.Arms[engram.DecayTypeAware][0].Precision, c.Arms[engram.DecayTypeAware][0].Precision = 0.6, 0.6
+	if err := CheckGate(a, baseAt(0.55), GateTolerance); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckGate(c, baseAt(0.55), GateTolerance); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -242,7 +242,8 @@ func (s *MemStore) Neighbors(_ context.Context, seedIDs []engram.MemoryID, scope
 }
 
 // PropagateReinforce sets last_accessed to now on the id strongest link neighbors
-// (weight >= weightThreshold, at most propagateCap) without bumping access_count.
+// (weight >= weightThreshold, at most propagateCap) without bumping access_count. Superseded
+// neighbors are skipped and do not count toward the cap, so a stale version is not kept alive.
 func (s *MemStore) PropagateReinforce(_ context.Context, id engram.MemoryID, weightThreshold float64, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -250,6 +251,9 @@ func (s *MemStore) PropagateReinforce(_ context.Context, id engram.MemoryID, wei
 	for _, e := range s.edgesLocked(id) {
 		if n == propagateCap || e.w < weightThreshold {
 			break // sorted by weight desc, so nothing later qualifies
+		}
+		if s.mems[e.id].Superseded {
+			continue
 		}
 		s.mems[e.id].LastAccessed = now
 		n++

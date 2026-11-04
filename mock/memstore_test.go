@@ -386,3 +386,51 @@ func TestMemStoreConcurrentSearchDelete(t *testing.T) {
 		t.Fatalf("len %d", s.Len())
 	}
 }
+
+func TestMemStorePropagateSkipsSuperseded(t *testing.T) {
+	t.Parallel()
+	s := NewMemStore()
+	mustPut(t, s, mem("a", "a", 0.9), mem("live", "a", 0.9), mem("old", "a", 0.9))
+	_ = s.Link(ctx, "a", []engram.Link{{To: "live", Weight: 0.9}, {To: "old", Weight: 1.0}})
+	_ = s.Supersede(ctx, []engram.MemoryID{"old"})
+	t1 := t0.Add(time.Hour)
+	if err := s.PropagateReinforce(ctx, "a", 0.85, t1); err != nil {
+		t.Fatal(err)
+	}
+	live, _ := s.Snapshot("live")
+	old, _ := s.Snapshot("old")
+	if !live.LastAccessed.Equal(t1) || !old.LastAccessed.Equal(t0) {
+		t.Fatalf("live=%v old=%v", live.LastAccessed, old.LastAccessed)
+	}
+}
+
+func TestMemStorePropagateCapIgnoresSuperseded(t *testing.T) {
+	t.Parallel()
+	s := NewMemStore()
+	mustPut(t, s, mem("a", "a", 0.9))
+	var links []engram.Link
+	var dead []engram.MemoryID
+	for i := 0; i < 30; i++ {
+		id := engram.MemoryID(fmt.Sprintf("n%02d", i))
+		mustPut(t, s, mem(string(id), "a", 0.9))
+		// 30 strong edges; the 5 heaviest (n25..n29) are superseded, so exactly the
+		// 20 heaviest live neighbors (n05..n24) refresh and n00..n04 miss the cap
+		w := 0.9 + float64(i)*0.001
+		if i >= 25 {
+			dead = append(dead, id)
+		}
+		links = append(links, engram.Link{To: id, Weight: w})
+	}
+	_ = s.Link(ctx, "a", links)
+	_ = s.Supersede(ctx, dead)
+	t1 := t0.Add(time.Hour)
+	if err := s.PropagateReinforce(ctx, "a", 0.85, t1); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 30; i++ {
+		m, _ := s.Snapshot(engram.MemoryID(fmt.Sprintf("n%02d", i)))
+		if want := i >= 5 && i < 25; m.LastAccessed.Equal(t1) != want {
+			t.Errorf("n%02d refreshed=%v, want %v", i, m.LastAccessed.Equal(t1), want)
+		}
+	}
+}

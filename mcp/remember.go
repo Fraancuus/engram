@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -55,14 +56,16 @@ const (
 	maxSourceBytes    = 256
 	defaultImportance = 0.5
 
-	// defaultDedupThreshold is the cosine similarity at or above which a new memory is
-	// treated as a duplicate of the nearest existing one in its namespace.
+	// defaultDedupThreshold is the index score at or above which a new memory is
+	// treated as a duplicate of the nearest existing one in its namespace. The score is
+	// the normalised (1+cos)/2 scale, so 0.95 is a raw cosine of 0.90.
 	defaultDedupThreshold = 0.95
 
 	// autoLinkK is how many nearest neighbors a new memory considers linking to;
-	// linkThreshold is the minimum cosine similarity for an auto-link.
+	// linkThreshold is the minimum index score for an auto-link, on the normalised
+	// (1+cos)/2 scale: 0.925 is a raw cosine of 0.85.
 	autoLinkK     = 5
-	linkThreshold = 0.85
+	linkThreshold = 0.925
 )
 
 // RememberInput is the argument set of the remember tool.
@@ -74,7 +77,7 @@ type RememberInput struct {
 	Source     string   `json:"source,omitempty" jsonschema:"where this memory came from"`
 	Entities   []string `json:"entities,omitempty" jsonschema:"entity names this memory mentions"`
 	Links      []string `json:"links,omitempty" jsonschema:"ids of existing memories to link this one to"`
-	Supersedes []string `json:"supersedes,omitempty" jsonschema:"ids of existing memories this (procedural) memory replaces"`
+	Supersedes []string `json:"supersedes,omitempty" jsonschema:"ids of existing memories this (procedural or semantic) memory replaces"`
 }
 
 // RememberOutput is the result of the remember tool.
@@ -141,6 +144,12 @@ func (t *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberO
 		}
 	}
 
+	// Only procedural and semantic writes replace; one value drives both dedup and supersession.
+	replaces := in.Supersedes
+	if mt == engram.Episodic {
+		replaces = nil
+	}
+
 	ns := engram.Namespace(in.Namespace)
 	vec, err := t.embedder.Embed(ctx, in.Content)
 	if err != nil {
@@ -148,26 +157,26 @@ func (t *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberO
 		return RememberOutput{}, errors.New("remember: embedding failed")
 	}
 
-	// Search the namespace once: candidates[0] drives dedup; the rest feed auto-linking.
+	// Search the namespace once: the top live candidate drives dedup; the rest feed auto-linking.
 	candidates, err := t.store.Search(ctx, []engram.Namespace{ns}, vec, autoLinkK)
 	if err != nil {
 		t.log.Error("remember: search failed", "err", err)
 		return RememberOutput{}, errors.New("remember: store unavailable")
 	}
-	if len(candidates) > 0 && candidates[0].Score >= t.dedupThreshold {
-		if err := t.store.Reinforce(ctx, candidates[0].ID, t.clock.Now()); err != nil {
+	if target, ok := t.dedupTarget(candidates, replaces, mt, in.Content); ok {
+		if err := t.store.Reinforce(ctx, target.ID, t.clock.Now()); err != nil {
 			t.log.Error("remember: reinforce failed", "err", err)
 			return RememberOutput{}, errors.New("remember: store unavailable")
 		}
 		// Merge any supplied entities onto the existing memory so a retry after a prior
 		// LinkEntities failure (or genuinely new mentions) still records them.
 		if len(in.Entities) > 0 {
-			if err := t.store.LinkEntities(ctx, candidates[0].ID, in.Entities); err != nil {
+			if err := t.store.LinkEntities(ctx, target.ID, in.Entities); err != nil {
 				t.log.Error("remember: link entities on dedup failed", "err", err)
 				return RememberOutput{}, errors.New("remember: store unavailable")
 			}
 		}
-		return RememberOutput{MemoryID: string(candidates[0].ID), Deduped: true}, nil
+		return RememberOutput{MemoryID: string(target.ID), Deduped: true, Superseded: t.applySupersedes(ctx, replaces)}, nil
 	}
 
 	id, err := t.newID()
@@ -203,7 +212,7 @@ func (t *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberO
 	// Auto-link to the sufficiently-similar candidates, plus any explicit links.
 	var links []engram.Link
 	for _, c := range candidates {
-		if c.Score >= linkThreshold {
+		if c.Score >= linkThreshold && !c.Forgotten {
 			links = append(links, engram.Link{To: c.ID, Weight: c.Score})
 		}
 	}
@@ -217,21 +226,41 @@ func (t *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberO
 		}
 	}
 
-	out = RememberOutput{MemoryID: string(id), Deduped: false}
-	// Supersession: a new procedural memory can mark older ones replaced — how reference
-	// memory "forgets", by replacement rather than by time.
-	if mt == engram.Procedural && len(in.Supersedes) > 0 {
-		ids := make([]engram.MemoryID, len(in.Supersedes))
-		for i, sid := range in.Supersedes {
-			ids[i] = engram.MemoryID(sid)
+	return RememberOutput{MemoryID: string(id), Superseded: t.applySupersedes(ctx, replaces)}, nil
+}
+
+// dedupTarget returns the best candidate a new memory should be merged into: the first, in
+// score order, at or above the dedup threshold that is live (not superseded or soft-forgotten)
+// and not being replaced. A replacement dedups only into a memory of its own type with the
+// same content (a retried correction), so a correction never folds into a different live
+// memory and loses its text.
+// shortcut: Search returns autoLinkK=5 candidates, 5 skipped ones hide a live duplicate at rank 6, raise autoLinkK if that shows up
+func (t *Tools) dedupTarget(cands []engram.RecallResult, replaces []string, mt engram.MemoryType, content string) (engram.RecallResult, bool) {
+	for _, c := range cands {
+		if c.Score < t.dedupThreshold {
+			break
 		}
-		if err := t.store.Supersede(ctx, ids); err != nil {
-			// The memory is already stored; supersession is best-effort, so log and return the
-			// successful insert rather than failing an accepted write.
-			t.log.Error("remember: supersede failed (memory stored)", "err", err)
-		} else {
-			out.Superseded = in.Supersedes
+		if c.Superseded || c.Forgotten || slices.Contains(replaces, string(c.ID)) || (len(replaces) > 0 && (c.Type != mt || c.Content != content)) {
+			continue
 		}
+		return c, true
 	}
-	return out, nil
+	return engram.RecallResult{}, false
+}
+
+// applySupersedes marks ids replaced and returns them, or nil when there are none or the
+// store fails. Best-effort: the memory is already stored, so a failure is logged, not returned.
+func (t *Tools) applySupersedes(ctx context.Context, ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	mids := make([]engram.MemoryID, len(ids))
+	for i, sid := range ids {
+		mids[i] = engram.MemoryID(sid)
+	}
+	if err := t.store.Supersede(ctx, mids); err != nil {
+		t.log.Error("remember: supersede failed (memory stored)", "err", err, "ids", ids)
+		return nil
+	}
+	return ids
 }

@@ -20,7 +20,7 @@ type Kind int
 // Memory kinds.
 const (
 	KindStandard Kind = iota // procedural, versioned
-	KindFact                 // semantic, write-once
+	KindFact                 // semantic, versioned in chains: each version supersedes its predecessor
 	KindEpisode              // episodic
 )
 
@@ -90,7 +90,7 @@ type Memory struct {
 	Importance float64
 	Entities   []string
 	Links      []string // GIDs written no later than this memory
-	Supersedes string   // GID of the previous standard version
+	Supersedes string   // GID of the previous version in the standard or fact chain; empty for v1
 	WriteDay   int
 	Twin       string // GID of the sibling episode this one is a near-copy of
 }
@@ -203,6 +203,9 @@ func (d *Dataset) buildMemories(r *rand.Rand) {
 			var chain []int
 			for v := 1; v <= n; v++ {
 				m := Memory{GID: fmt.Sprintf("t%03d/fact/c%d/v%d", t, c+1, v), Type: engram.Semantic, Kind: KindFact, Version: v, Chain: c + 1, Importance: 0.5}
+				if v > 1 {
+					m.Supersedes = d.Memories[chain[v-2]].GID
+				}
 				chain = append(chain, add(m))
 			}
 			ts.facts = append(ts.facts, chain...)
@@ -339,10 +342,10 @@ func (d *Dataset) bestDraw(i int, ts topicSpan, cents []engram.Vector, draw func
 // bandScore returns how far memory i, already holding a candidate vector, sits
 // from the middle of its band against every earlier-assigned memory of its topic,
 // as a fraction of the band's half-width: at most 1 means every pair is inside
-// its band. The band is [minLinkedCos, maxLinkedCos] for a twin pair or two
-// versions of one fact chain and [minOrdinaryCos, maxOrdinaryCos] for any other
-// pair. This enforces the auto-link and dedup scales (see vectors.go) by
-// construction.
+// its band. The band is [minTwinCos, maxTwinCos] for a twin pair,
+// [minLinkedCos, maxLinkedCos] for two versions of one fact chain and
+// [minOrdinaryCos, maxOrdinaryCos] for any other pair. This enforces the
+// auto-link and dedup scales (see vectors.go) by construction.
 func (d *Dataset) bandScore(i int, ts topicSpan) float64 {
 	mi := d.Memories[i]
 	worst := 0.0
@@ -353,7 +356,10 @@ func (d *Dataset) bandScore(i int, ts topicSpan) float64 {
 			}
 			mj := d.Memories[j]
 			lo, hi := minOrdinaryCos, maxOrdinaryCos
-			if mi.Twin == mj.GID || mj.Twin == mi.GID || (mi.Kind == KindFact && mj.Kind == KindFact && mi.Chain == mj.Chain) {
+			switch {
+			case mi.Twin == mj.GID || mj.Twin == mi.GID:
+				lo, hi = minTwinCos, maxTwinCos
+			case mi.Kind == KindFact && mj.Kind == KindFact && mi.Chain == mj.Chain:
 				lo, hi = minLinkedCos, maxLinkedCos
 			}
 			worst = max(worst, math.Abs(mock.Cosine(mi.Vec, mj.Vec)-(lo+hi)/2)/((hi-lo)/2))

@@ -34,27 +34,29 @@ func floorDS(t *testing.T) *Dataset {
 
 func TestGenerateDeterministic(t *testing.T) {
 	t.Parallel()
+	a := floorDS(t)
 	p := Floor()
 	p.Seed = 42
 	start := time.Now()
-	a, err := Generate(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("Generate(Floor) took %s", time.Since(start))
 	b, err := Generate(p)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("Generate(Floor) took %s", time.Since(start))
 	if a.Hash() != b.Hash() {
 		t.Fatal("same seed produced different hashes")
 	}
-	p.Seed = 43
-	c, err := Generate(p)
+	tp := tinyParams()
+	x, err := generateUnchecked(tp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Hash() == c.Hash() {
+	tp.Seed++
+	y, err := generateUnchecked(tp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if x.Hash() == y.Hash() {
 		t.Fatal("different seeds produced equal hashes")
 	}
 }
@@ -70,7 +72,7 @@ func TestGenerateRejectsBelowFloor(t *testing.T) {
 
 func TestGenerateUncheckedSmall(t *testing.T) {
 	t.Parallel()
-	p := Params{Seed: 5, Namespaces: 2, Topics: 6, Memories: 120, Entities: 12, Queries: 40, Days: 180, Dim: 32}
+	p := Params{Seed: 5, Namespaces: 2, Topics: 6, Memories: 120, Entities: 12, Queries: 40, Days: 180, Dim: 32, Mix: MixAgent}
 	d, err := generateUnchecked(p)
 	if err != nil {
 		t.Fatal(err)
@@ -108,9 +110,16 @@ func TestTopicComposition(t *testing.T) {
 				t.Fatalf("%s: type/importance", m.GID)
 			}
 		case KindFact:
+			prev := ""
+			if ch := tp.chains[m.Chain]; len(ch) > 0 {
+				prev = ch[len(ch)-1].GID
+			}
 			tp.chains[m.Chain] = append(tp.chains[m.Chain], m)
-			if m.Type != engram.Semantic || m.Importance != 0.5 || m.Supersedes != "" {
-				t.Fatalf("%s: type/importance/supersedes", m.GID)
+			if m.Type != engram.Semantic || m.Importance != 0.5 {
+				t.Fatalf("%s: type/importance", m.GID)
+			}
+			if m.Supersedes != prev {
+				t.Fatalf("%s: supersedes %q, want chain predecessor %q", m.GID, m.Supersedes, prev)
 			}
 		case KindEpisode:
 			tp.eps = append(tp.eps, m)
@@ -254,8 +263,8 @@ func TestTwinRange(t *testing.T) {
 			t.Fatalf("%s: twin %s missing", m.GID, m.Twin)
 		}
 		c := mock.Cosine(m.Vec, sib.Vec)
-		if c < 0.74 || c > 0.88 {
-			t.Fatalf("%s/%s: twin cosine %.4f outside [0.74, 0.88]", m.GID, sib.GID, c)
+		if c < 0.86 || c > 0.89 {
+			t.Fatalf("%s/%s: twin cosine %.4f outside [0.86, 0.89]", m.GID, sib.GID, c)
 		}
 		n++
 	}
@@ -333,7 +342,7 @@ func TestNoDedupCollisionsSeeds(t *testing.T) {
 
 func TestGenerateUncheckedRejectsTinyDim(t *testing.T) {
 	t.Parallel()
-	p := Params{Seed: 5, Namespaces: 2, Topics: 6, Memories: 120, Entities: 12, Queries: 40, Days: 180, Dim: 4}
+	p := Params{Seed: 5, Namespaces: 2, Topics: 6, Memories: 120, Entities: 12, Queries: 40, Days: 180, Dim: 4, Mix: MixAgent}
 	if _, err := generateUnchecked(p); err == nil {
 		t.Fatal("expected error for dim 4")
 	}

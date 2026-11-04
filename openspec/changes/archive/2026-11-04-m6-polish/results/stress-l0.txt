@@ -1,0 +1,20 @@
+rerank: none, mix: stress, lambda: 0
+arm         precision@5  recall@5     ndcg@5       mrr          procedural   semantic     episodic     bridge-link  bridge-entity  via-vector   via-link     via-entity   store   score  edges  bridges  p50         p95
+none        0.225±0.000  0.937±0.000  0.919±0.000  0.955±0.000  1.000±0.000  1.000±0.000  0.895±0.000  1.000±0.000  0.500±0.000    0.875±0.000  0.125±0.000  0.000±0.000  5000±0  0.919  955±0  36043±0  3.0±0.0 ms  6.1±0.0 ms
+uniform     0.203±0.000  0.861±0.000  0.851±0.000  0.893±0.000  0.984±0.000  1.000±0.000  0.775±0.000  0.798±0.000  0.429±0.000    0.899±0.000  0.101±0.000  0.000±0.000  3876±0  0.851  456±0  21623±0  2.1±0.0 ms  5.5±0.0 ms
+type-aware  0.144±0.000  0.664±0.000  0.671±0.000  0.698±0.000  1.000±0.000  1.000±0.000  0.440±0.000  0.266±0.000  0.167±0.000    0.975±0.000  0.025±0.000  0.000±0.000  1180±0  0.671  114±0  2112±0   0.5±0.0 ms  2.5±0.0 ms
+
+by query class (ndcg / mrr)
+arm         topic-current  fact         episode-recent  episode-old  bridge-link  bridge-entity
+none        1.000/1.000    0.813/0.747  0.989/0.985     0.990/0.987  1.000/1.000  0.606/0.984
+uniform     0.984/0.984    0.862/0.813  0.989/0.985     0.737/0.733  0.822/0.903  0.518/0.841
+type-aware  1.000/1.000    1.000/1.000  0.993/0.990     0.067/0.067  0.294/0.387  0.204/0.333
+
+access hit rate (target ranked first)
+arm         standard     fact         episode
+none        0.876±0.000  0.724±0.000  0.989±0.000
+uniform     0.876±0.000  0.761±0.000  0.991±0.000
+type-aware  0.876±0.000  0.768±0.000  0.995±0.000
+
+break-even lambda vs none: uniform 0.301, type-aware 0.325
+recommended: none (ENGRAM_DECAY=none) on mix stress, lambda 0

@@ -26,11 +26,17 @@ type graphInfo struct {
 	crossLinks [][2]int         // (episode X, linked memory Y) in other topics
 	hubs       []string         // hub entity names, sorted
 	members    map[string][]int // hub name -> memories mentioning it
+	superseded map[string]bool  // GIDs some memory supersedes: never a bridge label
 }
 
 // buildGraph adds links and entity mentions.
 func (d *Dataset) buildGraph(r *rand.Rand) *graphInfo {
-	g := &graphInfo{members: map[string][]int{}}
+	g := &graphInfo{members: map[string][]int{}, superseded: map[string]bool{}}
+	for _, m := range d.Memories {
+		if m.Supersedes != "" {
+			g.superseded[m.Supersedes] = true
+		}
+	}
 	d.linkChains()
 	d.linkCross(r, g)
 	d.buildEntities(r, g)
@@ -38,9 +44,9 @@ func (d *Dataset) buildGraph(r *rand.Rand) *graphInfo {
 }
 
 // linkChains links each standard version to its predecessor, each fact version
-// to its chain predecessor, and each fact to the standard current at its write
-// time. A link is stored on the later-written
-// end, since a remember can only reference what already exists.
+// to its chain predecessor (which it also supersedes, see Memory.Supersedes),
+// and each fact to the standard current at its write time. A link is stored on
+// the later-written end, since a remember can only reference what already exists.
 func (d *Dataset) linkChains() {
 	for _, ts := range d.topics {
 		for i := 1; i < len(ts.std); i++ {
@@ -72,7 +78,9 @@ func (d *Dataset) before(a, b int) bool {
 }
 
 // linkCross links 2% of episodes to an earlier non-standard memory in another
-// topic of the same namespace, far from the episode in vector space.
+// topic of the same namespace, far from the episode in vector space. The target
+// is never superseded: recall drops a memory with a successor, so it could not
+// be a reachable label.
 func (d *Dataset) linkCross(r *rand.Rand, g *graphInfo) {
 	var eps []int
 	for _, ts := range d.topics {
@@ -87,7 +95,7 @@ func (d *Dataset) linkCross(r *rand.Rand, g *graphInfo) {
 		for try := 0; try < 300; try++ {
 			y := r.IntN(len(d.Memories))
 			X, Y := &d.Memories[x], d.Memories[y]
-			if Y.Topic == X.Topic || Y.Namespace != X.Namespace || Y.Kind == KindStandard || !d.before(y, x) ||
+			if Y.Topic == X.Topic || Y.Namespace != X.Namespace || Y.Kind == KindStandard || g.superseded[Y.GID] || !d.before(y, x) ||
 				math.Abs(mock.Cosine(X.Vec, Y.Vec)) >= bridgeMaxCos {
 				continue
 			}
@@ -207,6 +215,7 @@ func (d *Dataset) hubTopics(r *rand.Rand) []int {
 
 // entityPair finds a hub-linked (X, Y) in different topics with Y far from X in
 // vector space. X is episodic and the pair crosses namespaces when it can.
+// Neither end is superseded, since both are labels.
 func (d *Dataset) entityPair(r *rand.Rand, g *graphInfo) (x, y int, ok bool) {
 	if len(g.hubs) == 0 {
 		return 0, 0, false
@@ -218,7 +227,7 @@ func (d *Dataset) entityPair(r *rand.Rand, g *graphInfo) (x, y int, ok bool) {
 		}
 		x, y = mem[r.IntN(len(mem))], mem[r.IntN(len(mem))]
 		X, Y := d.Memories[x], d.Memories[y]
-		if X.Topic == Y.Topic || Y.Kind == KindStandard ||
+		if X.Topic == Y.Topic || Y.Kind == KindStandard || g.superseded[X.GID] || g.superseded[Y.GID] ||
 			(try < 300 && X.Kind != KindEpisode) || (try < 200 && X.Namespace == Y.Namespace) ||
 			math.Abs(mock.Cosine(X.Vec, Y.Vec)) >= bridgeMaxCos {
 			continue

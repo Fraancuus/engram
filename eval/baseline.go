@@ -117,7 +117,7 @@ func CheckGate(r *Results, b Baseline, tol float64) error {
 		return fmt.Errorf("eval params: %w", err)
 	}
 	if len(r.Seeds) == 0 || b.Seed != r.Seeds[0] || b.Params != r.Params || b.Rerank != r.Rerank || b.K != r.K {
-		return errors.New("baseline stale: seed, params or rerank differ; re-run --update-baseline")
+		return errors.New("baseline stale: seed, params (including mix), rerank or k differ; re-run --update-baseline")
 	}
 	a, err := typeAwareFirst(r)
 	if err != nil {

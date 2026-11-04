@@ -17,16 +17,18 @@ const dimDefault = 128
 // changes with them.
 //
 // All bounds are raw cosines. The vector index scores (1+cos)/2 and the pipeline
-// thresholds (dedup 0.95, auto-link 0.85) apply to that scale, so in raw cosine the
-// dedup point is 0.90 and the auto-link point is 0.70 (design D3b). Hence: ordinary
-// pairs stay below the link point, twins and chain versions sit between the link
-// and dedup points, and nothing reaches the dedup point.
+// thresholds (dedup 0.95, auto-link and propagate 0.925) apply to that scale, so in
+// raw cosine the dedup point is 0.90 and the link point is 0.85. Hence: ordinary
+// pairs stay below the link point, twins sit in [minTwinCos, maxTwinCos] between the
+// link and dedup points so they auto-link, and chain versions sit in
+// [minLinkedCos, maxLinkedCos]. Chain versions carry explicit links, and any
+// above the link point also auto-link. Nothing reaches the dedup point.
 const (
 	// sigmaInTopic scales the per-memory noise added to a topic centroid.
 	sigmaInTopic = 0.97
 	// sigmaTwin is the weight of fresh noise relative to the sibling's noise
 	// (weight 1) in a twin's noise; it sets cosine(twin, sibling).
-	sigmaTwin = 1.5
+	sigmaTwin = 0.95
 	// kindOffsetScale scales the per-kind offset added to a topic centroid.
 	kindOffsetScale = 0.35
 	// noiseLeakMax caps |noise . otherCentroid|; noise that leaks more is redrawn
@@ -40,14 +42,17 @@ const (
 	// centroid; versions of one chain then sit near cosine 1/(1+sigma^2).
 	sigmaFactVersion = 0.5
 	// minOrdinaryCos and maxOrdinaryCos bound a same-topic pair that is neither a
-	// twin pair nor two versions of one chain; the ceiling is under the auto-link
-	// point (raw cosine 0.70) with a 0.04 margin, because the mock does not model the
-	// index's quantization noise.
+	// twin pair nor two versions of one chain; the ceiling stays well under the
+	// auto-link point (raw cosine 0.85), so general chatter does not link.
 	minOrdinaryCos = 0.40
 	maxOrdinaryCos = 0.66
-	// minLinkedCos and maxLinkedCos bound twin pairs and versions of one chain:
-	// above the auto-link point, with maxLinkedCos a margin under the dedup point
-	// (raw cosine 0.90), so no two memories of a namespace ever dedup.
+	// minTwinCos and maxTwinCos bound a twin pair: above the auto-link point (raw
+	// cosine 0.85) and a margin under the dedup point (raw cosine 0.90).
+	minTwinCos = 0.86
+	maxTwinCos = 0.89
+	// minLinkedCos and maxLinkedCos bound two versions of one chain, with
+	// maxLinkedCos a margin under the dedup point (raw cosine 0.90), so no two
+	// memories of a namespace ever dedup.
 	minLinkedCos = 0.74
 	maxLinkedCos = 0.88
 	// maxChainTries bounds fresh chain centroids per fact chain.

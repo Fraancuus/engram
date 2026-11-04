@@ -5,7 +5,7 @@
 **Status:** Draft for build
 **Owner:** Franco
 **Type:** Open-source portfolio + passion project
-**One-liner:** A local-first, long-term memory service for AI agents — a clean concurrent **Go** service over a graph+vector store, with **type-aware forgetting**, **namespaced "universes"**, and a rigorous eval proving the forgetting actually helps.
+**One-liner:** A local-first, long-term memory service for AI agents — a clean concurrent **Go** service over a graph+vector store, with **type-aware forgetting**, **namespaced "universes"**, and a rigorous eval measuring what the forgetting buys and what it costs.
 
 ---
 
@@ -13,7 +13,7 @@
 
 Most "agent memory" projects are a vector store with `save()` and `search()`. They never forget, never distinguish *kinds* of memory, and — critically — **never measure whether the memory layer makes retrieval better.** The store grows unbounded, recall degrades, and there's no evidence either way.
 
-Engram's thesis: *forgetting is a feature* — but **what** and **how fast** you forget depends on the *type* of memory. An event fades; a code standard shouldn't. v1 builds that distinction and **proves its effect with an eval.** The proof is the differentiator, not the storage.
+Engram's thesis: *forgetting is a feature* — but **what** and **how fast** you forget depends on the *type* of memory. An event fades; a code standard shouldn't. v1 builds that distinction and **measures its effect with an eval.** The measurement is the differentiator, not the storage.
 
 ### Signal goals (this is a portfolio piece)
 - Systems engineering in **Go**: a single-binary concurrent service (goroutines for the decay sweep, `context` for timeouts), orchestrating ML inference + a graph+vector store.
@@ -126,20 +126,20 @@ Entities are first-class nodes: `(:Memory)-[:MENTIONS]->(:Entity)`. A memory in 
 ## 6. Functional requirements
 
 ### 6.1 Write path — `remember`
-Input: `content`, `type` (`episodic`|`semantic`|`procedural`), `namespace`, optional `importance` (0–1, default 0.5), `source`, `entities[]`, explicit `links[]`.
+Input: `content`, `type` (`episodic`|`semantic`|`procedural`), `namespace`, optional `importance` (0–1, default 0.5), `source`, `entities[]`, explicit `links[]`, `supersedes[]`.
 Behavior:
 1. Embed `content` (sidecar).
-2. **Dedup**: cosine sim ≥ `DEDUP_THRESHOLD` to an existing memory *in the same namespace* → reinforce existing, return its id.
-3. **Supersession (procedural):** if a new procedural memory shares namespace + a key entity with an existing one and is flagged a replacement, mark the old `superseded` (begins its decay/archival). This is how reference memory "forgets" — by being replaced, not by time.
+2. **Dedup**: similarity ≥ `DEDUP_THRESHOLD` (on the store's normalised scale) to an existing memory *in the same namespace* → reinforce existing, return its id. Superseded and soft-forgotten memories never absorb a write. A write naming `supersedes` dedups only into identical content of its own type.
+3. **Supersession (procedural and semantic):** a write naming `supersedes` marks those memories `superseded` (begins their decay/archival). Explicit only; detection by similarity is v2. This is how reference memory "forgets" — by being replaced, not by time.
 4. Insert `:Memory` with: `created_at`, `last_accessed`, `access_count=0`, `importance`, `stability` (type-keyed `S₀`), `type`, `namespace`, embedding.
 5. **Link**: explicit links; auto-link to top-K nearest neighbors above `LINK_THRESHOLD` (intra-namespace, edge weight = similarity); `MENTIONS` edges to each entity (creating `:Entity` nodes as needed).
 
 ### 6.2 Read path — `recall`
-Input: `query`, optional `namespaces[]` (default: all), `k` (default 8), `include_forgotten` (default false).
+Input: `query`, optional `namespaces[]` (default: all), `k` (default 10), `include_forgotten` (default false).
 Pipeline:
 1. Embed query → **vector kNN** (Neo4j vector index), filtered to `namespaces` if scoped; top `N` (~50).
 2. **Associative expansion:** 1-hop `LINKS` neighbors **+ entity bridges** (memories sharing a `MENTIONS` entity). Entity bridges may cross namespaces unless the query is scoped. *This is why the graph exists.*
-3. **Score blend:** `score = w_sim·sim + w_rec·recency + w_imp·importance + w_ret·retrievability`. Weights configurable.
+3. **Score blend:** `score = w_sim·sim + w_imp·importance + w_ret·retrievability`, with `w_ret` 0.01: retrievability filters candidates before the pool is cut and only breaks near-ties. The weights are constants.
 4. **Cross-encoder rerank** the blended top-M (sidecar); take final `k`.
 5. **Token-budget assembly:** pack under a max-token ceiling.
 6. **Reinforce on access:** returned memories get `last_accessed=now`, `access_count++`, `stability` bumped; small edge-weighted bump propagates to 1-hop neighbors.
@@ -178,7 +178,7 @@ Counts by type × namespace, retrievability histogram, store size, sweep stats (
 **Conditions**
 - **A — Baseline:** flat retrievability, unbounded store. The "everyone else" system.
 - **B — Uniform decay:** one decay curve for all memories.
-- **C — Engram (type-aware decay):** per-type curves + supersession.
+- **C — Engram (type-aware decay):** per-type curves. Supersession runs in all three arms.
 
 **Dataset:** labeled `(query, relevant_memory_ids)` over a store with **simulated time + access patterns** and a **mix of types** (frequently-hit procedural standards, write-once episodic chatter, slowly-aging semantic facts). Bootstrap from a public long-term-memory benchmark (LongMemEval / LoCoMo-style) or synthesize for full ground-truth control. Time is virtualized so a "month" runs in seconds.
 
@@ -196,7 +196,7 @@ Counts by type × namespace, retrievability histogram, store size, sweep stats (
 
 | Tool | Input | Output |
 |---|---|---|
-| `remember` | `content`, `type`, `namespace`, `importance?`, `source?`, `entities?`, `links?` | `memory_id`, `deduped`, `superseded?` |
+| `remember` | `content`, `type`, `namespace`, `importance?`, `source?`, `entities?`, `links?`, `supersedes?` | `memory_id`, `deduped`, `superseded?` |
 | `recall` | `query`, `namespaces?`, `k?`, `include_forgotten?` | ranked `[{id, content, score, type, namespace, provenance}]` |
 | `forget` | `id`, `mode: soft\|hard\|pin\|supersede` | `ok` |
 | `memory_stats` | `namespace?` | counts by type×namespace, retrievability histogram, sweep stats |
@@ -215,7 +215,7 @@ Tools are registered with the official SDK's generic `mcpsdk.AddTool`, which der
 - **M3 — Rerank.** Cross-encoder rerank + token-budget assembly. Reranker = `bge-reranker-v2-m3` on the TEI sidecar (`/rerank`), with `gte-reranker-modernbert-base` as the efficiency challenger; embedder stays `bge-small-en-v1.5` (384-dim). See [ADR-0002](adr/0002-embedding-model-and-amd-acceleration.md). **Landed** — rerank re-orders the expanded candidates (final authority; degrades to similarity order if the sidecar is down) and the output is packed under a token budget. The weighted score blend (§6.2 step 3: recency + importance) is deferred to M4 to land cohesively with retrievability; see [M3 design](engram-m3-design.md).
 - **M4 — Type-aware decay.** Per-type retrievability, supersession, scheduled sweep, reinforcement (+ edge propagation), soft-forget/hard-prune, `forget`/pin/supersede. **Landed** — decay/no-decay is the primary axis (`procedural`/pinned = permanent), `DecayModel` ships as type-aware/uniform/null impls for the eval's A/B/C arms; recall soft-forgets + reinforces, a background sweep hard-prunes, and `pin` is an explicit flag (not overloaded importance). See [M4 design](engram-m4-design.md).
 - **M5 — Eval.** Mixed-type dataset; A/B/C conditions; metrics + type-stratified recall; CI gate. *The milestone that makes it credible.*
-- **M6 — Polish.** `memory_stats`, README architecture + eval writeup, demo recording.
+- **M6 — Polish.** `memory_stats`, README architecture + eval writeup, demo recording. **Status:** the eval correction and the README write-up landed; `memory_stats` and the demo recording remain open. See the [M6 design](../openspec/changes/archive/2026-11-04-m6-polish/design.md).
 
 **v1 = done when:** M5 reports the measured effect of type-aware decay, a real agent uses the MCP server end-to-end, and the README tells the architecture + eval story.
 

@@ -105,19 +105,21 @@ func lineFields(out, prefix string) ([]string, int) {
 func TestReportTableColumns(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
-	WriteTable(&buf, fakeResults(0.5, 0.6, 0.7, 100, 80, 60))
+	r := fakeResults(0.5, 0.6, 0.7, 100, 80, 60)
+	r.Params.Mix = MixAgent
+	WriteTable(&buf, r)
 	out := buf.String()
-	if !strings.HasPrefix(out, "rerank: none\n") {
+	if !strings.HasPrefix(out, "rerank: none, mix: agent, lambda: 0\n") {
 		t.Errorf("missing rerank line in:\n%s", out)
 	}
 	wantHeader := []string{"arm", "precision@5", "recall@5", "ndcg@5", "mrr", "procedural", "semantic", "episodic",
-		"bridge-link", "bridge-entity", "via-vector", "via-link", "via-entity", "store", "edges", "bridges", "p50", "p95"}
+		"bridge-link", "bridge-entity", "via-vector", "via-link", "via-entity", "store", "score", "edges", "bridges", "p50", "p95"}
 	if got, _ := lineFields(out, "arm "); !slices.Equal(got, wantHeader) {
 		t.Errorf("header = %v want %v", got, wantHeader)
 	}
 	wantRow := []string{"none", "0.111±0.000", "0.222±0.000", "0.500±0.000", "0.444±0.000",
 		"0.555±0.000", "0.666±0.000", "0.777±0.000", "0.888±0.000", "0.999±0.000",
-		"0.121±0.000", "0.131±0.000", "0.141±0.000", "100±0", "200±0", "10±0",
+		"0.121±0.000", "0.131±0.000", "0.141±0.000", "100±0", "0.500", "200±0", "10±0",
 		"2.0±0.0", "ms", "7.0±0.0", "ms"}
 	if got, _ := lineFields(out, "none "); !slices.Equal(got, wantRow) {
 		t.Errorf("none row = %v want %v", got, wantRow)
@@ -308,5 +310,181 @@ func TestAccessHitSummaryAndTable(t *testing.T) {
 	}
 	if got := strings.Fields(lines[title+2]); len(got) != 4 || got[0] != "none" || got[1] != "0.750±0.354" || got[3] != "0.250±0.000" {
 		t.Errorf("access row = %v", got)
+	}
+	// An access that returned nothing is a recorded miss (key present, rate 0): it
+	// pulls the mean down, unlike a seed without any access of the kind.
+	a3 := fakeArm(engram.DecayNone, 0.5, 10)
+	a3.AccessHit = map[Kind]float64{KindEpisode: 0}
+	r3 := &Results{K: 5, Rerank: "none", Seeds: []int64{1, 3}, Arms: map[string][]ArmResult{engram.DecayNone: {a1, a3}}}
+	if got := r3.Summary(engram.DecayNone).AccessHit[KindEpisode].Mean; got != 0.125 {
+		t.Errorf("episode mean with a miss seed = %v, want 0.125", got)
+	}
+}
+
+func TestDefaultLambda(t *testing.T) {
+	t.Parallel()
+	if DefaultLambda != 0.10 {
+		t.Fatalf("DefaultLambda = %v, want 0.10", DefaultLambda)
+	}
+}
+
+func TestRecommendStoreCostFlips(t *testing.T) {
+	t.Parallel()
+	r := fakeResults(0.98, 0.1, 0.90, 5000, 5000, 1500)
+	r.Lambda = 0.20
+	if got := Recommend(r); got != engram.DecayTypeAware {
+		t.Fatalf("got %s want type-aware", got)
+	}
+	// The scores behind the flip: none 0.98 - 0.20*1 = 0.78, type-aware
+	// 0.90 - 0.20*0.3 = 0.84.
+	base := storeBaseline(r)
+	for name, want := range map[string]float64{engram.DecayNone: 0.78, engram.DecayTypeAware: 0.84} {
+		if got := armScore(r.Summary(name), base, r.Lambda); math.Abs(got-want) > 1e-9 {
+			t.Errorf("%s score = %v, want %v", name, got, want)
+		}
+	}
+	var buf bytes.Buffer
+	WriteTable(&buf, r)
+	header, hl := lineFields(buf.String(), "arm")
+	if hl < 0 {
+		t.Fatalf("no header row in:\n%s", buf.String())
+	}
+	scoreCol := slices.Index(header, "score")
+	if scoreCol < 0 {
+		t.Fatalf("no score column in header %v", header)
+	}
+	for name, want := range map[string]string{engram.DecayNone: "0.780", engram.DecayTypeAware: "0.840"} {
+		fields, line := lineFields(buf.String(), name)
+		if line < 0 {
+			t.Fatalf("no %s row in:\n%s", name, buf.String())
+		}
+		if got := fields[scoreCol]; got != want {
+			t.Errorf("%s row score = %s, want %s (row %v)", name, got, want, fields)
+		}
+	}
+}
+
+func TestRecommendHugeLambda(t *testing.T) {
+	t.Parallel()
+	r := fakeResults(0.98, 0.90, 0.90, 5000, 5000, 1500)
+	r.Lambda = 1e308
+	if got := Recommend(r); got != engram.DecayTypeAware {
+		t.Fatalf("Recommend = %q for a huge lambda, want %s", got, engram.DecayTypeAware)
+	}
+}
+
+func TestRecommendLambdaZero(t *testing.T) {
+	t.Parallel()
+	r := fakeResults(0.98, 0.1, 0.90, 5000, 5000, 1500)
+	if got := Recommend(r); got != engram.DecayNone {
+		t.Fatalf("got %s want none", got)
+	}
+}
+
+func TestRecommendNoNoneArm(t *testing.T) {
+	t.Parallel()
+	r := fakeResults(0, 0.90, 0.88, 0, 4000, 1000)
+	delete(r.Arms, engram.DecayNone)
+	if got := storeBaseline(r); got != 4000 {
+		t.Fatalf("baseline = %v want 4000 (largest arm)", got)
+	}
+	r.Lambda = 0.20 // costs 0.20 vs 0.05: type-aware 0.83 beats uniform 0.70
+	if got := Recommend(r); got != engram.DecayTypeAware {
+		t.Fatalf("got %s want type-aware", got)
+	}
+}
+
+func TestRecommendZeroStoreBaseline(t *testing.T) {
+	t.Parallel()
+	r := fakeResults(0.5, 0.6, 0.7, 0, 0, 0)
+	r.Lambda = 0.5
+	s := r.Summary(engram.DecayTypeAware)
+	got := armScore(s, storeBaseline(r), r.Lambda)
+	if math.IsNaN(got) || got != 0.7 {
+		t.Fatalf("score = %v want 0.7", got)
+	}
+	if got := Recommend(r); got != engram.DecayTypeAware {
+		t.Fatalf("got %s want type-aware", got)
+	}
+}
+
+func TestBreakEven(t *testing.T) {
+	t.Parallel()
+	sum := func(ndcg, size float64) Summary {
+		return Summary{NDCG: Stats{Mean: ndcg}, FinalSize: Stats{Mean: size}}
+	}
+	if got, ok := breakEven(sum(0.98, 5000), sum(0.90, 1500)); !ok || math.Abs(got-0.114) > 5e-4 {
+		t.Errorf("got %.3f, %v want 0.114, true", got, ok)
+	}
+	if _, ok := breakEven(sum(0.98, 5000), sum(0.90, 5000)); ok {
+		t.Error("equal store must be not applicable")
+	}
+	if _, ok := breakEven(sum(0.98, 0), sum(0.90, 0)); ok {
+		t.Error("empty none store must be not applicable")
+	}
+	if got, ok := breakEven(sum(0.90, 5000), sum(0.98, 1500)); !ok || got != 0 {
+		t.Errorf("higher nDCG arm: got %v, %v want 0, true", got, ok)
+	}
+}
+
+func TestReportNamesMix(t *testing.T) {
+	t.Parallel()
+	r := fakeResults(0.5, 0.6, 0.7, 100, 80, 60)
+	r.Params.Mix = MixStress
+	r.Lambda = 0.1
+	var buf bytes.Buffer
+	WriteTable(&buf, r)
+	out := buf.String()
+	for _, want := range []string{"mix: stress", "recommended: type-aware (ENGRAM_DECAY=type-aware) on mix stress, lambda 0.1"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+func TestReportBreakEvenLine(t *testing.T) {
+	t.Parallel()
+	r := fakeResults(0.98, 0.90, 0.90, 5000, 5000, 1500)
+	var buf bytes.Buffer
+	WriteTable(&buf, r)
+	// The two summary lines sit together, one blank line after the last table.
+	want := "\n\nbreak-even lambda vs none: uniform n/a, type-aware 0.114\nrecommended: "
+	if !strings.Contains(buf.String(), want) {
+		t.Errorf("missing %q in:\n%s", want, buf.String())
+	}
+	delete(r.Arms, engram.DecayNone)
+	buf.Reset()
+	WriteTable(&buf, r)
+	if strings.Contains(buf.String(), "break-even") {
+		t.Errorf("break-even line without arm none in:\n%s", buf.String())
+	}
+}
+
+func TestReportNoBreakEvenWithOnlyNone(t *testing.T) {
+	t.Parallel()
+	r := fakeResults(0.98, 0.90, 0.90, 5000, 5000, 1500)
+	delete(r.Arms, engram.DecayUniform)
+	delete(r.Arms, engram.DecayTypeAware)
+	var buf bytes.Buffer
+	WriteTable(&buf, r)
+	out := buf.String()
+	if strings.Contains(out, "break-even") {
+		t.Errorf("break-even line with only arm none in:\n%s", out)
+	}
+	if !strings.Contains(out, "\n\nrecommended: none ") {
+		t.Errorf("recommended line not set off by one blank line in:\n%s", out)
+	}
+}
+
+func TestResultsLambdaInJSON(t *testing.T) {
+	t.Parallel()
+	r := fakeResults(0.5, 0.6, 0.7, 100, 80, 60)
+	r.Lambda = 0.1
+	var buf bytes.Buffer
+	if err := WriteJSON(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `"Lambda": 0.1`) {
+		t.Errorf("Lambda missing from JSON:\n%s", buf.String())
 	}
 }

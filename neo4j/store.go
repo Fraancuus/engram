@@ -465,11 +465,13 @@ const propagateReinforceCap = 20
 
 // PropagateReinforce refreshes the last_accessed of the memory's strong-edge (weight >=
 // weightThreshold) 1-hop LINKS neighbors to now — spreading activation from an accessed
-// memory, without bumping their access_count. The fan-out is capped at propagateReinforceCap.
+// memory, without bumping their access_count. Superseded neighbors are skipped (before the
+// cap, so they do not use up slots) so a stale version is not kept alive. The fan-out is
+// capped at propagateReinforceCap.
 func (s *Store) PropagateReinforce(ctx context.Context, id engram.MemoryID, weightThreshold float64, now time.Time) error {
 	const q = `
 MATCH (a:Memory {id: $id})-[r:LINKS]-(nb:Memory)
-WHERE r.weight >= $thr
+WHERE r.weight >= $thr AND coalesce(nb.superseded, false) = false
 WITH nb, r ORDER BY r.weight DESC LIMIT $cap
 SET nb.last_accessed = $now`
 	if _, err := neo4jdriver.ExecuteQuery(ctx, s.driver, q,

@@ -184,3 +184,20 @@ func TestDecayNameRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// TestRetrievabilitySupersededSemantic pins that a superseded semantic memory decays on the
+// fast curve (S=2d) under both models, so it crosses the 0.05 threshold between 5.99 and 6.00 days.
+func TestRetrievabilitySupersededSemantic(t *testing.T) {
+	t.Parallel()
+	models := map[string]DecayModel{"type-aware": TypeAwareDecay{}, "uniform": UniformDecay{}}
+	for name, d := range models {
+		for _, dt := range []float64{5.99, 6.00} {
+			m := mem(Semantic, 0, decayBase)
+			m.Superseded = true
+			got := d.Retrievability(m, daysLater(dt))
+			if want := math.Exp(-dt / 2); math.Abs(got-want) > 1e-9 {
+				t.Errorf("%s dt=%v: R = %v, want %v", name, dt, got, want)
+			}
+		}
+	}
+}
