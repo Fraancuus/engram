@@ -21,13 +21,6 @@ import (
 	eneo4j "github.com/Fraancuus/engram/neo4j"
 )
 
-func envOr(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return def
-}
-
 // stdioSession starts one engramd process and connects an MCP client to it over stdio.
 type stdioSession struct {
 	*mcpsdk.ClientSession
@@ -54,6 +47,7 @@ func (s stdioSession) call(ctx context.Context, t *testing.T, name string, args 
 	t.Helper()
 	res, err := s.CallTool(ctx, &mcpsdk.CallToolParams{Name: name, Arguments: args})
 	if err != nil || res.IsError {
+		_ = s.Close() // Close joins cmd.Wait, so stderr is complete and safe to read
 		t.Fatalf("%s %v: err=%v result=%+v\nengramd stderr:\n%s", name, args, err, res, s.stderr)
 	}
 	m, ok := res.StructuredContent.(map[string]any)
@@ -90,8 +84,17 @@ func path(t *testing.T, m map[string]any, keys ...string) any {
 func hitIDs(t *testing.T, recall map[string]any) []string {
 	t.Helper()
 	var ids []string
-	for _, h := range path(t, recall, "results").([]any) {
-		ids = append(ids, h.(map[string]any)["id"].(string))
+	hits, ok := path(t, recall, "results").([]any)
+	if !ok {
+		t.Fatalf("recall results = %#v, want array", path(t, recall, "results"))
+	}
+	for _, h := range hits {
+		hit, _ := h.(map[string]any)
+		id, ok := hit["id"].(string)
+		if !ok {
+			t.Fatalf("recall hit = %#v, want object with string id", h)
+		}
+		ids = append(ids, id)
 	}
 	return ids
 }
@@ -99,11 +102,11 @@ func hitIDs(t *testing.T, recall map[string]any) []string {
 // TestStdioAllTools builds the real engramd and drives all four tools over stdio, across
 // two processes, in a unique namespace. It is the only test that speaks the wire to the binary.
 func TestStdioAllTools(t *testing.T) {
-	neo4jURI := envOr("NEO4J_TEST_URI", "neo4j://localhost:7687")
-	neo4jUser := envOr("NEO4J_TEST_USER", "neo4j")
+	neo4jURI := getenv("NEO4J_TEST_URI", "neo4j://localhost:7687")
+	neo4jUser := getenv("NEO4J_TEST_USER", "neo4j")
 	neo4jPass := os.Getenv("NEO4J_TEST_PASSWORD")
-	teiURL := envOr("TEI_TEST_URL", "http://localhost:8080")
-	rerankURL := envOr("TEI_RERANK_TEST_URL", "http://localhost:8081")
+	teiURL := getenv("TEI_TEST_URL", "http://localhost:8080")
+	rerankURL := getenv("TEI_RERANK_TEST_URL", "http://localhost:8081")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -144,6 +147,7 @@ func TestStdioAllTools(t *testing.T) {
 	a := startEngramd(ctx, t, bin, env)
 	tools, err := a.ListTools(ctx, nil)
 	if err != nil {
+		_ = a.Close() // Close joins cmd.Wait, so stderr is complete and safe to read
 		t.Fatalf("list tools: %v\nengramd stderr:\n%s", err, a.stderr)
 	}
 	var names []string
@@ -187,8 +191,17 @@ func TestStdioAllTools(t *testing.T) {
 		}
 	}
 	sum := 0.0
-	for _, bk := range path(t, stats, "retrievability", "buckets").([]any) {
-		sum += bk.(map[string]any)["count"].(float64)
+	buckets, ok := path(t, stats, "retrievability", "buckets").([]any)
+	if !ok {
+		t.Fatalf("retrievability.buckets = %#v, want array", path(t, stats, "retrievability", "buckets"))
+	}
+	for _, bk := range buckets {
+		bucket, _ := bk.(map[string]any)
+		n, ok := bucket["count"].(float64)
+		if !ok {
+			t.Fatalf("bucket = %#v, want object with numeric count", bk)
+		}
+		sum += n
 	}
 	if sum != 1 {
 		t.Errorf("histogram buckets sum = %v, want 1", sum)
@@ -209,7 +222,7 @@ func TestStdioAllTools(t *testing.T) {
 	// An unknown namespace is the nil-map case: by_namespace must still be an object.
 	unknown := b.call(ctx, t, "memory_stats", map[string]any{"namespace": ns + "-unknown"})
 	if got, ok := path(t, unknown, "counts", "by_namespace").(map[string]any); !ok || len(got) != 0 {
-		t.Errorf("unknown namespace by_namespace = %#v, want empty object", got)
+		t.Errorf("unknown namespace by_namespace = %#v, want empty object", path(t, unknown, "counts", "by_namespace"))
 	}
 	b.call(ctx, t, "memory_stats", map[string]any{}) // unscoped must succeed on any dev database
 
