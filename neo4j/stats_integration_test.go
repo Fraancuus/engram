@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -171,6 +172,45 @@ func TestStoreCountsHostileNamespace(t *testing.T) {
 	}
 	if len(got.Groups) != 0 || got.LinkEdges != 0 || got.EntityBridges != 0 {
 		t.Errorf("Counts = %+v, want empty", got)
+	}
+}
+
+// TestStoreCountsUnscoped covers the tool's default call. The database is shared, so the
+// totals are lower bounds and the fixture's own groups must appear exactly.
+func TestStoreCountsUnscoped(t *testing.T) {
+	s, a, b, ids := statsFixture(t)
+	ctx := context.Background()
+	got, err := s.Counts(ctx, "")
+	if err != nil {
+		t.Fatalf("Counts: %v", err)
+	}
+	for _, want := range []engram.CountGroup{
+		{Namespace: a, Type: engram.Episodic, Total: 2, Live: 1, Superseded: 1, Forgotten: 1},
+		{Namespace: a, Type: engram.Semantic, Total: 1, Live: 1, Pinned: 1},
+		{Namespace: b, Type: engram.Procedural, Total: 1, Live: 1},
+	} {
+		if !slices.Contains(got.Groups, want) {
+			t.Errorf("Groups lacks %+v", want)
+		}
+	}
+	if got.LinkEdges < 2 || got.EntityBridges < 3 {
+		t.Errorf("LinkEdges %d, EntityBridges %d; want at least 2 and 3", got.LinkEdges, got.EntityBridges)
+	}
+	live, err := s.LiveMemories(ctx, "", 1_000_000)
+	if err != nil {
+		t.Fatalf("LiveMemories: %v", err)
+	}
+	have := map[engram.MemoryID]bool{}
+	for _, m := range live {
+		have[m.ID] = true
+	}
+	for _, id := range ids[1:] {
+		if !have[id] {
+			t.Errorf("LiveMemories lacks live %s", id)
+		}
+	}
+	if have[ids[0]] {
+		t.Errorf("LiveMemories returned superseded and forgotten %s", ids[0])
 	}
 }
 

@@ -7,7 +7,6 @@ import (
 )
 
 var (
-	_ mcp.Store       = (*mock.MemStore)(nil)
 	_ sweep.Pruner    = (*mock.MemStore)(nil)
 	_ mcp.ServerStore = (*mock.MemStore)(nil)
 )
