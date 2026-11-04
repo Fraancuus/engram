@@ -1,6 +1,6 @@
 // Command engramd is the Engram memory service. It wires the domain to its Neo4j and
 // inference adapters by hand (no DI container) in main, serves the MCP tools
-// (remember, recall, forget) over stdio, and runs the decay sweep in the background.
+// (remember, recall, forget, memory_stats) over stdio, and runs the decay sweep in the background.
 package main
 
 import (
@@ -68,11 +68,12 @@ func run() error {
 
 	embedder := inference.New(getenv("TEI_URL", "http://localhost:8080"))
 	reranker := inference.NewReranker(getenv("TEI_RERANK_URL", "http://localhost:8081"))
-	tools := mcp.NewTools(embedder, reranker, decay, store, systemClock{})
+	// The sweeper is built before the tools so memory_stats can report its last pass.
+	sweeper := sweep.New(store, decay, systemClock{}, sweepInterval, sweepGrace, sweepFloor, sweepBatch, slog.Default())
+	tools := mcp.NewTools(embedder, reranker, decay, store, systemClock{}, mcp.WithSweepStats(sweeper.Stats))
 	srv := mcp.NewServer(tools)
 
 	// The decay sweep runs alongside serving and exits when ctx is cancelled.
-	sweeper := sweep.New(store, decay, systemClock{}, sweepInterval, sweepGrace, sweepFloor, sweepBatch, slog.Default())
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -81,7 +82,7 @@ func run() error {
 	}()
 
 	// Logs go to stderr (slog default); stdout carries the MCP stdio protocol.
-	slog.Info("engramd serving MCP over stdio", "tools", "remember,recall,forget", "sweep_interval", sweepInterval.String(), "decay", decayName)
+	slog.Info("engramd serving MCP over stdio", "tools", "remember,recall,forget,memory_stats", "sweep_interval", sweepInterval.String(), "decay", decayName)
 	serveErr := mcp.Serve(ctx, srv)
 	stop() // cancel ctx (even on a clean client disconnect) so the sweep goroutine drains
 	wg.Wait()
