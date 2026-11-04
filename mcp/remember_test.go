@@ -101,7 +101,7 @@ func TestDoRememberSupersedeIgnoredForEpisodic(t *testing.T) {
 }
 
 func cand(id string, score float64, superseded bool) engram.RecallResult {
-	return engram.RecallResult{Memory: engram.Memory{ID: engram.MemoryID(id), Type: engram.Semantic, Superseded: superseded}, Score: score}
+	return engram.RecallResult{Memory: engram.Memory{ID: engram.MemoryID(id), Type: engram.Semantic, Content: validRemember().Content, Superseded: superseded}, Score: score}
 }
 
 func TestDoRememberDedupSkipsNamedSupersede(t *testing.T) {
@@ -761,5 +761,67 @@ func TestDoRememberReplacementWalksPastOtherType(t *testing.T) {
 	}
 	if len(st.Superseded) == 0 || !slices.Contains(st.Superseded[0], "std") {
 		t.Errorf("store Superseded = %v, want a call containing std", st.Superseded)
+	}
+}
+
+func TestDoRememberCorrectionNotAbsorbedByOtherContent(t *testing.T) {
+	t.Parallel()
+	live := cand("live", 0.97, false)
+	live.Content = "something else entirely"
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{live}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	in := validRemember()
+	in.Supersedes = []string{"old"}
+	out, err := h.doRemember(context.Background(), in)
+	if err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	if out.Deduped || len(st.Puts) != 1 {
+		t.Errorf("Deduped=%v puts=%d, want false/1", out.Deduped, len(st.Puts))
+	}
+	if len(out.Superseded) != 1 || out.Superseded[0] != "old" {
+		t.Errorf("Superseded = %v, want [old]", out.Superseded)
+	}
+	if slices.Contains(st.Reinforced, "live") {
+		t.Errorf("live was reinforced: %v", st.Reinforced)
+	}
+}
+
+func TestRememberCorrectionNearLiveMemoryIsRecallable(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := mock.NewMemStore()
+	emb := vecEmbedder{
+		"old":        {0, 0, 1},
+		"live":       {1, 0, 0},
+		"correction": {0.95, 0, 0.3122}, // cos 0.95 against live: index score ~0.975
+	}
+	h := NewTools(emb, nil, engram.TypeAwareDecay{}, st, fixedClock{}, WithIDGenerator(seqIDs()), WithoutRerank())
+	for _, c := range []string{"old", "live"} {
+		if _, err := h.Remember(ctx, RememberInput{Content: c, Type: "semantic", Namespace: "ns"}); err != nil {
+			t.Fatalf("remember %s: %v", c, err)
+		}
+	}
+	before, _ := st.Snapshot("id2")
+	out, err := h.Remember(ctx, RememberInput{Content: "correction", Type: "semantic", Namespace: "ns", Supersedes: []string{"id1"}})
+	if err != nil {
+		t.Fatalf("remember correction: %v", err)
+	}
+	if out.Deduped {
+		t.Fatal("correction deduped into a different live memory and was lost")
+	}
+	if m, _ := st.Snapshot("id1"); !m.Superseded {
+		t.Error("old was not superseded")
+	}
+	// Checked before Recall, which itself reinforces what it returns.
+	if after, _ := st.Snapshot("id2"); after.AccessCount != before.AccessCount || after.Superseded {
+		t.Errorf("live touched: before %+v after %+v", before, after)
+	}
+	rec, err := h.Recall(ctx, RecallInput{Query: "correction", Namespaces: []string{"ns"}})
+	if err != nil {
+		t.Fatalf("recall: %v", err)
+	}
+	if len(rec.Results) == 0 || rec.Results[0].ID != out.MemoryID {
+		t.Errorf("recall = %+v, want the correction %s first", rec.Results, out.MemoryID)
 	}
 }

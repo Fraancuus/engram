@@ -255,7 +255,7 @@ func TestAccessHitRate(t *testing.T) {
 	t.Parallel()
 	ds := tinyDataset(t)
 	// Under none (R=1 everywhere) the target at cos~1 wins unless a newer version
-	// already superseded it: superseded memories are demoted, so that access
+	// already superseded it: superseded memories are dropped from recall, so that access
 	// reinforces the successor. Everything else must be a hit.
 	superseded := map[string]int{} // GID -> write day of its successor
 	for _, m := range ds.Memories {
@@ -298,6 +298,9 @@ func TestAccessHitRate(t *testing.T) {
 	}
 }
 
+// Guards the GID translation of a pruned predecessor id, the link edge to it, and
+// dedup of the replacement. applySupersedes only logs store errors, so a failed
+// edge would not fail the write; this test does not claim otherwise.
 func TestWriteSupersedesPrunedPredecessor(t *testing.T) {
 	t.Parallel()
 	ds := tinyDataset(t)
@@ -338,7 +341,7 @@ func TestWriteSupersedesPrunedPredecessor(t *testing.T) {
 	if err := a.store.Delete(ctx, engram.MemoryID(a.ids[v1.GID])); err != nil {
 		t.Fatalf("delete v1: %v", err)
 	}
-	// v2 also links v1, which is gone: the write must not fail on either edge.
+	// v2 also links v1, which is gone: the write must still translate the id, store v2 and not dedup.
 	if err := a.write(ctx, v2); err != nil {
 		t.Fatalf("write v2 over pruned v1: %v", err)
 	}
@@ -434,12 +437,25 @@ func TestPrunedHopKeepsLabels(t *testing.T) {
 		t.Fatalf("delete hop X: %v", err)
 	}
 	a.clock.Set(dayTime(q.Day))
+	// Query with Y's own vector so Y is retrieved and X (deleted) is not: recall is
+	// 0.5 only while the pruned X still counts in the label set; shrinking the labels
+	// to {Y} would score 1.0.
+	y, _ := ds.Lookup(q.Relevant[1])
+	q.Content, q.Namespaces = y.Content, []engram.Namespace{y.Namespace}
 	acc = newAcc()
 	if err := a.query(ctx, ds, q, 5, acc); err != nil {
 		t.Fatalf("query over a pruned hop: %v", err)
 	}
-	if len(acc.rec) != 1 || acc.rec[0] > 0.5 {
-		t.Fatalf("recall = %v, want one score at most 0.5 (both labels count)", acc.rec)
+	if len(acc.rec) != 1 || acc.rec[0] != 0.5 {
+		t.Fatalf("recall = %v, want exactly one score of 0.5 (both labels count)", acc.rec)
+	}
+}
+
+func TestAccessRecallK(t *testing.T) {
+	t.Parallel()
+	// The spec fixes accesses at k=1: a larger k reinforces neighbours and nothing would decay.
+	if accessK != 1 {
+		t.Fatalf("accessK = %d, want 1", accessK)
 	}
 }
 

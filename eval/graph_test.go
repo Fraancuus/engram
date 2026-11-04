@@ -195,7 +195,7 @@ func TestFloorEntityPool(t *testing.T) {
 	t.Logf("entity pool %d", len(d.Entities))
 }
 
-// A bridge label that has a successor by query time is demoted by recall in every
+// A bridge label that has a successor by query time is dropped by recall in every
 // arm, so the query would score a miss no arm could avoid.
 func TestNoLabelOnSupersededMemory(t *testing.T) {
 	t.Parallel()

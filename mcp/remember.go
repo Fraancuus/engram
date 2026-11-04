@@ -163,7 +163,7 @@ func (t *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberO
 		t.log.Error("remember: search failed", "err", err)
 		return RememberOutput{}, errors.New("remember: store unavailable")
 	}
-	if target, ok := t.dedupTarget(candidates, replaces, mt); ok {
+	if target, ok := t.dedupTarget(candidates, replaces, mt, in.Content); ok {
 		if err := t.store.Reinforce(ctx, target.ID, t.clock.Now()); err != nil {
 			t.log.Error("remember: reinforce failed", "err", err)
 			return RememberOutput{}, errors.New("remember: store unavailable")
@@ -231,15 +231,16 @@ func (t *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberO
 
 // dedupTarget returns the best candidate a new memory should be merged into: the first, in
 // score order, at or above the dedup threshold that is live (not superseded or soft-forgotten)
-// and not being replaced. A replacement dedups only into its own type, so a procedural
-// correction never folds into a near-identical episode.
+// and not being replaced. A replacement dedups only into a memory of its own type with the
+// same content (a retried correction), so a correction never folds into a different live
+// memory and is never stored nowhere.
 // shortcut: Search returns autoLinkK=5 candidates, 5 skipped ones hide a live duplicate at rank 6, raise autoLinkK if that shows up
-func (t *Tools) dedupTarget(cands []engram.RecallResult, replaces []string, mt engram.MemoryType) (engram.RecallResult, bool) {
+func (t *Tools) dedupTarget(cands []engram.RecallResult, replaces []string, mt engram.MemoryType, content string) (engram.RecallResult, bool) {
 	for _, c := range cands {
 		if c.Score < t.dedupThreshold {
 			break
 		}
-		if c.Superseded || c.Forgotten || slices.Contains(replaces, string(c.ID)) || (len(replaces) > 0 && c.Type != mt) {
+		if c.Superseded || c.Forgotten || slices.Contains(replaces, string(c.ID)) || (len(replaces) > 0 && (c.Type != mt || c.Content != content)) {
 			continue
 		}
 		return c, true

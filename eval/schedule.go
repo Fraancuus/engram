@@ -72,7 +72,7 @@ func (d *Dataset) buildAccesses(r *rand.Rand) {
 			for day := m.WriteDay + standardAccessEvery; day <= standardAccessUntil && day <= last; day += standardAccessEvery {
 				d.Accesses = append(d.Accesses, Access{GID: m.GID, Day: day})
 			}
-		case KindFact: // every version is accessed once written; a superseded one is demoted, not exempt
+		case KindFact: // every version is accessed once written; a superseded one is dropped from recall, not exempt
 			for n := 1 + r.IntN(3); n > 0; n-- {
 				d.Accesses = append(d.Accesses, Access{GID: m.GID, Day: min(m.WriteDay+dayIn(r, 1, factAccessWindow), last)})
 			}

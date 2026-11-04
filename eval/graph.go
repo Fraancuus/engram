@@ -79,7 +79,7 @@ func (d *Dataset) before(a, b int) bool {
 
 // linkCross links 2% of episodes to an earlier non-standard memory in another
 // topic of the same namespace, far from the episode in vector space. The target
-// is never superseded: recall demotes a memory with a successor, so it could not
+// is never superseded: recall drops a memory with a successor, so it could not
 // be a reachable label.
 func (d *Dataset) linkCross(r *rand.Rand, g *graphInfo) {
 	var eps []int
