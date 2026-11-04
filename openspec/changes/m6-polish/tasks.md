@@ -55,6 +55,6 @@ then. No eval run may be used to choose lambda, the mix or `sigmaTwin`.
 
 ## 12. Verify, ship, archive
 
-- [ ] 12.1 `go build ./...`, `go test -race ./...`, `golangci-lint run ./...`, `go run ./cmd/eval --ci`. Final whole-branch `reviewer` (opus). Then `/opsx:verify`.
+- [x] 12.1 `go build ./...`, `go test -race ./...`, `golangci-lint run ./...`, `go run ./cmd/eval --ci`. Final whole-branch `reviewer` (opus). Then `/opsx:verify`.
 - [ ] 12.2 `/opsx:continue` through finalize: push `feat/m6-polish` with its own upstream, open the one PR.
 - [ ] 12.3 `/opsx:archive` on the same branch, sync specs, push. Only then tell Franco it is ready to merge.

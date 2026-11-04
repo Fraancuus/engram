@@ -79,4 +79,4 @@ re-baseline task.
 - Code: `mcp/recall.go`, `mcp/remember.go`, `mock/memstore.go`, `neo4j/store.go`, `eval/` (params, dataset, schedule, vectors, report, run, baseline), `cmd/eval/main.go`, and their tests.
 - Data: `eval/baseline.json` regenerated. No schema change and no Neo4j migration: edges already stored below 0.925 stay usable for expansion and stop propagating freshness.
 - MCP surface: no new field. The `supersedes` description widens, and `score` magnitudes shift.
-- Docs: `README.md`, PRD M6 status line.
+- Docs: `README.md`, `CONTRIBUTING.md`, the PRD M6 status line and its statements of behaviour this change altered (sections 6.1, 6.2, 7, 8).
