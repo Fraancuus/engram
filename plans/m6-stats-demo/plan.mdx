@@ -1,0 +1,324 @@
+---
+title: "M6 Stats and Demo: memory_stats and a real agent"
+kind: plan
+localOnly: true
+---
+
+### Summary
+
+This change finishes milestone M6 apart from the recording. After it, `memory_stats` exists as the fourth MCP tool, a kept transcript shows Claude Code using all four tools over stdio across separate processes, and `docs/demo.md` holds the exact commands and prompts for recording the demo. PRD sections 8 and 9 make a real agent using the server the v1 acceptance condition; nothing has ever spoken stdio to `engramd` in a test or a kept run.
+
+Capabilities added: `memory-stats`, `agent-acceptance`. Capabilities modified: `tools-entry`, `memory-store-fake`. Out of scope: the recording itself, persisting sweep stats, changing when the sweep runs, a namespace whitelist, recent access patterns, the `blend` discontinuity, the `ENGRAM_DECAY` default, a CI integration job, the `supersedes` typo and cross-namespace gaps, and everything on the v2 list.
+
+**This change does not move the eval.** `Recall`, `Remember` and `SweepOnce` are untouched, and no eval constant, mix, weight or dataset changes. A/B/C and the CI gate are unaffected. Verify proves it: `go run ./cmd/eval --ci` passes and `eval/baseline.json` is unchanged, with no re-baseline.
+
+A call for one namespace, after one soft forget, returns this.
+
+<Code
+  id="output-shape"
+  filename="memory_stats { namespace: demo/m6-e2e }"
+  language="json"
+  code={"{\n  \"counts\": {\n    \"total\": 3, \"live\": 2, \"superseded\": 0, \"forgotten\": 1, \"pinned\": 0,\n    \"by_type\": { \"episodic\": 1, \"semantic\": 2, \"procedural\": 0 },\n    \"by_namespace\": { \"demo/m6-e2e\": { \"episodic\": 1, \"semantic\": 2, \"procedural\": 0 } }\n  },\n  \"retrievability\": {\n    \"decay\": \"type-aware\",\n    \"buckets\": [ { \"min\": 0, \"max\": 0.1, \"count\": 0 }, \"... ten in all ...\", { \"min\": 0.9, \"max\": 1, \"count\": 2 } ],\n    \"below_recall_threshold\": 0,\n    \"truncated\": false\n  },\n  \"store_size\": { \"memories\": 3, \"link_edges\": 1, \"entity_bridges\": 0 },\n  \"sweep\": { \"last_run_at\": null, \"last_pruned\": 0, \"total_pruned\": 0 }\n}\n"}
+/>
+
+<Callout id="sweep-warning" tone="warning">
+
+**Sweep stats will read empty almost everywhere, including the demo.** A stdio client starts `engramd` per session, `Run` waits one full hour before its first tick, and nothing is persisted. The tool description says so.
+
+**The same fact points at a possible v1 issue.** A session under an hour never hard-prunes. Read-time filtering in `recall` still works, but the eval's leaner-store result assumes pruning that normal use may rarely reach. Changing when the sweep runs is out of scope here, so this is raised for a later decision.
+
+</Callout>
+
+### What gets counted
+
+Counts come from exact Cypher aggregates and the histogram comes from a capped fetch of rows, because retrievability lives in `DecayModel` and cannot run in Cypher. Deriving counts from the capped rows would make every count silently wrong above the cap.
+
+<Table
+  id="counted-sets"
+  columns={["Field", "Set it covers", "Notes"]}
+  rows={[
+    ["counts.total, store_size.memories", "All rows in scope", "One fold, so they cannot differ"],
+    ["counts.by_type, counts.by_namespace", "All rows in scope", "TypeCounts structs: the schema names the keys and no inner map can be nil"],
+    ["counts.live", "Neither superseded nor forgotten", "The set recall can return by default (mcp/recall.go:259)"],
+    ["counts.superseded, forgotten, pinned", "Their flags", "They overlap: a row can be superseded and forgotten"],
+    ["retrievability.buckets", "Live rows, capped at 10,000", "Ten fixed-width, top closed so R = 1.0 lands in it. Buckets sum to live unless truncated"],
+    ["retrievability.below_recall_threshold", "Live rows, capped at 10,000", "R < 0.05, the test recall applies. Bucket 0 spans [0, 0.1), so it cannot show this"],
+    ["store_size.link_edges, entity_bridges", "Touching the namespace", "Distinct pairs, matching the eval's edges and bridges columns"],
+    ["sweep.*", "Whole store, since process start", "Never follows namespace. last_run_at is null before the first completed pass"],
+  ]}
+  density="compact"
+/>
+
+The row cap orders by id. Ids are 128 random bits, so the first 10,000 by id are a uniform sample over age and type, and a truncated histogram stays unbiased. Ordering by `last_accessed` would bias it toward fresh rows. Rows carry no content or embedding, so the fetch is bounded by the cap, not by stored text.
+
+An unknown namespace returns empty counts, not an error. Every map is initialised and every bucket built, because of what the SDK does with nil values on v1.6.1, probed in a throwaway module:
+
+<Table
+  id="sdk-probe"
+  columns={["Value in the output", "Result over MCP"]}
+  rows={[
+    ["nil map", "Fails: validating tool output: has type \"null\", want \"object\""],
+    ["nil slice", "Passes silently as null, because the schema type is [\"null\", \"array\"]"],
+    ["nil *time.Time", "Passes as null. This is what last_run_at relies on"],
+    ["namespace omitted, or \"\"", "Both reach the handler as \"\" and mean all namespaces"],
+    ["namespace JSON null", "Rejected by the type gate"],
+  ]}
+  density="compact"
+/>
+
+### How it is built
+
+No new package. `ServerStore` gains two read methods through a narrow interface at its consumer, following `forgetStore`. The types live in the root package because `neo4j`, `mock` and `sweep` all produce them and adapters must not import each other. Sweep stats reach `mcp` through a function-valued option, following `WithIDGenerator`, so `mcp` never imports `sweep`.
+
+<Diagram id="stats-architecture" frame="hide" caption="memory_stats composes two store reads, one pure function and one function-valued option. Solid borders are new; the eval's path through SweepOnce is unchanged.">
+
+```html
+<div class="diagram-panel" data-rough style="display:grid;gap:12px;padding:12px">
+  <div class="diagram-card" data-rough style="padding:10px">
+    <div class="diagram-pill">mcp</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">
+      <div class="diagram-node">doMemoryStats</div>
+      <div class="diagram-node">statsStore (2 methods)</div>
+      <div class="diagram-node">WithSweepStats(func)</div>
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
+    <div class="diagram-card" data-rough style="padding:10px">
+      <div class="diagram-pill">engram (root)</div>
+      <div class="diagram-muted" style="margin-top:6px">Pure, clock injected</div>
+      <div style="display:grid;gap:6px;margin-top:8px">
+        <div class="diagram-node">RetrievabilityHistogram</div>
+        <div class="diagram-node">StoreCounts, CountGroup</div>
+        <div class="diagram-node">SweepStats</div>
+      </div>
+    </div>
+    <div class="diagram-card" data-rough style="padding:10px">
+      <div class="diagram-pill">neo4j, mock</div>
+      <div class="diagram-muted" style="margin-top:6px">Same fixture, same numbers</div>
+      <div style="display:grid;gap:6px;margin-top:8px">
+        <div class="diagram-node">Counts</div>
+        <div class="diagram-node">LiveMemories</div>
+      </div>
+    </div>
+    <div class="diagram-card" data-rough style="padding:10px">
+      <div class="diagram-pill">sweep</div>
+      <div class="diagram-muted" style="margin-top:6px">SweepOnce unchanged</div>
+      <div style="display:grid;gap:6px;margin-top:8px">
+        <div class="diagram-node">tick records</div>
+        <div class="diagram-node">Stats()</div>
+      </div>
+    </div>
+  </div>
+</div>
+```
+
+</Diagram>
+
+<Code
+  id="consumer-interface"
+  filename="mcp/stats.go"
+  language="go"
+  code={"// statsStore is the read-only capability the memory_stats handler consumes.\ntype statsStore interface {\n\tCounts(ctx context.Context, ns engram.Namespace) (engram.StoreCounts, error)\n\tLiveMemories(ctx context.Context, ns engram.Namespace, limit int) ([]engram.Memory, error)\n}\n"}
+/>
+
+<Code
+  id="histogram-signature"
+  filename="decay.go"
+  language="go"
+  code={"// RetrievabilityHistogram counts ms by retrievability at now. Buckets are half-open except\n// the last, which is closed so R = 1.0 lands in it. An array, because the SDK would let a\n// nil slice through as null.\nfunc RetrievabilityHistogram(ms []Memory, d DecayModel, now time.Time) [HistogramBuckets]int\n"}
+/>
+
+`LiveMemories` reuses `engram.Memory` with empty `Content`, `Source` and `Embedding` rather than a new row type, which is how `PruneCandidates` and the recall projections already work. It projects `content: ''` and `source: ''` so `mapToMemory` keeps its required-property checks. The architect approved these types and interfaces with no blocking finding.
+
+**Strictly read-only, enforced by the server.** All the stats queries run with `ExecuteQueryWithReadersRouting()`. A `SET` through that option on Neo4j 5.26 Community fails with `Writing in read access mode not allowed`, so a mistake in the Cypher cannot write. The interface also has no write method, and tests compare memories before and after on both stores.
+
+The entity-bridge count is exact and quadratic in a hub entity's mentions, so its query shape matters. Measured on a scratch `neo4j:5.26-community` at default memory settings with 5,000 memories, net of `cypher-shell` startup:
+
+<Table
+  id="bridge-cost"
+  columns={["Query shape", "2.0M pairs", "12.5M pairs", "Exact?"]}
+  rows={[
+    ["Plain count(DISTINCT [a.id, b.id])", "about 10 s", "about 131 s", "Yes"],
+    ["Per-memory subquery (chosen)", "not measured", "about 20 s", "Yes"],
+    ["Per-entity sum(n*(n-1)/2)", "not measured", "under 0.1 s", "No: overcounts pairs sharing two entities"],
+  ]}
+  density="compact"
+/>
+
+The chosen query matches the eval's `bridges` column and holds one memory's distinct set at a time. A 5,000-mention hub is rare in a single-user store and costs 20 s on an operator call. It carries a `shortcut:` comment naming the per-entity sum as the fallback.
+
+### A real agent, end to end
+
+<Callout id="feasible" tone="success">
+
+Probed against today's `engramd` and the real stack: headless `claude -p` works here. The agent chose `remember` in one process, then `recall` and a hard `forget` in a second. That run used the three existing tools and was not kept; the kept transcript comes from a later run with all four.
+
+</Callout>
+
+**Wiring.** No tracked `.mcp.json`. A tracked file affects every session in this repo, with the stack down the client sees only `calling "initialize": EOF`, and `go run` recompiles on each start. Instead:
+
+<Code
+  id="wiring"
+  language="bash"
+  code={"go install ./cmd/engramd                            # puts engramd on PATH via $(go env GOPATH)/bin\nclaude mcp add --scope local engram -- engramd      # per person, tracks nothing\n\n# The transcript and the demo leave no state and hide every other MCP server:\nclaude --strict-mcp-config --setting-sources \"\" \\\n  --mcp-config '{\"mcpServers\":{\"engram\":{\"command\":\"engramd\"}}}' \\\n  --allowedTools 'mcp__engram__*'\n"}
+/>
+
+**Stdio smoke test.** `TestStdioAllTools` in `cmd/engramd`, behind the `integration` tag, builds the binary with an `.exe` name on Windows and drives it through `mcpsdk.CommandTransport`. It maps the `*_TEST_*` variables, including user and password, to what `engramd` reads, so an override cannot send it to the dev database. It skips with `neo4j unavailable` or `tei unavailable` after a direct reachability check, rather than failing on `initialize: EOF`. It decodes into `map[string]any`, so it asserts the JSON keys a real client sees.
+
+<Table
+  id="smoke-sequence"
+  columns={["Process", "Call", "Asserts"]}
+  rows={[
+    ["A", "ListTools", "Exactly the four names"],
+    ["A", "remember, then close", "Returns an id; the process exits cleanly"],
+    ["B", "recall", "Returns that id, from a different process"],
+    ["B", "memory_stats { namespace }", "live 1, buckets sum to 1, truncated false, last_run_at null"],
+    ["B", "forget soft, recall, memory_stats", "Recall no longer returns it; forgotten 1, live 0"],
+    ["B", "memory_stats { unknown namespace }", "Succeeds with by_namespace {}: the nil-map case over the wire"],
+    ["B", "memory_stats {}, forget hard, memory_stats", "Unscoped succeeds; then memories 0"],
+  ]}
+  density="compact"
+/>
+
+CI does not run integration tests, so an in-memory transport test in `mcp/` also covers the wire shape.
+
+**The kept run.** Three `claude -p` processes in namespace `demo/m6-e2e`, from a temp directory so no `CLAUDE.md` or repo path enters the session, with built-in tools off. The prompts name no tool:
+
+<Table
+  id="prompts"
+  columns={["Process", "Prompt"]}
+  rows={[
+    ["1", "Please remember for later, in the memory namespace demo/m6-e2e, that our staging database is rotated every Tuesday at 03:00 UTC."],
+    ["2", "Looking only in the memory namespace demo/m6-e2e, when is the staging database rotated? Then tell me how many memories that namespace holds and how fresh they are."],
+    ["3", "In the memory namespace demo/m6-e2e, forget the memory about the staging database rotation, but keep it recoverable. Show me the namespace's stats afterwards. Then delete it permanently and show the stats once more."],
+  ]}
+  density="compact"
+/>
+
+**Publishing is whitelisted, because this repo is public.** A script outside the repo keeps only assistant text, tool calls, tool results and the result status. The init event, session ids, uuids, usage and thinking never get through. Then a negative search for the local user name, GitHub login, email, drive and home paths, other MCP server names and any namespace other than `demo/m6-e2e` must find nothing. A run where the agent lists other namespaces is discarded and repeated, never edited.
+
+**The demo script.** `docs/demo.md` gives every command in order from a stopped stack, with what the viewer should see at each step. It warns that unscoped `memory_stats` lists every namespace. The commands get run once from Git Bash, with `claude -p` for the agent steps, because the interactive UI cannot be driven from here; `verify.md` discloses that.
+
+**The recording stays Franco's.** The PR does not wait for it, and the PRD M6 status line says it remains open until he links it.
+
+### Docs this corrects
+
+<Table
+  id="docs"
+  columns={["Where", "Change"]}
+  rows={[
+    ["PRD 6.3", "The sweep hard-prunes when last_accessed is older than the grace period and R is below the floor; pinned rows are exempt. Soft-forgetting is not a sweep tier: recall drops rows below the threshold at read time and stores nothing"],
+    ["PRD 6.5, 8", "Rewritten to what is built. Recent access patterns deferred. The section 8 row gains store size"],
+    ["PRD 4, 9", "The diagram says hard-prune. The M6 status line says the recording remains open until Franco links it"],
+    ["README", "Four tools, a memory_stats bullet, the wiring, a Demo section, both status lines"],
+    ["CLAUDE.md", "The mcp/ line names four tools"],
+    ["cmd/engramd/main.go", "Package comment and the tools log line"],
+    ["mcp/server.go, mcp/remember.go", "Doc comments on ServerStore, NewTools, NewServer and Tools"],
+    ["Delta specs", "tools-entry (four tools, MemoryStats, store argument), memory-store-fake (conformance, stats semantics)"],
+  ]}
+  density="compact"
+/>
+
+### Files touched
+
+<FileTree
+  id="file-map"
+  entries={[
+    { path: "decay.go", change: "modified", note: "RetrievabilityHistogram, HistogramBuckets" },
+    { path: "engram.go", change: "modified", note: "StoreCounts, CountGroup, SweepStats" },
+    { path: "mock/memstore.go", change: "modified", note: "Counts, LiveMemories; pair loops shared with EdgeCount and BridgeCount" },
+    { path: "mock/fakes.go", change: "modified", note: "Programmable stats results on FakeStore" },
+    { path: "neo4j/store.go", change: "modified", note: "Counts, LiveMemories, with readers routing" },
+    { path: "neo4j/stats_integration_test.go", change: "added", note: "Same fixture as the mock, plus hostile namespace and pre-migration row" },
+    { path: "sweep/sweep.go", change: "modified", note: "Mutex, tick records, Stats()" },
+    { path: "mcp/stats.go", change: "added", note: "statsStore, DTOs, doMemoryStats" },
+    { path: "mcp/server.go", change: "modified", note: "ServerStore, WithSweepStats, MemoryStats, the fourth AddTool" },
+    { path: "cmd/engramd/main.go", change: "modified", note: "Sweeper built first, option wired, log line" },
+    { path: "cmd/engramd/stdio_integration_test.go", change: "added", note: "TestStdioAllTools over CommandTransport" },
+    { path: "docs/demo.md", change: "added", note: "Commands and prompts for the recording" },
+    { path: "openspec/changes/m6-stats-demo/results/", change: "added", note: "Sanitized transcript, jsonl and md" },
+  ]}
+/>
+
+### Tasks
+
+The plan runs in the main checkout with no worktree, implementers on `sonnet`, task reviewers on `opus`. Task 8 is the orchestrator's, because deciding what is safe to publish is judgment.
+
+<Table
+  id="tasks"
+  columns={["#", "Task", "What proves it"]}
+  rows={[
+    ["1", "Histogram and domain types", "Bucket boundaries, clamps, fixed virtual time at R of about 0.0498 and 0.0523"],
+    ["2", "MemStore and FakeStore", "Shared fixture numbers, read-only snapshot, race test"],
+    ["3", "Neo4j stats queries", "Same fixture on the real store, routing rejects a write, hostile namespace, pre-migration row"],
+    ["4", "Sweep stats", "Accumulation at virtual time, prune boundary at the floor, failed and panicking passes, race test"],
+    ["5", "The memory_stats tool", "Validation bounds, cap boundary, sanitized errors, in-memory transport test"],
+    ["6", "engramd wiring, stdio smoke test", "TestStdioAllTools; fails on origin/main code on a scratch copy; skips with the stack down"],
+    ["7", "Docs and demo script", "git grep for stale claims finds nothing"],
+    ["8", "The real run", "The transcript itself, plus the negative search, plus demo.md run once from Git Bash"],
+    ["9", "Verify, finalize, archive", "See below. Then push, open the PR, archive on this branch"],
+  ]}
+  density="compact"
+/>
+
+<Callout id="wiring-gap" tone="info">
+
+One line has no test: `mcp.WithSweepStats(sweeper.Stats)` in `main`. The first tick comes after an hour and the interval is a constant this change must not touch, so no stdio test can reach it. It is compile-checked, the option is covered in `mcp/`, and a reviewer reads the line.
+
+</Callout>
+
+### Risks
+
+<Table
+  id="risks"
+  columns={["Risk", "Mitigation"]}
+  rows={[
+    ["MemStore and Neo4j stats drift apart, with no shared behavioural test", "Both stores get the same fixture and the same expected numbers"],
+    ["A transcript leaks local detail into a public repo", "Whitelist, then negative search, then Franco reads the file in the PR"],
+    ["The agent calls memory_stats unscoped during the real run", "The prompts scope it; the check catches it; the run is repeated, not edited"],
+    ["The bridge query is slow on a hub entity", "Measured above; shortcut comment names the fallback"],
+    ["engramd on PATH goes stale after go install", "Documented; the demo script installs first"],
+  ]}
+  density="compact"
+/>
+
+### Verification
+
+`go build ./...`, `go test -race -coverprofile=cover.out ./...`, `golangci-lint run ./...`. Then `go run ./cmd/eval --ci`, with the A/B/C table in `verify.md`, and `git diff origin/main -- eval/baseline.json` empty. Then `go test -race -tags integration -v ./...` with the stack up and the schema applied, where no SKIP may read `neo4j unavailable` or `tei unavailable`; `TestRunFloorSmoke` and `TestNoDedupCollisionsSeeds` skip as expected and are named in `verify.md`. Reviews: `reviewer` on all Go, `security-auditor` on the MCP input and the new Cypher, and a whole-branch reviewer. The end-to-end check is the kept transcript itself. Finalize pushes and opens the PR with no menu, then `/opsx:archive` runs on the same branch.
+
+### Things to know
+
+<Table
+  id="flags"
+  columns={["Finding", "What happens"]}
+  rows={[
+    ["The namespace whitelist does not exist. docs/engram-go-rules.md section 6, mcp/doc.go and PRD section 8 say a known set; the code checks non-blank plus length", "This change copies the code, leaves those three sentences alone, and verify.md records the mismatch"],
+    ["The dev database holds 212 memories in 62 namespaces, test residue from integration runs", "Unscoped memory_stats shows them all, so the demo and the transcript stay scoped"],
+    ["The kept run happens inside a Claude Code session, with that session's CLAUDE variables unset", "The demo script is for a plain Git Bash and does not need that. verify.md discloses it"],
+    ["The dev stack is up now and the schema was reapplied", "Started for the probes; the scratch Neo4j is gone. It stays up for apply"],
+  ]}
+  density="compact"
+/>
+
+### Decisions
+
+Confirmed at the plan review on 2026-11-04, before apply.
+
+<Table
+  id="decisions"
+  columns={["Question", "Decision"]}
+  rows={[
+    ["Histogram", "Pure root-package function over capped live rows, with a truncated flag, reusing engram.Memory"],
+    ["Buckets", "10 fixed-width over [0,1], top closed, emitted as min, max, count objects"],
+    ["Sweep stats", "In memory since process start, named last_run_at, last_pruned, total_pruned"],
+    ["Counted set", "All rows, with overlapping flags and a live total; the histogram covers live rows only"],
+    ["Store size", "Exact pair counts matching the eval, using the per-memory bridge query; edges and bridges count when either endpoint is in the namespace"],
+    ["Recent access patterns", "Deferred"],
+    ["retrievability.decay and below_recall_threshold", "Kept"],
+    ["Unknown namespace", "Empty counts, not an error"],
+    ["Wiring", "Documented claude mcp add, no tracked .mcp.json"],
+    ["Recording", "Stays open; the PR does not wait"],
+    ["PRD section 8 namespace whitelist sentence", "Left as it is; the mismatch is recorded in verify.md"],
+  ]}
+  density="compact"
+/>
