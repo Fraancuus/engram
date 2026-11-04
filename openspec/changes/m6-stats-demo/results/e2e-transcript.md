@@ -10,7 +10,7 @@ Claude Code, headless, choosing its own tool calls from plain-language prompts t
 
 ```json
 {
-  "content": "Our staging database is rotated every Tuesday at 03:00 UTC.",
+  "content": "The staging database is rotated every Tuesday at 03:00 UTC.",
   "type": "semantic",
   "namespace": "demo/m6-e2e",
   "entities": [
@@ -24,11 +24,11 @@ Claude Code, headless, choosing its own tool calls from plain-language prompts t
 ```json
 {
   "deduped": false,
-  "memory_id": "08414a374bd08f5125bdc033f5739435"
+  "memory_id": "f0224a8bce0d4e808aaa3009f3a43146"
 }
 ```
 
-**Agent:** I saved it to the `demo/m6-e2e` namespace: the staging database is rotated every Tuesday at 03:00 UTC. It's a new memory, not a duplicate of an existing one.
+**Agent:** I've saved it to the `demo/m6-e2e` namespace: the staging database is rotated every Tuesday at 03:00 UTC. The memory ID is `f0224a8bce0d4e808aaa3009f3a43146`. It was a new entry, not a duplicate of an existing one.
 
 *Process 1 ended: success, is_error false.*
 
@@ -47,34 +47,34 @@ Claude Code, headless, choosing its own tool calls from plain-language prompts t
 }
 ```
 
-**Tool call:** `mcp__engram__memory_stats`
-
-```json
-{
-  "namespace": "demo/m6-e2e"
-}
-```
-
 **Tool result:**
 
 ```json
 {
   "results": [
     {
-      "content": "Our staging database is rotated every Tuesday at 03:00 UTC.",
-      "id": "08414a374bd08f5125bdc033f5739435",
+      "content": "The staging database is rotated every Tuesday at 03:00 UTC.",
+      "id": "f0224a8bce0d4e808aaa3009f3a43146",
       "namespace": "demo/m6-e2e",
       "provenance": {
         "access_count": 0,
-        "created_at": "2026-11-04T21:27:34.4281968Z",
-        "last_accessed": "2026-11-04T21:27:34.4281968Z",
+        "created_at": "2026-11-04T22:04:19.7475089Z",
+        "last_accessed": "2026-11-04T22:04:19.7475089Z",
         "retrieved_via": "vector",
         "source": ""
       },
-      "score": 1.0793916251570073,
+      "score": 1.067399168877289,
       "type": "semantic"
     }
   ]
+}
+```
+
+**Tool call:** `mcp__engram__memory_stats`
+
+```json
+{
+  "namespace": "demo/m6-e2e"
 }
 ```
 
@@ -173,10 +173,11 @@ Claude Code, headless, choosing its own tool calls from plain-language prompts t
 
 **Agent:** **Staging database rotation:** every Tuesday at 03:00 UTC. This comes from a single semantic memory in `demo/m6-e2e`.
 
-**Namespace `demo/m6-e2e`:**
-- **Count:** 1 memory in total. It is semantic and live. There are 0 episodic, 0 procedural, 0 forgotten, 0 superseded and 0 pinned.
-- **Freshness:** The memory was created on 2026-11-04 at 21:27 UTC. Its retrievability is in the top bucket (0.9–1.0), and none are below the recall threshold.
-- **Other details:** The memory has no links or entity bridges. The decay sweep hasn't run yet, so nothing has been pruned.
+**Namespace stats for `demo/m6-e2e`:**
+- **Total memories:** 1. It is semantic, and there are no episodic or procedural ones.
+- **Live:** 1. None are forgotten, superseded, or pinned.
+- **Freshness:** The memory is fully fresh. It sits in the top retrievability bucket (0.9–1.0), and none are below the recall threshold. It was created today (2026-11-04, 22:04 UTC).
+- **Sweep:** The hourly sweep hasn't run yet, so nothing has been pruned.
 
 *Process 2 ended: success, is_error false.*
 
@@ -201,17 +202,17 @@ Claude Code, headless, choosing its own tool calls from plain-language prompts t
 {
   "results": [
     {
-      "content": "Our staging database is rotated every Tuesday at 03:00 UTC.",
-      "id": "08414a374bd08f5125bdc033f5739435",
+      "content": "The staging database is rotated every Tuesday at 03:00 UTC.",
+      "id": "f0224a8bce0d4e808aaa3009f3a43146",
       "namespace": "demo/m6-e2e",
       "provenance": {
         "access_count": 1,
-        "created_at": "2026-11-04T21:27:34.4281968Z",
-        "last_accessed": "2026-11-04T21:27:39.8115785Z",
+        "created_at": "2026-11-04T22:04:19.7475089Z",
+        "last_accessed": "2026-11-04T22:04:26.492399Z",
         "retrieved_via": "vector",
         "source": ""
       },
-      "score": 1.0726396137282483,
+      "score": 1.0611764485036026,
       "type": "semantic"
     }
   ]
@@ -222,7 +223,7 @@ Claude Code, headless, choosing its own tool calls from plain-language prompts t
 
 ```json
 {
-  "id": "08414a374bd08f5125bdc033f5739435",
+  "id": "f0224a8bce0d4e808aaa3009f3a43146",
   "mode": "soft"
 }
 ```
@@ -336,11 +337,13 @@ Claude Code, headless, choosing its own tool calls from plain-language prompts t
 }
 ```
 
+**Agent:** Soft-forget worked. Now the permanent delete.
+
 **Tool call:** `mcp__engram__forget`
 
 ```json
 {
-  "id": "08414a374bd08f5125bdc033f5739435",
+  "id": "f0224a8bce0d4e808aaa3009f3a43146",
   "mode": "hard"
 }
 ```
@@ -448,16 +451,18 @@ Claude Code, headless, choosing its own tool calls from plain-language prompts t
 }
 ```
 
-**Agent:** I've finished both steps. The memory was "Our staging database is rotated every Tuesday at 03:00 UTC." (id `08414a37…`).
+**Agent:** I soft-forgot the memory, checked the stats, then hard-deleted it and checked the stats again. The memory said "The staging database is rotated every Tuesday at 03:00 UTC." Its id was `f0224a8b…3a43146`.
 
-**1. After the soft-forget (recoverable):**
-- The namespace held 1 memory, a semantic one.
-- Its state was forgotten: 1 forgotten, 0 live, 0 pinned.
+**After the soft forget (`demo/m6-e2e`):**
+- The namespace held 1 memory (semantic), which was marked forgotten.
+- Live memories: 0.
+- Pinned: 0. Superseded: 0.
 
-**2. After the hard delete (permanent):**
-- The namespace has 0 memories. The store has 0 memories, 0 link edges and 0 entity bridges.
-- `demo/m6-e2e` no longer appears in the per-namespace counts.
+**After the hard delete:**
+- Total memories: 0.
+- Forgotten: 0. Live: 0.
+- Store size: 0 memories, 0 link edges, 0 entity bridges.
 
-The memory can't be recovered now.
+The permanent delete can't be undone, so the memory can't be recovered.
 
 *Process 3 ended: success, is_error false.*
