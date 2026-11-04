@@ -229,14 +229,14 @@ The tool also sets `Annotations: &mcpsdk.ToolAnnotations{ReadOnlyHint: true}`.
 
 ### D10. Claude Code wiring: no tracked `.mcp.json`
 
-A tracked file affects every session in this repo, including ones with the stack down, where the client shows only `calling "initialize": EOF`. With `go run` it also recompiles on each start. Instead:
+A tracked file affects every session in this repo, including ones with the stack down, where a Go SDK client shows only `calling "initialize": EOF` and Claude Code shows the server failed with `Connection closed`. With `go run` it also recompiles on each start. Instead:
 
 ```bash
 go install ./cmd/engramd                            # puts engramd on PATH via $(go env GOPATH)/bin
 claude mcp add --scope local engram -- engramd      # per person, tracks nothing
 ```
 
-The transcript and the demo use `--strict-mcp-config --mcp-config '{"mcpServers":{"engram":{"command":"engramd"}}}'`. It contains no local path, needs no file, leaves no state, and keeps every other MCP server out of the session. Known limit: `engramd` on PATH goes stale until `go install` is rerun. The docs say so, along with the `initialize: EOF` symptom and its fix.
+The transcript and the demo use `--strict-mcp-config --mcp-config '{"mcpServers":{"engram":{"command":"engramd"}}}'`. It contains no local path, needs no file, leaves no state, and keeps every other MCP server out of the session. Known limit: `engramd` on PATH goes stale until `go install` is rerun. The docs say so, along with those symptoms and their fix.
 
 ### D11. Stdio smoke test
 

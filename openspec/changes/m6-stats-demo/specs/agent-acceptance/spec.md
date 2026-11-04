@@ -3,15 +3,17 @@
 ### Requirement: Claude Code can start engramd over stdio
 The repo MUST document how Claude Code starts `engramd` over stdio without a tracked `.mcp.json`:
 `go install ./cmd/engramd` followed by `claude mcp add --scope local engram -- engramd`. The docs
-MUST state that the installed binary goes stale until `go install` is rerun, and that with the
-stack down the client shows only `calling "initialize": EOF`, and how to fix it.
+MUST state that the installed binary goes stale until `go install` is rerun, and what a client shows with the
+stack down, and how to fix it: with Neo4j down `engramd` exits at start, so a Go SDK client reports
+`calling "initialize": EOF` and Claude Code marks the server failed with `Connection closed`; with
+only TEI down the server starts and `remember` and `recall` report `embedding failed`.
 
 #### Scenario: No tracked client config
 - **WHEN** the repo is checked out
 - **THEN** there is no `.mcp.json`, and a session in the repo starts no Engram server unless its user added one
 
 #### Scenario: Stack down is documented
-- **WHEN** a reader sees `calling "initialize": EOF`
+- **WHEN** a reader sees `calling "initialize": EOF`, `Connection closed`, or `embedding failed`
 - **THEN** `docs/demo.md` tells them to run `docker compose up -d --wait`
 
 ### Requirement: Stdio smoke test
