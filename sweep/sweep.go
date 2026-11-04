@@ -116,8 +116,8 @@ func (s *Sweeper) tick(ctx context.Context) {
 	}
 }
 
-// record stores a completed pass. A failed pass never reaches it, so LastRunAt means the
-// last completed pass.
+// record stores a completed pass. A pass that returns an error never reaches it; a pass
+// whose deletes all failed still records, with count 0.
 func (s *Sweeper) record(now time.Time, pruned int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

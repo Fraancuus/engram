@@ -658,7 +658,7 @@ ORDER BY namespace, type`
 MATCH (a:Memory)-[:LINKS]-(b:Memory)
 WHERE a.id < b.id AND ($ns = '' OR a.namespace = $ns OR b.namespace = $ns)
 RETURN count(DISTINCT [a.id, b.id]) AS n`
-	// shortcut: quadratic in a hub entity's mentions, swap for the per-entity sum if stats get slow
+	// shortcut: quadratic in a hub entity's mentions (overcounts pairs sharing 2+ entities; breaks parity with MemStore), swap for the per-entity sum if stats get slow
 	const bridgesQ = `
 MATCH (a:Memory)
 CALL (a) {
