@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"reflect"
 	"sort"
 	"strings"
@@ -276,7 +277,8 @@ func TestDoMemoryStatsReadOnly(t *testing.T) {
 
 func TestDoMemoryStatsSweep(t *testing.T) {
 	t.Parallel()
-	at := fixedClock{}.Now().Add(time.Hour)
+	// A local-zone LastRunAt, as the system clock yields, must come out in UTC.
+	at := fixedClock{}.Now().Add(time.Hour).In(time.FixedZone("local", 5*3600))
 	set := WithSweepStats(func() engram.SweepStats {
 		return engram.SweepStats{LastRunAt: at, LastPruned: 2, TotalPruned: 7}
 	})
@@ -303,6 +305,9 @@ func TestDoMemoryStatsSweep(t *testing.T) {
 				(got.LastRunAt != nil && !got.LastRunAt.Equal(*tt.want.LastRunAt)) ||
 				got.LastPruned != tt.want.LastPruned || got.TotalPruned != tt.want.TotalPruned {
 				t.Errorf("sweep = %+v, want %+v", got, tt.want)
+			}
+			if got.LastRunAt != nil && got.LastRunAt.Location() != time.UTC {
+				t.Errorf("last_run_at zone = %v, want UTC", got.LastRunAt.Location())
 			}
 		})
 	}
@@ -465,6 +470,35 @@ func TestMemoryStatsOverTransport(t *testing.T) {
 			t.Errorf("got %#v\nwant %#v", got, w)
 		}
 	})
+	t.Run("blank namespace is a tool error", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		tools := NewTools(&mock.FakeEmbedder{}, nil, engram.TypeAwareDecay{}, mock.NewMemStore(), fixedClock{})
+		ct, st := mcpsdk.NewInMemoryTransports()
+		ss, err := NewServer(tools).Connect(ctx, st, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = ss.Close() }()
+		cs, err := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test"}, nil).Connect(ctx, ct, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = cs.Close() }()
+		res, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: "memory_stats", Arguments: map[string]any{"namespace": "  "}})
+		if err != nil || !res.IsError {
+			t.Fatalf("CallTool: err %v, IsError %v, want a tool error", err, res != nil && res.IsError)
+		}
+		var msg string
+		for _, c := range res.Content {
+			if tc, ok := c.(*mcpsdk.TextContent); ok {
+				msg += tc.Text
+			}
+		}
+		if !strings.Contains(msg, "1..256") {
+			t.Errorf("message = %q, want one naming the bounds", msg)
+		}
+	})
 	t.Run("seeded store", func(t *testing.T) {
 		t.Parallel()
 		got := call(t, nil, nil)
@@ -485,4 +519,38 @@ func TestMemoryStatsOverTransport(t *testing.T) {
 			t.Errorf("got %#v\nwant %#v", got, w)
 		}
 	})
+}
+
+// TestBelowRecallThresholdMatchesRecall pins the soft-threshold boundary: stats and recall
+// must agree on whether R == threshold is kept and the next float below it is dropped.
+func TestBelowRecallThresholdMatchesRecall(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		r         float64
+		wantBelow int
+		wantKept  bool
+	}{
+		{"at threshold", defaultSoftThresh, 0, true},
+		{"just below", math.Nextafter(defaultSoftThresh, 0), 1, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ms := mock.NewMemStore()
+			putAll(t, ms, liveMem("1"))
+			h := statsTools(ms, mock.FakeDecay{R: tt.r})
+			out, err := h.doMemoryStats(context.Background(), MemoryStatsInput{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := out.Retrievability.BelowRecallThreshold; got != tt.wantBelow {
+				t.Errorf("below_recall_threshold = %d, want %d", got, tt.wantBelow)
+			}
+			cands := []engram.RecallResult{{Memory: liveMem("1")}}
+			if kept := len(h.scoreAndFilter(cands, fixedClock{}.Now(), false)) == 1; kept != tt.wantKept {
+				t.Errorf("recall kept = %v, want %v", kept, tt.wantKept)
+			}
+		})
+	}
 }

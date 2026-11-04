@@ -57,7 +57,8 @@ type RetrievabilityStats struct {
 	Truncated            bool              `json:"truncated"`
 }
 
-// StoreSize reports the graph size as counts.
+// StoreSize reports the graph size as counts. Scoped to a namespace, it is that namespace's
+// size, not the whole store's, and the edge and bridge counts include those touching it.
 type StoreSize struct {
 	Memories      int `json:"memories"`
 	LinkEdges     int `json:"link_edges"`
@@ -153,7 +154,7 @@ func (t *Tools) doMemoryStats(ctx context.Context, in MemoryStatsInput) (out Mem
 		s := t.sweepStats()
 		out.Sweep.LastPruned, out.Sweep.TotalPruned = s.LastPruned, s.TotalPruned
 		if !s.LastRunAt.IsZero() {
-			at := s.LastRunAt
+			at := s.LastRunAt.UTC() // systemClock is local; Neo4j-sourced times are UTC
 			out.Sweep.LastRunAt = &at
 		}
 	}
