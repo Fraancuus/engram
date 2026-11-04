@@ -4,7 +4,7 @@
 For each day d the harness MUST: set the clock to day d; apply writes via
 `Tools.Remember` (entities, links, supersedes); apply accesses via `Tools.Recall` with the
 memory's own vector and k=1; run queries via `Tools.Recall` and score them; call
-`SweepOnce(ctx, now)`; record store size, edge count and bridge count. No code path in the
+`SweepOnce(ctx, now)`; and every 10 days record store size, edge count and bridge count. No code path in the
 harness or under test MAY read wall-clock time except to measure latency.
 
 #### Scenario: Reinforcement goes through recall
