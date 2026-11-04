@@ -31,6 +31,7 @@ Requires **Go 1.26+**. Install the gate tools and wire the hook:
 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 go install github.com/evilmartians/lefthook@latest
 go install github.com/zricethezav/gitleaks/v8@latest # module path is still the legacy org
+go install golang.org/x/vuln/cmd/govulncheck@latest # CI runs it; the security-auditor agent uses it
 lefthook install
 ```
 
@@ -71,14 +72,14 @@ eval harness reuses them.
 
 ```bash
 go build ./...
-go test -race ./...
+go test -race -coverprofile=cover.out ./...
 golangci-lint run ./...
 ```
 
 CI runs the same, plus `govulncheck`, CodeQL, gitleaks (full history), and the eval
 job (`go run ./cmd/eval --ci`). The eval gate is live: it fails when arm `type-aware`
-precision@5 drops more than 0.02 below `eval/baseline.json`. Make these required status
-checks once stable.
+precision@5 drops more than 0.02 below `eval/baseline.json`. These are required status
+checks on `main`.
 
 ## Commits & PRs
 
