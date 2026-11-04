@@ -2,6 +2,7 @@ package eval
 
 import (
 	"reflect"
+	"sync"
 	"testing"
 
 	"github.com/Fraancuus/engram"
@@ -98,15 +99,25 @@ func TestQueryMixAgent(t *testing.T) {
 	}
 }
 
+var (
+	stressOnce sync.Once
+	stressData *Dataset
+	stressErr  error
+)
+
+// stressDS returns one shared stress-mix dataset at the floor with seed 42.
+// Callers only read it, like floorDS.
 func stressDS(t *testing.T) *Dataset {
 	t.Helper()
-	p := Floor()
-	p.Seed, p.Mix = 42, MixStress
-	d, err := Generate(p)
-	if err != nil {
-		t.Fatal(err)
+	stressOnce.Do(func() {
+		p := Floor()
+		p.Seed, p.Mix = 42, MixStress
+		stressData, stressErr = Generate(p)
+	})
+	if stressErr != nil {
+		t.Fatal(stressErr)
 	}
-	return d
+	return stressData
 }
 
 func TestQueryMixStress(t *testing.T) {
