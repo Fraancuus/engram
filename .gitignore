@@ -55,3 +55,5 @@ plan-blocks.md
 plans/*/preview.html
 # superpowers SDD scratch (ledger, briefs, review packages)
 /.superpowers/
+# Playwright MCP browser snapshots
+/.playwright-mcp/

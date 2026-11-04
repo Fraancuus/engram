@@ -4,25 +4,33 @@
 A local-first, long-term memory service for AI agents. A single-binary Go service
 over Neo4j (native vector index + property graph), with **type-aware forgetting**,
 namespaced "universes", and a local **inference sidecar** (embeddings + reranker).
-The differentiator is the **eval** that proves type-aware decay helps — protect it.
+The differentiator is the **eval** that measures what type-aware decay buys and what it
+costs. Protect it: a null result is a valid outcome, so never tune the dataset or scoring
+toward a preferred one.
 
 Full spec: `docs/engram-prd-v1.md`. Go conventions: `docs/engram-go-rules.md`
 (imported below). Repo/DevEx plan: `docs/engram-repo-setup-prd.md`.
 
 ## Repo map
-- `engram.go` — domain core anchor; will hold types (Memory, Entity) + ports
-  (MemoryStore, Embedder, Reranker, DecayModel, Clock). `memory.go`/`decay.go` join it
-  in M0–M1. Imports NO infrastructure.
+- `engram.go` — domain core: types (Memory, Entity) + ports (MemoryStore, Embedder,
+  Reranker, DecayModel, Clock). `decay.go` holds the decay math. Imports NO infrastructure.
 - `neo4j/` — MemoryStore adapter (parameterized Cypher only).
 - `inference/` — Embedder/Reranker adapter (sidecar HTTP client).
-- `mcp/` — MCP adapter: remember · recall · forget · memory_stats (stdio).
+- `mcp/` — MCP adapter over stdio. Tools today: remember, recall, forget. `memory_stats`
+  is still to come (M6).
+- `sweep/` — the decay sweep goroutine; hard-prunes below the retrievability floor.
+- `schema/` — `001_init.cypher`: constraints + the vector index. Applied by hand; no Go
+  code applies it.
 - `mock/` — fakes implementing the domain ports, for tests + the eval.
 - `internal/` — not importable by consumers.
 - `cmd/engramd/` — the service; wires deps by hand in `main()`.
-- `cmd/eval/` — the eval harness binary. The CI job is wired now, but the real
-  precision@k regression gate lands at M5 (today it's a stub that exits 0).
-- `eval/` — labelled datasets + scenarios (anti-circularity: ground-truth labels,
+- `cmd/eval/` — the eval harness binary. `--ci` is the live gate: it fails when arm
+  `type-aware` precision@5 drops more than 0.02 below `eval/baseline.json`.
+- `eval/` — generator, arms, metrics, report (anti-circularity: ground-truth labels,
   never the reranker judging itself).
+- `openspec/` — per-artifact rules (`config.yaml`), the superspec schema, synced `specs/`,
+  and `changes/` with its `archive/`.
+- `plans/<slug>/` — visual plans for review.
 
 ## Architecture invariants (non-negotiable)
 - **Dependency rule:** the root `engram` package imports NO infrastructure. Ports
@@ -76,6 +84,11 @@ The four read-only subagents in `.claude/agents/` exist for what a linter can't 
 ## How work moves
 One change per milestone (PRD §9), one PR per change, Franco merges.
 
+**Git.** Never push to `main`. Cut branches with
+`git switch -c feat/<slug> --no-track origin/main`, because VS Code Sync pushes to the
+tracked upstream, so a branch tracking `origin/main` lands on `main`. Set upstream at first
+push: `git push -u origin feat/<slug>`.
+
 1. **Orient with the graph, not grep.** `graphify-out/graph.json` is the map of this
    repo. Before the first search or file read for a codebase question run
    `graphify query "<question>"`; `graphify path "<A>" "<B>"` for how two things relate,
@@ -111,15 +124,59 @@ dispatch briefs; it does not implement or review by itself):
 - Fix-loop escalation (round 4+): one tier above the stuck implementer.
 Never dispatch a subagent without an explicit model; an omitted model inherits the session's.
 
+**Subagent rules** (subagents load this file, except built-in Explore and Plan, so briefs
+need not repeat these):
+- Implementers confirm the branch with `git branch --show-current`, stage files by name, and
+  never push, rebase, amend, switch branch or dispatch subagents.
+- Any scratch copy of the repo, and any probe that would dirty the checkout, works in its
+  own `mktemp -d`, never a shared scratch path, and deletes only what it created. Reviewers
+  never edit tracked files.
+- `architect` and `scoping-ux` have no Bash, so they cannot run `graphify query`. Run it
+  yourself and put the result in their brief.
+- Literal code in a brief is a proposal, not a spec. An implementer who shows by probe that
+  it cannot work returns BLOCKED once, with the evidence, and the orchestrator rules. A
+  reviewer does not reopen a deviation that is disclosed, evidenced and keeps the brief's
+  intent.
+
 Tooling installed by hand, outside Claude Code plugins: graphify
 (`uv tool install graphifyy`, then `graphify install --project`) and the OpenSpec CLI
 (`npm i -g @fission-ai/openspec`). The `superspec` schema lives in
 `openspec/schemas/superspec/`.
 
 ## Verification
-Before claiming work done: `go build ./...`, `go test -race ./...`,
-`golangci-lint run ./...`. CI runs the same plus `govulncheck`, CodeQL, gitleaks,
-and the eval gate.
+Before claiming work done, run what CI runs:
+```bash
+go build ./...
+go test -race -coverprofile=cover.out ./...
+golangci-lint run ./...
+```
+CI also runs `govulncheck`, CodeQL, gitleaks and the eval gate.
+
+- **Eval gate:** a change to decay, recall or the eval also runs `go run ./cmd/eval --ci`
+  and reports the A/B/C table.
+- **Slow package:** `./eval` takes 5 to 6.5 minutes under `-race` on CI (288 s and 384 s on
+  the same M6 code), and `go test` kills a package at 10 minutes, as it did twice during M6.
+  Check its wall time before adding tests, and share datasets rather than generating new
+  floor-size ones.
+- **Baseline:** regenerate only on amd64, with
+  `go run ./cmd/eval --update-baseline -seed 42`, then run `--ci` twice. Commit it only for
+  an intended change and say why in the PR. Never regenerate to pass a regression.
+- **Integration tests:** CI does not run them. A change to `neo4j/`, `mcp/`, `sweep/` or
+  `schema/` runs them against the real stack, from Git Bash (PowerShell has no `<`):
+  ```bash
+  docker compose up -d --wait
+  docker compose exec -T neo4j cypher-shell < schema/001_init.cypher  # once per fresh volume
+  go test -race -tags integration -v ./...
+  ```
+  With Neo4j down these tests skip rather than fail, and `go test` still exits 0. A `SKIP`
+  reading `neo4j unavailable` or `tei unavailable` means the run proved nothing. Other skips,
+  such as the two `ENGRAM_EVAL_SMOKE` tests in `./eval`, have nothing to do with the stack;
+  do not set that variable to clear them. With Neo4j up but no schema, tests that search
+  fail: `TestStoreSearch` names the missing vector index, and the `mcp` tests report only
+  `store unavailable`.
+- **Local hook:** `.git/hooks/pre-commit` exits 0 when lefthook is not on PATH, so commits
+  skip format, lint and gitleaks, with only the line `Can't find lefthook in PATH` to show
+  for it. If you see it, run the gates by hand or follow Dev setup in `CONTRIBUTING.md`.
 
 @docs/engram-go-rules.md
 

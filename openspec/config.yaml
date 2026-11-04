@@ -25,11 +25,29 @@ rules:
     - >-
       State which domain ports (engram.go) are consumed and which packages implement them;
       a new package or interface is justified in one paragraph or not added
+    - >-
+      Preregister eval parameters: any constant, mix, weight or prediction the change will be
+      judged by is in design.md and committed before the first scored run, and does not move
+      after it. A feasibility probe that reads no eval output is not a scored run. A constant a
+      probe later shows infeasible moves only by a design.md amendment with the evidence,
+      disclosed in the PR
+    - >-
+      For any eval generator, threshold or dataset size, show the arithmetic: the feasible
+      range of every cosine bound, fan-out cap and size at the sizes tests use (floor and
+      Scaled), and which seeds or sizes were probed. A constant not shown feasible is not frozen
+    - >-
+      For any change to a write path (remember, dedup, auto-link, supersede), list every branch
+      and what happens on it to the incoming text and to each affected existing memory (stored,
+      merged, dropped, left alone), including neighbours that are soft-forgotten, superseded,
+      pinned or in another namespace
   specs:
     - >-
       Every requirement that touches decay, recall ordering, the sweep, or the eval gets a
       scenario at the boundary (R near the soft threshold, k at its limit, empty input, a
       pruned hop node) and one that fixes virtual time explicitly
+    - >-
+      Each write-path branch gets a scenario asserting the incoming content is retrievable
+      afterwards, or naming why it is not
   tasks:
     - >-
       Order tasks domain (root package) -> mock -> adapters (neo4j, inference, mcp, sweep) ->
@@ -45,8 +63,20 @@ rules:
       change, security-auditor for neo4j/, mcp/ inputs or inference/, architect for a new
       package or interface, scoping-ux for a new MCP field; every blocking finding resolved
     - >-
-      go build ./..., go test -race ./..., golangci-lint run ./... must pass; a change to
-      decay or recall also runs go run ./cmd/eval --ci and reports the A/B/C table
+      go build ./..., go test -race -coverprofile=cover.out ./..., golangci-lint run ./...
+      must pass; a change to decay, recall or the eval also runs go run ./cmd/eval --ci and
+      reports the A/B/C table
+    - >-
+      A change to neo4j/, mcp/, sweep/ or schema/ also runs go test -race -tags integration -v
+      ./... with the stack up and the schema applied (CLAUDE.md, Verification); a SKIP reading
+      neo4j unavailable or tei unavailable does not count as a pass
+    - >-
+      A change to a write path also gets a whole-branch review with skeptic agents that try to
+      refute each finding; per-task review passed both M6 data-loss paths
+  finalize:
+    - >-
+      Retrospective promote candidates do not stay in the retrospective: apply each one in the
+      closing PR or list it for Franco in the PR body
 
 operations:
   apply:
@@ -54,3 +84,10 @@ operations:
       - >-
         Before the first search or source read, run graphify query on the question; run
         graphify update . after each task that changes Go code
+      - >-
+        RED means a behaviour assertion fails against the old code, not a compile error. If a
+        signature changes, stub it, then show the failing assertion. Do not pin a test to a seed
+        that happens to work; size the input so the property holds by construction
+      - >-
+        Prose that states a number names its mix, rerank mode, lambda and seed and cites the
+        results/ file. Briefs for doc tasks quote design.md rather than paraphrase it
