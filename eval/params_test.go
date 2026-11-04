@@ -64,7 +64,7 @@ func TestScaledKeepsMix(t *testing.T) {
 	}
 	tp := tinyParams()
 	tp.Mix = MixStress
-	tp.Seed = 3 // the default tiny seed (2) has no noise draw that fits at twice the size
+	tp.Seed = 3 // brief says bare tinyParams(); seed 2 fails at Scaled(2): "no noise draw satisfies the cosine bounds in 2048 tries"
 	d, err := generateUnchecked(tp.Scaled(2))
 	if err != nil {
 		t.Fatal(err)
