@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -189,7 +190,7 @@ func TestDoMemoryStatsBelowRecallThreshold(t *testing.T) {
 		want int
 	}{
 		{"6 days counts", 6 * 24 * time.Hour, 1},
-		{"5.9 days does not", 5*24*time.Hour + 22*time.Hour + 24*time.Minute, 0},
+		{"5.9 days does not", 5*24*time.Hour + 21*time.Hour + 36*time.Minute, 0},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -200,6 +201,9 @@ func TestDoMemoryStatsBelowRecallThreshold(t *testing.T) {
 			out, err := statsTools(s, engram.TypeAwareDecay{}).doMemoryStats(context.Background(), MemoryStatsInput{})
 			if err != nil {
 				t.Fatal(err)
+			}
+			if len(out.Retrievability.Buckets) != 10 {
+				t.Fatalf("buckets = %d, want 10", len(out.Retrievability.Buckets))
 			}
 			if out.Retrievability.BelowRecallThreshold != tt.want || out.Retrievability.Buckets[0].Count != 1 {
 				t.Errorf("below = %d bucket0 = %d, want %d 1", out.Retrievability.BelowRecallThreshold, out.Retrievability.Buckets[0].Count, tt.want)
@@ -231,6 +235,9 @@ func TestDoMemoryStatsNullDecay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(out.Retrievability.Buckets) != 10 {
+		t.Fatalf("buckets = %d, want 10", len(out.Retrievability.Buckets))
+	}
 	if out.Retrievability.Buckets[9].Count != 2 || out.Retrievability.Decay != "none" || out.Retrievability.BelowRecallThreshold != 0 {
 		t.Errorf("retrievability = %+v, want all in bucket 9, decay none, below 0", out.Retrievability)
 	}
@@ -251,11 +258,17 @@ func TestDoMemoryStatsReadOnly(t *testing.T) {
 	m.LastAccessed = fixedClock{}.Now().Add(-24 * time.Hour)
 	m.Stability, m.AccessCount = 3, 2
 	putAll(t, s, m)
-	before, _ := s.Snapshot("1")
+	before, ok := s.Snapshot("1")
+	if !ok {
+		t.Fatal("seeded row missing before")
+	}
 	if _, err := statsTools(s, engram.TypeAwareDecay{}).doMemoryStats(context.Background(), MemoryStatsInput{}); err != nil {
 		t.Fatal(err)
 	}
-	after, _ := s.Snapshot("1")
+	after, ok := s.Snapshot("1")
+	if !ok {
+		t.Fatal("seeded row missing after")
+	}
 	if !reflect.DeepEqual(before, after) {
 		t.Errorf("MemStore row changed: %+v -> %+v", before, after)
 	}
@@ -335,12 +348,50 @@ func TestDoMemoryStatsBucketBounds(t *testing.T) {
 	}
 }
 
+func TestDoMemoryStatsFoldAndStoreArgs(t *testing.T) {
+	t.Parallel()
+	st := &mock.FakeStore{CountsRes: engram.StoreCounts{
+		Groups: []engram.CountGroup{
+			{Namespace: "a", Type: engram.Episodic, Total: 1, Live: 1},
+			{Namespace: "a", Type: engram.Semantic, Total: 2, Live: 1, Superseded: 1},
+			{Namespace: "b", Type: engram.Procedural, Total: 4, Live: 3, Forgotten: 1, Pinned: 2},
+			{Namespace: "b", Type: engram.Episodic, Total: 8, Live: 8},
+		},
+		LinkEdges: 5, EntityBridges: 6,
+	}}
+	h := statsTools(st, engram.TypeAwareDecay{})
+	h.statsRowCap = 7
+	out, err := h.doMemoryStats(context.Background(), MemoryStatsInput{Namespace: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCounts := MemoryCounts{
+		Total: 15, Live: 13, Superseded: 1, Forgotten: 1, Pinned: 2,
+		ByType: TypeCounts{Episodic: 9, Semantic: 2, Procedural: 4},
+		ByNamespace: map[string]TypeCounts{
+			"a": {Episodic: 1, Semantic: 2},
+			"b": {Episodic: 8, Procedural: 4},
+		},
+	}
+	if !reflect.DeepEqual(out.Counts, wantCounts) {
+		t.Errorf("counts = %+v, want %+v", out.Counts, wantCounts)
+	}
+	if want := (StoreSize{Memories: 15, LinkEdges: 5, EntityBridges: 6}); out.StoreSize != want {
+		t.Errorf("store_size = %+v, want %+v", out.StoreSize, want)
+	}
+	if st.LastCountsNS != "a" || st.LastLiveNS != "a" || st.LastLiveLimit != 8 {
+		t.Errorf("store args: counts ns %q, live ns %q, limit %d; want a, a, 8", st.LastCountsNS, st.LastLiveNS, st.LastLiveLimit)
+	}
+}
+
 func TestMemoryStatsOverTransport(t *testing.T) {
 	t.Parallel()
 	call := func(t *testing.T, opts []Option, args map[string]any) map[string]any {
 		t.Helper()
 		ctx := context.Background()
-		tools := NewTools(&mock.FakeEmbedder{}, nil, engram.TypeAwareDecay{}, mock.NewMemStore(), fixedClock{}, opts...)
+		ms := mock.NewMemStore()
+		putAll(t, ms, liveMem("1")) // namespace "a": an unknown namespace must differ from an empty store
+		tools := NewTools(&mock.FakeEmbedder{}, nil, engram.TypeAwareDecay{}, ms, fixedClock{}, opts...)
 		ct, st := mcpsdk.NewInMemoryTransports()
 		ss, err := NewServer(tools).Connect(ctx, st, nil)
 		if err != nil {
@@ -364,8 +415,9 @@ func TestMemoryStatsOverTransport(t *testing.T) {
 				t.Error("memory_stats lacks ReadOnlyHint")
 			}
 		}
-		if len(names) != 4 {
-			t.Errorf("tools = %v, want exactly remember, recall, forget, memory_stats", names)
+		sort.Strings(names)
+		if want := []string{"forget", "memory_stats", "recall", "remember"}; !reflect.DeepEqual(names, want) {
+			t.Errorf("tools = %v, want %v", names, want)
 		}
 
 		res, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: "memory_stats", Arguments: args})
@@ -383,39 +435,54 @@ func TestMemoryStatsOverTransport(t *testing.T) {
 		return got
 	}
 
-	check := func(t *testing.T, got map[string]any, wantRunAt bool) {
-		t.Helper()
-		counts := got["counts"].(map[string]any)
-		if bn, ok := counts["by_namespace"].(map[string]any); !ok || len(bn) != 0 {
-			t.Errorf("by_namespace = %#v, want {}", counts["by_namespace"])
+	// want builds the full wire shape for total live semantic rows in namespace a.
+	want := func(total int, byNS map[string]any, buckets map[int]float64, lastRunAt any) map[string]any {
+		bs := make([]any, 10)
+		for i := range bs {
+			bs[i] = map[string]any{"min": float64(i) / 10, "max": float64(i+1) / 10, "count": buckets[i]}
 		}
-		if bt := counts["by_type"].(map[string]any); len(bt) != 3 {
-			t.Errorf("by_type = %#v, want episodic, semantic, procedural", bt)
-		}
-		if b := got["retrievability"].(map[string]any)["buckets"].([]any); len(b) != 10 {
-			t.Errorf("buckets = %d, want 10", len(b))
-		}
-		sweep := got["sweep"].(map[string]any)
-		runAt, present := sweep["last_run_at"]
-		if !present {
-			t.Fatal("last_run_at key missing")
-		}
-		if s, isStr := runAt.(string); wantRunAt != isStr || (isStr && s == "") {
-			t.Errorf("last_run_at = %#v, want string=%v", runAt, wantRunAt)
+		live := float64(total)
+		return map[string]any{
+			"counts": map[string]any{
+				"total": live, "live": live, "superseded": 0.0, "forgotten": 0.0, "pinned": 0.0,
+				"by_type":      map[string]any{"episodic": 0.0, "semantic": live, "procedural": 0.0},
+				"by_namespace": byNS,
+			},
+			"retrievability": map[string]any{
+				"decay": "type-aware", "buckets": bs, "below_recall_threshold": 0.0, "truncated": false,
+			},
+			"store_size": map[string]any{"memories": live, "link_edges": 0.0, "entity_bridges": 0.0},
+			"sweep":      map[string]any{"last_run_at": lastRunAt, "last_pruned": 0.0, "total_pruned": 0.0},
 		}
 	}
+	// liveMem is a semantic row last accessed at T, so R = 1 at T: top bucket.
+	aOnly := map[string]any{"a": map[string]any{"episodic": 0.0, "semantic": 1.0, "procedural": 0.0}}
 
 	t.Run("unknown namespace", func(t *testing.T) {
 		t.Parallel()
-		check(t, call(t, nil, map[string]any{"namespace": "nope"}), false)
+		got := call(t, nil, map[string]any{"namespace": "nope"})
+		if w := want(0, map[string]any{}, nil, nil); !reflect.DeepEqual(got, w) {
+			t.Errorf("got %#v\nwant %#v", got, w)
+		}
 	})
-	t.Run("empty store", func(t *testing.T) {
+	t.Run("seeded store", func(t *testing.T) {
 		t.Parallel()
-		check(t, call(t, nil, nil), false)
+		got := call(t, nil, nil)
+		if w := want(1, aOnly, map[int]float64{9: 1}, nil); !reflect.DeepEqual(got, w) {
+			t.Errorf("got %#v\nwant %#v", got, w)
+		}
 	})
 	t.Run("with sweep stats", func(t *testing.T) {
 		t.Parallel()
-		opt := WithSweepStats(func() engram.SweepStats { return engram.SweepStats{LastRunAt: fixedClock{}.Now()} })
-		check(t, call(t, []Option{opt}, nil), true)
+		at := fixedClock{}.Now()
+		opt := WithSweepStats(func() engram.SweepStats {
+			return engram.SweepStats{LastRunAt: at, LastPruned: 2, TotalPruned: 7}
+		})
+		got := call(t, []Option{opt}, nil)
+		w := want(1, aOnly, map[int]float64{9: 1}, at.Format(time.RFC3339Nano))
+		w["sweep"].(map[string]any)["last_pruned"], w["sweep"].(map[string]any)["total_pruned"] = 2.0, 7.0
+		if !reflect.DeepEqual(got, w) {
+			t.Errorf("got %#v\nwant %#v", got, w)
+		}
 	})
 }

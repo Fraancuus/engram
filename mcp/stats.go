@@ -42,7 +42,7 @@ type MemoryCounts struct {
 	ByNamespace map[string]TypeCounts `json:"by_namespace"`
 }
 
-// HistogramBucket is one retrievability bucket over [Min, Max).
+// HistogramBucket is x
 type HistogramBucket struct {
 	Min   float64 `json:"min"`
 	Max   float64 `json:"max"`

@@ -25,7 +25,8 @@ const (
 // what it uses.
 type ServerStore interface {
 	Store
-	statsStore
+	Counts(ctx context.Context, ns engram.Namespace) (engram.StoreCounts, error)
+	LiveMemories(ctx context.Context, ns engram.Namespace, limit int) ([]engram.Memory, error)
 	SetForgotten(ctx context.Context, id engram.MemoryID) error
 	Pin(ctx context.Context, id engram.MemoryID) error
 	Delete(ctx context.Context, id engram.MemoryID) error
