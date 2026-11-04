@@ -9,7 +9,7 @@
 ## Misses
 
 - Design wording failed twice on the same class. D12 applied supersession on the dedup path without asking what happens to the write's own text. It took two review rounds to reach "dedup only into identical content".
-- Predictions were poor: 5 of 10 held outright. The claim that no class would favour forgetting was wrong as run, and the break-even estimate of 0.16 came in at 0.096.
+- Predictions were poor: 4 of 10 held, 3 held in part and 3 missed. The claim that no class would favour forgetting was wrong as run, and the break-even estimate of 0.16 came in at 0.096.
 - My briefs carried errors the reviewers caught: an unscoped claim under the wrong table, "link bridges" understating a cost, and a sweep sentence that lost its predicate.
 - `git switch -c` from `origin/main` set the branch to track `main`, and `98012a9` reached `main` with no PR by a push this session did not run.
 - A shared scratch path let one refute agent delete another's working copy. Briefs now require `mktemp -d`.
