@@ -67,10 +67,10 @@ generator, never the reranker scoring itself. The dataset is synthetic; see
 [M6](openspec/changes/archive/2026-11-04-m6-polish/design.md) for the design.
 
 The gate is live: `go run ./cmd/eval --ci` fails when arm `type-aware` precision@5
-regresses more than 0.02 against `eval/baseline.json`. The tables below reproduce with `go
-run ./cmd/eval -seeds 1` and `go run ./cmd/eval -seeds 1 -mix stress`; plain `go run
-./cmd/eval` averages seeds 42 to 44. Flags: `-seed`, `-seeds`, `-k`, `-scale`, `-mix
-agent|stress`, `-lambda`, `-rerank none|cosine`, `-json`, `--update-baseline`.
+regresses more than 0.02 against `eval/baseline.json`. The tables below reproduce with
+`go run ./cmd/eval -seeds 1` and `go run ./cmd/eval -seeds 1 -mix stress`; plain
+`go run ./cmd/eval` averages seeds 42 to 44. Flags: `-seed`, `-seeds`, `-k`, `-scale`,
+`-mix agent|stress`, `-lambda`, `-rerank none|cosine`, `-json`, `--update-baseline`.
 
 **Recommendation score.** nDCG minus lambda times the store size over the store size of
 `none`. Lambda 0.10 is a value judgement, fixed before the first run. `-lambda 0` gives
@@ -104,15 +104,16 @@ mix or rerank mode, so `bridge-entity` measures only the half reachable by vecto
 
 **What the numbers support.** Type-aware forgetting does not retrieve better than never
 forgetting. On the agent mix it gives up about 0.07 nDCG for a store at 23% of the size,
-and on the stress mix about 0.25. The cost falls on old episodes and link bridges. The
-gain is store size, with live procedural memory protected.
+and on the stress mix about 0.25. The cost falls on old episodes and bridges: type-aware's
+bridge-entity falls from 0.613 to 0.147 on the agent mix. The gain is store size, with
+live procedural memory protected.
 
 It does not beat uniform on retrieval either: uniform's nDCG is higher on both mixes and
 on all ten agent-mix seeds. What type-aware holds over uniform is a store under a third of
 the size, and standards at 1.000 where uniform gives 0.989 on the agent mix at seed 42.
 
-On the agent mix at lambda 0.10 the three arms score within about 0.02. With rerank none,
-type-aware is recommended on 9 of 10 seeds and uniform on seed 42; with a cosine reranker
+On the agent mix at lambda 0.10 with rerank none, the three arms score within about 0.02.
+Type-aware is recommended on 9 of 10 seeds and uniform on seed 42; with a cosine reranker
 stage, `none` is recommended on seeds 42 to 44. On the stress mix the arms spread wider
 and `none` is recommended. So the agent table recommends no arm with confidence.
 `ENGRAM_DECAY` stays `type-aware`, and that default is an open decision.
@@ -159,11 +160,11 @@ go run ./cmd/engramd                                               # serves the 
 `engramd` speaks the Model Context Protocol over stdio, so point any MCP client at the
 command (`go run ./cmd/engramd`, or a built binary). It exposes three tools:
 
-- **`remember`** — `{content, type, namespace, importance?, source?, entities?, links?, supersedes?}` → `{memory_id, deduped, superseded?}`. Embeds the content, deduplicates within the namespace (reinforcing a near-identical memory instead of inserting), writes `:Entity` nodes + `[:MENTIONS]` edges, **auto-links** to sufficiently-similar neighbors (plus any explicit `links`), and lets a procedural or semantic write **supersede** older memories it replaces via `supersedes`. A procedural or semantic write naming `supersedes` replaces those memories; such a superseding write never dedups into what it replaces, and dedups only into identical content of its own type.
+- **`remember`** — `{content, type, namespace, importance?, source?, entities?, links?, supersedes?}` → `{memory_id, deduped, superseded?}`. Embeds the content, deduplicates within the namespace (reinforcing a near-identical memory instead of inserting), writes `:Entity` nodes + `[:MENTIONS]` edges, **auto-links** to sufficiently-similar neighbors (plus any explicit `links`). A procedural or semantic write naming `supersedes` replaces those memories; such a superseding write never dedups into what it replaces, and dedups only into identical content of its own type.
 - **`recall`** — `{query, namespaces?, k?, include_forgotten?}` → ranked `[{id, content, score, type, namespace, provenance}]`. Vector kNN seeds are expanded via 1-hop `[:LINKS]` and entity bridges (cross-namespace unless scoped), scored as similarity + 0.3 importance + 0.01 retrievability. Retrievability filters candidates before the pool is cut (**decayed/soft-forgotten memories excluded** unless `include_forgotten`) and adds at most 0.01 to the score, so it only breaks near-ties. Results are then **reranked by a cross-encoder** and packed under a **token budget**; returned memories are **reinforced on access**. `provenance.retrieved_via` reports how each result surfaced (`vector` / `link` / `entity:<name>`).
 - **`forget`** — `{id, mode}` → `{ok}`, where `mode` is `soft` (exclude from recall, recoverable), `hard` (delete), `pin` (protect from decay), or `supersede` (mark replaced).
 
-A background **decay sweep** periodically hard-prunes memories whose type-aware retrievability has fallen below a floor (under type-aware, pinned memories and procedural memories that are not superseded are protected). The eval measures the effect of this forgetting.
+A background **decay sweep** periodically hard-prunes memories whose retrievability has fallen below a floor (pinned memories always; under type-aware, also procedural memories that are not superseded). The eval measures the effect of this forgetting.
 
 Service-backed tests are tagged `integration` and excluded from the default unit run:
 
@@ -175,8 +176,8 @@ go test -tags integration ./...    # store + end-to-end — needs the stack up
 Config (env vars, with defaults): `NEO4J_URI` (`neo4j://localhost:7687`), `NEO4J_USER`
 (`neo4j`), `NEO4J_PASSWORD` (empty → the no-auth dev stack), `TEI_URL`
 (`http://localhost:8080`), `TEI_RERANK_URL` (`http://localhost:8081`), `ENGRAM_DECAY`
-(`type-aware`, `uniform` or `none`; default `type-aware`). The local stack
-runs Neo4j with `NEO4J_AUTH=none` bound to loopback — auth is out of v1 scope.
+(`type-aware`, `uniform` or `none`; default `type-aware`). The local stack runs Neo4j with
+`NEO4J_AUTH=none` bound to loopback — auth is out of v1 scope.
 
 > A compose-backed CI job to run the `integration` tests is still a TODO.
 

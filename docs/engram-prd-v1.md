@@ -196,7 +196,7 @@ Counts by type × namespace, retrievability histogram, store size, sweep stats (
 
 | Tool | Input | Output |
 |---|---|---|
-| `remember` | `content`, `type`, `namespace`, `importance?`, `source?`, `entities?`, `links?` | `memory_id`, `deduped`, `superseded?` |
+| `remember` | `content`, `type`, `namespace`, `importance?`, `source?`, `entities?`, `links?`, `supersedes?` | `memory_id`, `deduped`, `superseded?` |
 | `recall` | `query`, `namespaces?`, `k?`, `include_forgotten?` | ranked `[{id, content, score, type, namespace, provenance}]` |
 | `forget` | `id`, `mode: soft\|hard\|pin\|supersede` | `ok` |
 | `memory_stats` | `namespace?` | counts by type×namespace, retrievability histogram, sweep stats |
