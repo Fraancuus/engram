@@ -444,12 +444,14 @@ func statsFixture(t *testing.T) *MemStore {
 	s := NewMemStore()
 	m1 := mem("m1", "a", 0.9)
 	m1.Type, m1.Superseded, m1.Forgotten = engram.Episodic, true, true
+	m1.Content, m1.Source = "c1", "s1"
 	m2 := mem("m2", "a", 0.9)
 	m2.Type = engram.Episodic
 	m3 := mem("m3", "a", 0.9)
 	m3.Type, m3.Pinned = engram.Semantic, true
 	m4 := mem("m4", "b", 0.9)
 	m4.Type = engram.Procedural
+	m2.Content, m2.Source, m3.Content, m3.Source, m4.Content, m4.Source = "c2", "s2", "c3", "s3", "c4", "s4"
 	mustPut(t, s, m1, m2, m3, m4)
 	for id, ents := range map[engram.MemoryID][]string{"m2": {"e", "f"}, "m3": {"e", "f"}, "m4": {"e"}} {
 		if err := s.LinkEntities(ctx, id, ents); err != nil {
@@ -493,7 +495,7 @@ func TestMemStoreCountsFlagsOverlap(t *testing.T) {
 		if !slices.Equal(got.Groups, tc.groups) {
 			t.Errorf("%s: groups %+v, want %+v", tc.name, got.Groups, tc.groups)
 		}
-		if tc.name != "all" && (got.LinkEdges != tc.edges || got.EntityBridges != tc.bridge) {
+		if got.LinkEdges != tc.edges || got.EntityBridges != tc.bridge {
 			t.Errorf("%s: edges %d bridges %d, want %d %d", tc.name, got.LinkEdges, got.EntityBridges, tc.edges, tc.bridge)
 		}
 	}
@@ -529,6 +531,10 @@ func TestMemStoreLiveMemoriesOrderProjectionLimit(t *testing.T) {
 		m.Superseded = id == "m0"
 		mustPut(t, s, m)
 	}
+	fo := mem("m1a", "a", 0.9)
+	fo.Forgotten = true
+	other := mem("m0o", "b", 0.9)
+	mustPut(t, s, fo, other)
 	got, err := s.LiveMemories(ctx, "a", 2)
 	if err != nil {
 		t.Fatal(err)
@@ -586,4 +592,23 @@ func TestMemStoreStatsConcurrent(t *testing.T) {
 		}(g)
 	}
 	wg.Wait()
+}
+
+func TestMemStoreCountsSingleFlags(t *testing.T) {
+	t.Parallel()
+	s := NewMemStore()
+	sup, fog, pin, plain := mem("s", "a", 0.9), mem("f", "a", 0.9), mem("p", "a", 0.9), mem("n", "a", 0.9)
+	sup.Superseded, fog.Forgotten, pin.Pinned = true, true, true
+	for _, m := range []*engram.Memory{&sup, &fog, &pin, &plain} {
+		m.Type = engram.Episodic
+	}
+	mustPut(t, s, sup, fog, pin, plain)
+	got, err := s.Counts(ctx, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []engram.CountGroup{{Namespace: "a", Type: engram.Episodic, Total: 4, Live: 2, Superseded: 1, Forgotten: 1, Pinned: 1}}
+	if !slices.Equal(got.Groups, want) {
+		t.Fatalf("got %+v, want %+v", got.Groups, want)
+	}
 }
