@@ -24,7 +24,7 @@ those whose namespace is in `namespaces` (all memories when the list is empty), 
 score descending with insertion order as the tie-break, including forgotten and
 superseded memories, with `Score` set to the NORMALIZED similarity `(1 + cos) / 2` — the
 scale Neo4j's cosine vector index returns (measured on Neo4j 5.26: orthogonal vectors score
-0.5), which is the scale every pipeline threshold (dedup 0.95, auto-link 0.85, blend) is
+0.5), which is the scale every pipeline threshold (dedup 0.95, auto-link 0.925, blend) is
 applied to. The mock does not model the index's quantization noise. `k < 1` MUST behave as `k = 1`.
 
 #### Scenario: Namespace filter and order
@@ -61,24 +61,29 @@ weight 1.0. `SourceID` MUST be the seed.
 
 ### Requirement: Lifecycle and prune semantics
 `Reinforce` MUST increment `AccessCount` and set `LastAccessed = now`. `PropagateReinforce`
-MUST set `LastAccessed = now` on up to 20 link neighbors with weight ≥ threshold, heaviest
-first. `Supersede` MUST set `Superseded` and be idempotent for unknown ids. `SetForgotten`,
+MUST set `LastAccessed = now` on up to 20 non-superseded link neighbors with weight ≥ threshold,
+heaviest first; a superseded neighbor MUST be skipped and MUST NOT count toward the 20. `Supersede`
+MUST set `Superseded` and be idempotent for unknown ids. `SetForgotten`,
 `Pin` and `Delete` MUST return `engram.ErrNotFound` for an unknown id. `Delete` MUST remove
 the memory, every link edge touching it, and its entity mentions. `PruneCandidates(before,
 limit)` MUST return up to `limit` memories with `LastAccessed < before` and `Pinned ==
 false`.
 
 #### Scenario: Delete cascades
-- **WHEN** m has 3 link edges and mentions 2 entities and `Delete(m)` runs
-- **THEN** `EdgeCount` drops by 3, `Neighbors` of its former neighbors no longer include m, and `BridgeCount` no longer counts pairs through m
+- **WHEN** memory X with one link edge and one entity mention is deleted
+- **THEN** `Neighbors` no longer returns X, the edge is gone, and the entity no longer bridges to X
 
 #### Scenario: Prune predicate at the boundary
-- **WHEN** m.LastAccessed == before
-- **THEN** m is not a candidate
+- **WHEN** a memory has `LastAccessed` exactly equal to `before`
+- **THEN** `PruneCandidates(before, n)` does not return it
 
 #### Scenario: Pinned never a candidate
-- **WHEN** m is pinned and older than before
-- **THEN** m is not a candidate
+- **WHEN** a pinned memory has `LastAccessed` long before `before`
+- **THEN** `PruneCandidates` does not return it
+
+#### Scenario: Propagation skips superseded neighbors
+- **WHEN** at virtual time T a memory has one strong edge to a superseded neighbor and one to a live neighbor
+- **THEN** only the live neighbor's `LastAccessed` becomes T
 
 ### Requirement: Observability counters
 `MemStore` MUST expose `Len()`, `EdgeCount()` (distinct undirected link edges) and

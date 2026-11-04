@@ -181,7 +181,7 @@ No new package, port or interface. The domain ports `Embedder`, `Reranker`, `Dec
 
 ### Tasks
 
-Layer order runs domain, then mock, adapters, eval and cmd. Implementers are `sonnet`, task reviewers `opus`, each task test-first under `go test -race`. Full steps and test names are in `openspec/changes/m6-polish/plan.md`.
+Layer order runs domain, then mock, adapters, eval and cmd. Implementers are `sonnet`, task reviewers `opus`, each task test-first under `go test -race`. Full steps and test names are in `openspec/changes/archive/2026-11-04-m6-polish/plan.md`.
 
 <Table
   id="tasks"
@@ -226,7 +226,7 @@ Layer order runs domain, then mock, adapters, eval and cmd. Implementers are `so
 
 ### Result
 
-The first run contradicted the warning above and several predictions. `none` reached 0.852 on facts against 1.000 for `type-aware`, because of a discontinuity in blend at the seed cap rather than any retrieval benefit from forgetting. At lambda 0.10 the arms score within about 0.02 and the winner depends on the seed. `openspec/changes/m6-polish/design.md`, section "Result at the floor", has the tables, the predictions against results, and the diagnosis.
+The first run contradicted the warning above and several predictions. `none` reached 0.852 on facts against 1.000 for `type-aware`, because of a discontinuity in blend at the seed cap rather than any retrieval benefit from forgetting. At lambda 0.10 the arms score within about 0.02 and the winner depends on the seed. `openspec/changes/archive/2026-11-04-m6-polish/design.md`, section "Result at the floor", has the tables, the predictions against results, and the diagnosis.
 
 ### Decisions
 
