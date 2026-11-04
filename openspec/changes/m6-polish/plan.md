@@ -10,7 +10,7 @@
 
 **Spec:** `openspec/changes/m6-polish/design.md` (D11 to D17) and `openspec/changes/m6-polish/specs/`.
 
-**How this changes A/B/C:** A's order stays sim + 0.3 importance. B and C stop losing fresh episodes to permanent standards. Stale facts leave every arm, so `none` and `type-aware` converge on facts and no class remains where forgetting beats `none`. The store weight then decides A versus C.
+**How this changes A/B/C (expected before the first run; `design.md`, "Result at the floor", has what happened):** A's order stays sim + 0.3 importance. B and C stop losing fresh episodes to permanent standards. Stale facts leave every arm, so `none` and `type-aware` converge on facts and no class remains where forgetting beats `none`. The store weight then decides A versus C.
 
 **How this changes the CI gate:** Logic unchanged (arm C against its own past, tolerance 0.02). Baseline moves to the agent mix. Red from Task 2 to Task 11 by design.
 

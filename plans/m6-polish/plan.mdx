@@ -18,7 +18,7 @@ The report will look like this. The bracketed values are unknown until the first
 
 <Callout id="key-finding" tone="warning">
 
-**After this change, forgetting cannot beat never-forgetting on retrieval in any query class.** Supersession runs in every arm, and recall drops superseded memories in every arm, so `none` no longer has stale facts to trip over. Its fact nDCG should climb from 0.673 toward 1.0, level with `type-aware`. The store weight then decides A versus C. A rough estimate on the agent mix puts `none` near 0.98 and `type-aware` near 0.87 at about 30% of the store, so the break-even lambda is near 0.16. That makes the lambda value a decision about what the recommendation will say, so it is fixed at 0.10 before the first run and will not change afterwards.
+**Expected before the first run, and contradicted by it (see Result below): after this change, forgetting cannot beat never-forgetting on retrieval in any query class.** Supersession runs in every arm, and recall drops superseded memories in every arm, so `none` no longer has stale facts to trip over. Its fact nDCG should climb from 0.673 toward 1.0, level with `type-aware`. The store weight then decides A versus C. A rough estimate on the agent mix puts `none` near 0.98 and `type-aware` near 0.87 at about 30% of the store, so the break-even lambda is near 0.16. That makes the lambda value a decision about what the recommendation will say, so it is fixed at 0.10 before the first run and will not change afterwards.
 
 </Callout>
 

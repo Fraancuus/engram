@@ -31,7 +31,8 @@ MUST NOT report it. Supersession is explicit only: the system MUST NOT infer it 
 ### Requirement: Dedup never defeats a replacement
 Dedup MUST skip a candidate that is already superseded, that is soft-forgotten, or that a procedural or
 semantic write names in `supersedes`. A write that names `supersedes` MUST dedup only into a candidate
-of its own memory type, because the type decides how long the content lasts. An episodic write's
+of its own memory type with identical content: the type decides how long the content lasts, and anything
+else would discard the correction while superseding what it replaces. An episodic write's
 `supersedes` MUST NOT affect dedup. The first remaining candidate decides dedup. A skipped candidate at
 or above the dedup point MUST NOT be reinforced and MUST NOT absorb the write. Supersession MUST apply
 whether the write inserts or dedups.
@@ -45,8 +46,12 @@ whether the write inserts or dedups.
 - **THEN** a new live memory is stored and the superseded memory is not reinforced
 
 #### Scenario: Live duplicate behind a skipped candidate
-- **WHEN** the top candidate at 0.98 is named in `supersedes` and a second candidate at 0.96 is live
+- **WHEN** the top candidate at 0.98 is named in `supersedes` and a second candidate at 0.96 is live with identical content
 - **THEN** the write dedups into the second candidate, the top candidate is superseded, and the reply's `superseded` names it
+
+#### Scenario: Correction near a different live memory
+- **WHEN** a write with `supersedes: [old]` scores 0.97 against a live memory of its own type with different content
+- **THEN** a new memory is stored and recall returns it, `old` is superseded, and the live memory is not reinforced
 
 #### Scenario: Soft-forgotten candidate
 - **WHEN** a correction with `supersedes: [old]` scores 0.97 against a soft-forgotten memory, and no live candidate reaches 0.95
@@ -77,7 +82,7 @@ whether the write inserts or dedups.
 - **THEN** it dedups into `old`, and `old` is not superseded
 
 #### Scenario: Retried correction is idempotent
-- **WHEN** a correction was stored but its supersede failed, and the same write retries and scores 0.99 against its own earlier insert
+- **WHEN** a correction was stored but its supersede failed, and the same write retries with identical content against its own earlier insert
 - **THEN** it dedups into that insert and applies the supersession, and the reply's `superseded` names the old memory
 
 #### Scenario: Ordinary dedup unchanged

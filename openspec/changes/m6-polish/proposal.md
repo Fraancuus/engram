@@ -19,9 +19,9 @@ Delivers the eval-correction and README parts of milestone M6 (PRD section 9).
 
 **Supersession**
 - From: `Supersedes` applies to procedural writes only; dedup can swallow a replacement; recalling a chain-mate refreshes a superseded version.
-- To: `Supersedes` applies to procedural and semantic writes; dedup ignores memories already superseded or named in `Supersedes`; `PropagateReinforce` skips superseded targets.
+- To: `Supersedes` applies to procedural and semantic writes; dedup ignores memories already superseded, soft-forgotten, or named in `Supersedes`; a write naming `Supersedes` dedups only into identical content of its own type; `PropagateReinforce` skips superseded targets; auto-links skip soft-forgotten memories.
 - Reason: stale facts never clear today, and a near-identical correction is silently lost.
-- Impact: additive for callers; the `supersedes` field keeps its shape and widens its meaning.
+- Impact: the `supersedes` field keeps its shape and widens its meaning; a write near a soft-forgotten memory, or a correction near another live memory, now stores a new memory instead of being absorbed.
 
 **Similarity thresholds**
 - From: `linkThreshold` and `propagateThreshold` 0.85 (raw cosine 0.70).
@@ -42,7 +42,7 @@ Delivers the eval-correction and README parts of milestone M6 (PRD section 9).
 - Requirements added for the access hit-rate table and the stale-baseline guard.
 - README claim, results and recall description rewritten to what the new tables support.
 
-**Effect on the A/B/C comparison.** Expected: episode-recent and episode access hit rate under
+**Effect on the A/B/C comparison.** Expected before the first run (`design.md`, "Result at the floor", has what happened; several of these missed): episode-recent and episode access hit rate under
 type-aware rise to near `none`; fact nDCG rises in every arm, and `none` and `type-aware` converge
 near 1.0, so no class remains where forgetting beats `none` on retrieval; C's store grows from
 reinforcement reaching episodes and shrinks from pruning superseded versions. The store weight

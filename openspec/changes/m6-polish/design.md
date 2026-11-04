@@ -69,13 +69,13 @@ already handle a superseded semantic memory (S = 2 d), so `decay.go` does not ch
 within raw cosine 0.90 of the old fact is discarded and the replace never happens. Dedup now skips
 a candidate that is already superseded or is named in `in.Supersedes`, and the first remaining
 candidate decides. Skipping an already-superseded candidate also stops a fact flipping back to an
-old value from reinforcing a memory recall will never return. Supersession also applies when the
-write dedups into a different live memory, because the caller still named what it replaces; that also
-makes a retried correction idempotent after a failed supersede. An episodic write's `Supersedes` is
+old value from reinforcing a memory recall will never return. A write naming `Supersedes` dedups only
+into identical content of its own type, so a retried correction stays idempotent after a failed supersede
+while a correction near some other live memory is stored rather than lost. An episodic write's `Supersedes` is
 treated as absent throughout, so it cannot bypass dedup. Search returns at most `autoLinkK` (5)
 candidates, so five skipped candidates can hide a live duplicate at rank 6; this is accepted and noted
-in a `shortcut:` comment. The new memory still auto-links to a skipped candidate, which is harmless:
-recall filters it and propagation skips it.
+in a `shortcut:` comment. The new memory still auto-links to a superseded candidate, which is harmless:
+recall filters it and propagation skips it. It does not auto-link to a soft-forgotten candidate (D18).
 
 **Stop refreshing superseded versions.** `PropagateReinforce` skips superseded targets in both
 stores, and a skipped target does not consume the cap of 20. Neo4j gets one `WHERE` predicate on a
@@ -127,8 +127,8 @@ the mean final size of arm `none` in the same run, or the largest arm present wh
 has no `none`. The tie rule stays: within 0.005 of the top score, the smallest store wins. `Recommend`
 with `Lambda` 0 reduces to the M5 rule, so `-lambda 0` shows the retrieval-only answer.
 
-**Why 0.10.** Store cost is a value judgement. The in-memory fake has flat latency, so nothing here
-measures it. 0.10 is a round figure that treats a 10x larger store as worth about 0.09 nDCG. It is
+**Why 0.10.** Store cost is a value judgement. The in-memory fake says nothing about the latency of a
+larger store on Neo4j, so nothing here measures it. 0.10 is a round figure that treats a 10x larger store as worth about 0.09 nDCG. It is
 written here before any M6 run and will not be changed to reach a result.
 
 **Break-even line.** A rough estimate from the M5
@@ -212,8 +212,8 @@ the break-even, the corrected recall description, and the archived path of the M
 
 ### D18. Rulings from the mid-branch review
 
-A five-lens review of the Go diff, with three skeptics trying to refute each serious finding, confirmed
-twelve. Each ruling below changed code or a spec, except where marked as left open. None moves lambda, a
+A five-lens review of the Go diff (reviewer, spec coverage, eval integrity, security-auditor, silent
+failures), with three skeptics trying to refute each serious finding, confirmed twelve. Each ruling below changed code or a spec, except where marked as left open. None moves lambda, a
 mix percentage or a D16 prediction, and no eval number informed any of them.
 
 **Fixed.** A correction near a soft-forgotten memory dedups into it, and because M6 applies supersession on
@@ -227,6 +227,16 @@ it lands before the re-baseline. The remainder are tests pinning behaviour D14 c
 (`DefaultLambda`, the score column at a non-zero lambda, the `-mix` and `-lambda` plumbing behind the README
 tables), the sweep pruning a superseded fact, labels surviving a pruned hop, and literal twin bounds.
 
+A write near a soft-forgotten memory no longer auto-links to it, because every recall of the new write would
+otherwise refresh the forgotten memory and the sweep could never prune it.
+
+The final whole-branch review found one more of the same class, reproduced on the real embedder: a correction
+naming `Supersedes` dedups into a different live memory of its own type, such as "Bob reviews all backend pull
+requests" into "Bob reviews all frontend pull requests". The named memory was superseded and the correction
+stored nowhere, so recall on that subject went from a stale answer to none. A replacing write now dedups only
+into identical content, which keeps a retry idempotent. No dedup can occur in the eval, where it is a fatal
+error, so no number moves.
+
 **Reworded.** `superseded` reports the ids `remember` asked the store to supersede. Reporting only matched
 ids needs a `Supersede` signature change, which this change rules out. The tool description now says what an
 absent `superseded` means.
@@ -234,7 +244,10 @@ absent `superseded` means.
 **Left open, for Franco.** A typo in `supersedes` is reported as success, and the fix is a store signature
 change. CI has no job running the integration tests, and those tests skip silently without Neo4j, so Task 10
 fails on any skip by hand. `supersedes` can reach another namespace, as `forget` already can. A retried
-correction that dedups drops its `Links`, as dedup always has.
+correction that dedups drops its `Links`, as dedup always has. A forgotten memory with an existing link is
+still refreshed through it, so it prunes late. `Neighbors` still counts superseded rows toward its per-seed
+cap. `CLAUDE.md` line 7 still says the eval "proves type-aware decay helps", and lines 22-23 still call the
+gate a stub; that file is Franco's.
 
 ## Risks / Trade-offs
 
@@ -269,7 +282,7 @@ differ by anything but `DecayModel`. One required change, folded into D12: an ep
 
 ## Result at the floor (2026-11-04)
 
-Produced at `0466233` on amd64: `go run ./cmd/eval --update-baseline -seed 42`, then `--ci` twice with byte-identical arm C rows. Raw output is in `results/`. Baseline: mix agent, k 5, seed 42, rerank none, precision@5 0.1788, nDCG@5 0.8747.
+Produced at `0466233` on amd64: `go run ./cmd/eval --update-baseline -seed 42`, then `--ci` twice with byte-identical arm C rows. The tables reproduce with `go run ./cmd/eval -seeds 1` and `go run ./cmd/eval -seeds 1 -mix stress`; the default averages seeds 42 to 44. Raw output for the tables is in `results/`; the counterfactuals under the diagnosis were scratch runs and have no file there. Baseline: mix agent, k 5, seed 42, rerank none, precision@5 0.1788, nDCG@5 0.8747.
 
 Agent mix, seed 42, k=5, rerank none, lambda 0.1:
 
@@ -293,7 +306,7 @@ Break-even lambda against `none`: uniform 0.301, type-aware 0.325. Recommended: 
 
 Episode access hit rate at seed 42: none 0.989, uniform 0.991, type-aware 0.995. With `-lambda 0`, `none` is recommended on both mixes.
 
-Agent mix across seeds 42 to 51, one run each at lambda 0.1:
+Agent mix across seeds 42 to 51, one run each at lambda 0.1. Seed 47 goes to `type-aware` through the 0.005 tie rule:
 
 | seed | none nDCG, score | uniform nDCG, score | type-aware nDCG, score | recommended |
 |---|---|---|---|---|
@@ -332,8 +345,9 @@ The D16 predictions stand as written.
 It does not retrieve facts better. Three independent diagnoses agree, and a replay reproduces the fact nDCG in every arm on seeds 42, 43, 44 and on the stress mix. Neighbors excludes seeds, so a memory inside the 50 vector seeds keeps its own similarity, while the same memory just outside inherits `sim_source * weight` through a link. Every generated fact has an explicit weight 1.0 link to its topic's standard, which has the higher importance. So a standard scoring about 1.00 as a seed scores about 1.165 just outside the seeds and outranks the fact: query q0153 scores 1.0044 and 1.1651 for the same standard. `none` keeps about 92 live memories per topic against the cap of 50, so its standard is often outside; `type-aware` keeps about 23, so it never is. Every miss is the target at rank 2 behind that standard, and recall@5 on facts is 1.000 in all arms. The inversion reproduced on a real Neo4j on the `none` arm at seed 42: 41 misses against the mock's 40.
 
 Consequences:
-- D12's "C cannot beat A on nDCG in any class" holds in substance but not as run: without this discontinuity none reaches 1.000 on facts. The reason D12 gives for uniform is wrong: uniform's latest versions were pruned in none of its fact queries, and its gap is the same inversion.
+- D12's "C cannot beat A on nDCG in any class" did not hold as run. On facts, the class it was about, none reaches 1.000 without this discontinuity; other classes were not tested against it. The reason D12 gives for uniform is wrong: uniform's latest versions were pruned in none of its fact queries, and its gap is the same inversion.
 - With links from facts to standards removed, or with a reranker stage, `none` reaches fact 1.000 and is recommended on seeds 42 to 44. So lambda 0.10 sits between a result that recommends `type-aware` and one that recommends `none`, and the discontinuity decides which. The real cross-encoder could not be run: eval content is generator ids, not text.
+- Without the discontinuity the agent-mix cost of type-aware is about 0.10 nDCG rather than 0.07 (0.103, 0.105, 0.098 on seeds 42 to 44, with fact-to-standard links removed in a scratch copy), and the arms no longer sit within 0.02.
 - Repair needs a design decision. Scoring seeds through links as well makes every arm far worse (fact 0.708 in `none` and `type-aware`). It is M2 blend behaviour and out of scope here, so no constant was changed after seeing these numbers.
 
 ### What the numbers support
