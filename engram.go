@@ -156,3 +156,26 @@ type MemoryStore interface {
 // ErrNotFound is returned by MemoryStore.Get when no memory has the given id. Callers
 // branch on it with errors.Is.
 var ErrNotFound = errors.New("memory not found")
+
+// StoreCounts is the aggregate state of a store or one namespace of it.
+type StoreCounts struct {
+	Groups        []CountGroup // one per (namespace, type) present, sorted by namespace then type
+	LinkEdges     int
+	EntityBridges int
+}
+
+// CountGroup holds the counts of one (namespace, type) pair. Superseded, Forgotten and
+// Pinned are flags and overlap; Live is neither superseded nor forgotten.
+type CountGroup struct {
+	Namespace                                  Namespace
+	Type                                       MemoryType
+	Total, Live, Superseded, Forgotten, Pinned int
+}
+
+// SweepStats reports the decay sweep since process start. A zero LastRunAt means no pass
+// has completed.
+type SweepStats struct {
+	LastRunAt   time.Time
+	LastPruned  int
+	TotalPruned int
+}
