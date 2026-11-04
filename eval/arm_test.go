@@ -300,7 +300,7 @@ func TestAccessHitRate(t *testing.T) {
 
 // Guards the GID translation of a pruned predecessor id, the link edge to it, and
 // dedup of the replacement. applySupersedes only logs store errors, so a failed
-// edge would not fail the write.
+// Supersede would not fail the write.
 func TestWriteSupersedesPrunedPredecessor(t *testing.T) {
 	t.Parallel()
 	ds := tinyDataset(t)

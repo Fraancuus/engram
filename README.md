@@ -59,18 +59,18 @@ across universes for associative recall.
 ## The eval (the point)
 
 Three arms over a labelled dataset with virtualized time, differing only in decay:
-**none**, **uniform** and **type-aware**. Supersession runs in all three. Metrics: precision@k,
-recall@k, nDCG/MRR, latency, store size, type-stratified recall, and nDCG per query class. Relevance is judged
-against held-out ground-truth labels owned by the dataset generator, never the reranker scoring
-itself. The dataset is synthetic; see
+**none**, **uniform** and **type-aware**. Supersession runs in all three. Metrics:
+precision@k, recall@k, nDCG/MRR, latency, store size, type-stratified recall, and nDCG per
+query class. Relevance is judged against held-out ground-truth labels owned by the dataset
+generator, never the reranker scoring itself. The dataset is synthetic; see
 [M5](openspec/changes/archive/2026-11-03-m5-eval/design.md) and
 [M6](openspec/changes/archive/2026-11-04-m6-polish/design.md) for the design.
 
 The gate is live: `go run ./cmd/eval --ci` fails when arm `type-aware` precision@5
-regresses more than 0.02 against `eval/baseline.json`. The tables below reproduce with
-`go run ./cmd/eval -seeds 1` and `go run ./cmd/eval -seeds 1 -mix stress`; plain
-`go run ./cmd/eval` averages seeds 42 to 44. Flags: `-seed`, `-seeds`, `-k`, `-scale`, `-mix agent|stress`, `-lambda`,
-`-rerank none|cosine`, `-json`, `--update-baseline`.
+regresses more than 0.02 against `eval/baseline.json`. The tables below reproduce with `go
+run ./cmd/eval -seeds 1` and `go run ./cmd/eval -seeds 1 -mix stress`; plain `go run
+./cmd/eval` averages seeds 42 to 44. Flags: `-seed`, `-seeds`, `-k`, `-scale`, `-mix
+agent|stress`, `-lambda`, `-rerank none|cosine`, `-json`, `--update-baseline`.
 
 **Recommendation score.** nDCG minus lambda times the store size over the store size of
 `none`. Lambda 0.10 is a value judgement, fixed before the first run. `-lambda 0` gives
@@ -174,8 +174,8 @@ go test -tags integration ./...    # store + end-to-end — needs the stack up
 
 Config (env vars, with defaults): `NEO4J_URI` (`neo4j://localhost:7687`), `NEO4J_USER`
 (`neo4j`), `NEO4J_PASSWORD` (empty → the no-auth dev stack), `TEI_URL`
-(`http://localhost:8080`), `TEI_RERANK_URL` (`http://localhost:8081`), `ENGRAM_DECAY` (`type-aware`, `uniform` or
-`none`; default `type-aware`). The local stack
+(`http://localhost:8080`), `TEI_RERANK_URL` (`http://localhost:8081`), `ENGRAM_DECAY`
+(`type-aware`, `uniform` or `none`; default `type-aware`). The local stack
 runs Neo4j with `NEO4J_AUTH=none` bound to loopback — auth is out of v1 scope.
 
 > A compose-backed CI job to run the `integration` tests is still a TODO.
