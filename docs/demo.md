@@ -45,7 +45,7 @@ claude --strict-mcp-config --setting-sources "" --tools "" \
 - `--tools ""` leaves only the Engram tools.
 - `--strict-mcp-config` keeps every other MCP server out of the session.
 - `--setting-sources ""` keeps your user hooks and settings out of the recording.
-- `--allowedTools 'mcp__engram__*'` lets the agent call Engram without a permission prompt.
+- `--allowedTools 'mcp__engram__*'` lets the agent call Engram without a permission prompt, including on a hard delete.
 
 The config holds no local path, needs no file and leaves no state. If Claude Code asks whether to
 trust the temp folder, accept: it is a fresh directory each time.
@@ -89,6 +89,9 @@ the output stays scoped. If an unscoped call appears on screen, stop the take an
 stdio client starts `engramd` for its own session, and the first sweep runs an hour after start,
 so a short session never reaches one. They are also store-wide, not per namespace.
 
+**Scoped `store_size` is the namespace's size.** If the agent reports a scoped call's `store_size`
+as the whole store's size, stop the take and run it again.
+
 ## Troubleshooting
 
 **`calling "initialize": EOF` or `Connection closed`.** `engramd` exits at start when Neo4j is
@@ -107,12 +110,18 @@ the session again.
 
 From the repo root:
 
+To stop the stack and keep the data volumes:
+
 ```bash
-docker compose down        # stop the stack, keep the data volumes
-docker compose down -v     # stop the stack and delete all volumes
+docker compose down
 ```
 
-`down -v` also deletes both TEI model caches, so the next `up` downloads the models again.
+To also delete all data, every memory and both TEI model caches, run the next command instead.
+It is irreversible, and the next `up` downloads the models again:
+
+```bash
+docker compose down -v
+```
 
 Prompt 3 already deletes the demo memory. If a take stops early, delete what is left with
 `forget` in `hard` mode, using the id from the `remember` result.

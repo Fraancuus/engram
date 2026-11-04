@@ -160,8 +160,8 @@ CI also runs `govulncheck`, CodeQL, gitleaks and the eval gate.
 - **Baseline:** regenerate only on amd64, with
   `go run ./cmd/eval --update-baseline -seed 42`, then run `--ci` twice. Commit it only for
   an intended change and say why in the PR. Never regenerate to pass a regression.
-- **Integration tests:** CI does not run them. A change to `neo4j/`, `mcp/`, `sweep/` or
-  `schema/` runs them against the real stack, from Git Bash (PowerShell has no `<`):
+- **Integration tests:** CI does not run them. A change to `neo4j/`, `mcp/`, `sweep/`,
+  `schema/` or `cmd/engramd/` runs them against the real stack, from Git Bash (PowerShell has no `<`):
   ```bash
   docker compose up -d --wait
   docker compose exec -T neo4j cypher-shell < schema/001_init.cypher  # once per fresh volume
