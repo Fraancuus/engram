@@ -126,20 +126,20 @@ Entities are first-class nodes: `(:Memory)-[:MENTIONS]->(:Entity)`. A memory in 
 ## 6. Functional requirements
 
 ### 6.1 Write path — `remember`
-Input: `content`, `type` (`episodic`|`semantic`|`procedural`), `namespace`, optional `importance` (0–1, default 0.5), `source`, `entities[]`, explicit `links[]`.
+Input: `content`, `type` (`episodic`|`semantic`|`procedural`), `namespace`, optional `importance` (0–1, default 0.5), `source`, `entities[]`, explicit `links[]`, `supersedes[]`.
 Behavior:
 1. Embed `content` (sidecar).
-2. **Dedup**: cosine sim ≥ `DEDUP_THRESHOLD` to an existing memory *in the same namespace* → reinforce existing, return its id.
-3. **Supersession (procedural):** if a new procedural memory shares namespace + a key entity with an existing one and is flagged a replacement, mark the old `superseded` (begins its decay/archival). This is how reference memory "forgets" — by being replaced, not by time.
+2. **Dedup**: similarity ≥ `DEDUP_THRESHOLD` (on the store's normalised scale) to an existing memory *in the same namespace* → reinforce existing, return its id. Superseded and soft-forgotten memories never absorb a write. A write naming `supersedes` dedups only into identical content of its own type.
+3. **Supersession (procedural and semantic):** a write naming `supersedes` marks those memories `superseded` (begins their decay/archival). Explicit only; detection by similarity is v2. This is how reference memory "forgets" — by being replaced, not by time.
 4. Insert `:Memory` with: `created_at`, `last_accessed`, `access_count=0`, `importance`, `stability` (type-keyed `S₀`), `type`, `namespace`, embedding.
 5. **Link**: explicit links; auto-link to top-K nearest neighbors above `LINK_THRESHOLD` (intra-namespace, edge weight = similarity); `MENTIONS` edges to each entity (creating `:Entity` nodes as needed).
 
 ### 6.2 Read path — `recall`
-Input: `query`, optional `namespaces[]` (default: all), `k` (default 8), `include_forgotten` (default false).
+Input: `query`, optional `namespaces[]` (default: all), `k` (default 10), `include_forgotten` (default false).
 Pipeline:
 1. Embed query → **vector kNN** (Neo4j vector index), filtered to `namespaces` if scoped; top `N` (~50).
 2. **Associative expansion:** 1-hop `LINKS` neighbors **+ entity bridges** (memories sharing a `MENTIONS` entity). Entity bridges may cross namespaces unless the query is scoped. *This is why the graph exists.*
-3. **Score blend:** `score = w_sim·sim + w_rec·recency + w_imp·importance + w_ret·retrievability`. Weights configurable.
+3. **Score blend:** `score = w_sim·sim + w_imp·importance + w_ret·retrievability`, with `w_ret` 0.01: retrievability filters candidates before the pool is cut and only breaks near-ties. The weights are constants.
 4. **Cross-encoder rerank** the blended top-M (sidecar); take final `k`.
 5. **Token-budget assembly:** pack under a max-token ceiling.
 6. **Reinforce on access:** returned memories get `last_accessed=now`, `access_count++`, `stability` bumped; small edge-weighted bump propagates to 1-hop neighbors.
@@ -178,7 +178,7 @@ Counts by type × namespace, retrievability histogram, store size, sweep stats (
 **Conditions**
 - **A — Baseline:** flat retrievability, unbounded store. The "everyone else" system.
 - **B — Uniform decay:** one decay curve for all memories.
-- **C — Engram (type-aware decay):** per-type curves + supersession.
+- **C — Engram (type-aware decay):** per-type curves. Supersession runs in all three arms.
 
 **Dataset:** labeled `(query, relevant_memory_ids)` over a store with **simulated time + access patterns** and a **mix of types** (frequently-hit procedural standards, write-once episodic chatter, slowly-aging semantic facts). Bootstrap from a public long-term-memory benchmark (LongMemEval / LoCoMo-style) or synthesize for full ground-truth control. Time is virtualized so a "month" runs in seconds.
 

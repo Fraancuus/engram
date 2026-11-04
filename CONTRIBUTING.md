@@ -76,8 +76,9 @@ golangci-lint run ./...
 ```
 
 CI runs the same, plus `govulncheck`, CodeQL, gitleaks (full history), and the eval
-job (`go run ./cmd/eval --ci`). The eval is a scaffold stub today (exits 0); its real
-precision@k regression gate lands at M5. Make these required status checks once stable.
+job (`go run ./cmd/eval --ci`). The eval gate is live: it fails when arm `type-aware`
+precision@5 drops more than 0.02 below `eval/baseline.json`. Make these required status
+checks once stable.
 
 ## Commits & PRs
 

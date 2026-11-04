@@ -787,6 +787,31 @@ func TestDoRememberCorrectionNotAbsorbedByOtherContent(t *testing.T) {
 	}
 }
 
+func TestDoRememberRetryBehindOtherContent(t *testing.T) {
+	t.Parallel()
+	other := cand("other", 0.99, false)
+	other.Content = "something else entirely"
+	prior := cand("prior", 0.97, false)
+	prior.Content = validRemember().Content
+	st := &mock.FakeStore{SearchResults: []engram.RecallResult{other, prior}}
+	h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+	in := validRemember()
+	in.Supersedes = []string{"old"}
+	out, err := h.doRemember(context.Background(), in)
+	if err != nil {
+		t.Fatalf("doRemember: %v", err)
+	}
+	if !out.Deduped || out.MemoryID != "prior" {
+		t.Errorf("out = %+v, want deduped into prior", out)
+	}
+	if len(st.Reinforced) != 1 || st.Reinforced[0] != "prior" {
+		t.Errorf("Reinforced = %v, want exactly [prior]", st.Reinforced)
+	}
+	if len(out.Superseded) != 1 || out.Superseded[0] != "old" {
+		t.Errorf("Superseded = %v, want [old]", out.Superseded)
+	}
+}
+
 func TestRememberCorrectionNearLiveMemoryIsRecallable(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -802,7 +827,10 @@ func TestRememberCorrectionNearLiveMemoryIsRecallable(t *testing.T) {
 			t.Fatalf("remember %s: %v", c, err)
 		}
 	}
-	before, _ := st.Snapshot("id2")
+	before, ok := st.Snapshot("id2")
+	if !ok {
+		t.Fatal("snapshot before correction: id2 missing")
+	}
 	out, err := h.Remember(ctx, RememberInput{Content: "correction", Type: "semantic", Namespace: "ns", Supersedes: []string{"id1"}})
 	if err != nil {
 		t.Fatalf("remember correction: %v", err)
@@ -810,11 +838,15 @@ func TestRememberCorrectionNearLiveMemoryIsRecallable(t *testing.T) {
 	if out.Deduped {
 		t.Fatal("correction deduped into a different live memory and was lost")
 	}
-	if m, _ := st.Snapshot("id1"); !m.Superseded {
-		t.Error("old was not superseded")
+	if m, ok := st.Snapshot("id1"); !ok || !m.Superseded {
+		t.Errorf("old not superseded: %+v (found %v)", m, ok)
 	}
 	// Checked before Recall, which itself reinforces what it returns.
-	if after, _ := st.Snapshot("id2"); after.AccessCount != before.AccessCount || after.Superseded {
+	after, ok := st.Snapshot("id2")
+	if !ok {
+		t.Fatal("snapshot after correction: id2 missing")
+	}
+	if after.AccessCount != before.AccessCount || after.Superseded {
 		t.Errorf("live touched: before %+v after %+v", before, after)
 	}
 	rec, err := h.Recall(ctx, RecallInput{Query: "correction", Namespaces: []string{"ns"}})

@@ -233,7 +233,7 @@ func (t *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberO
 // score order, at or above the dedup threshold that is live (not superseded or soft-forgotten)
 // and not being replaced. A replacement dedups only into a memory of its own type with the
 // same content (a retried correction), so a correction never folds into a different live
-// memory and is never stored nowhere.
+// memory and loses its text.
 // shortcut: Search returns autoLinkK=5 candidates, 5 skipped ones hide a live duplicate at rank 6, raise autoLinkK if that shows up
 func (t *Tools) dedupTarget(cands []engram.RecallResult, replaces []string, mt engram.MemoryType, content string) (engram.RecallResult, bool) {
 	for _, c := range cands {
