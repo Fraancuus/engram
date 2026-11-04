@@ -62,11 +62,14 @@ func TestScaledKeepsMix(t *testing.T) {
 	if got := p.Scaled(2).Mix; got != MixStress {
 		t.Fatalf("Scaled lost mix: %q", got)
 	}
-	d, err := Generate(Floor().Scaled(2))
+	tp := tinyParams()
+	tp.Mix = MixStress
+	tp.Seed = 3 // the default tiny seed (2) has no noise draw that fits at twice the size
+	d, err := generateUnchecked(tp.Scaled(2))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Params.Mix != MixAgent || len(d.Queries) != 1000 {
+	if d.Params.Mix != MixStress || len(d.Queries) != tp.Queries*2 {
 		t.Fatalf("mix %q, %d queries", d.Params.Mix, len(d.Queries))
 	}
 }

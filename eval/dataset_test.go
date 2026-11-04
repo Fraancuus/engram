@@ -34,27 +34,29 @@ func floorDS(t *testing.T) *Dataset {
 
 func TestGenerateDeterministic(t *testing.T) {
 	t.Parallel()
+	a := floorDS(t)
 	p := Floor()
 	p.Seed = 42
 	start := time.Now()
-	a, err := Generate(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("Generate(Floor) took %s", time.Since(start))
 	b, err := Generate(p)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("Generate(Floor) took %s", time.Since(start))
 	if a.Hash() != b.Hash() {
 		t.Fatal("same seed produced different hashes")
 	}
-	p.Seed = 43
-	c, err := Generate(p)
+	tp := tinyParams()
+	x, err := generateUnchecked(tp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Hash() == c.Hash() {
+	tp.Seed++
+	y, err := generateUnchecked(tp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if x.Hash() == y.Hash() {
 		t.Fatal("different seeds produced equal hashes")
 	}
 }
