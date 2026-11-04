@@ -147,8 +147,11 @@ const HistogramBuckets = 10
 func RetrievabilityHistogram(ms []Memory, d DecayModel, now time.Time) [HistogramBuckets]int {
 	var h [HistogramBuckets]int
 	for _, m := range ms {
-		i := int(d.Retrievability(m, now) * HistogramBuckets)
-		h[min(max(i, 0), HistogramBuckets-1)]++ // clamp the index, not R; R=1 lands in the last bucket
+		// Clamp R first: an out-of-range float-to-int conversion is implementation-defined.
+		// NaN survives min and max, so the index clamp stays; R=1 lands in the last bucket.
+		r := min(max(d.Retrievability(m, now), 0), 1)
+		i := int(r * HistogramBuckets)
+		h[min(max(i, 0), HistogramBuckets-1)]++
 	}
 	return h
 }

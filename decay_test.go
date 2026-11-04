@@ -241,6 +241,24 @@ func TestRetrievabilityHistogramClamps(t *testing.T) {
 	if h[0] != 1 || h[HistogramBuckets-1] != 1 {
 		t.Errorf("clamp: got %v, want one in bucket 0 and one in bucket 9", h)
 	}
+	for _, r := range []float64{math.Inf(1), 1e30} {
+		if h := histOf(r); h[HistogramBuckets-1] != 1 {
+			t.Errorf("R=%v: got %v, want bucket 9", r, h)
+		}
+	}
+	for _, r := range []float64{math.Inf(-1), -1e30} {
+		if h := histOf(r); h[0] != 1 {
+			t.Errorf("R=%v: got %v, want bucket 0", r, h)
+		}
+	}
+	// NaN has no defined bucket: it must land in some in-range bucket without panicking.
+	total := 0
+	for _, n := range histOf(math.NaN()) {
+		total += n
+	}
+	if total != 1 {
+		t.Errorf("NaN: counted %d rows, want 1", total)
+	}
 	if got := RetrievabilityHistogram(nil, rStub{}, decayBase); got != [HistogramBuckets]int{} {
 		t.Errorf("empty input: got %v, want all zeros", got)
 	}
