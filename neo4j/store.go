@@ -642,7 +642,7 @@ func recordValue[T any](rec *neo4jdriver.Record, key string) (T, error) {
 }
 
 // Counts returns per-(namespace, type) memory counts plus the link-edge and entity-bridge
-// pairs with an endpoint in ns; an empty ns means every namespace. All four queries run
+// pairs with an endpoint in ns; an empty ns means every namespace. All three queries run
 // with readers routing, so the server rejects any write on this path.
 func (s *Store) Counts(ctx context.Context, ns engram.Namespace) (engram.StoreCounts, error) {
 	const groupsQ = `

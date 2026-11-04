@@ -60,6 +60,14 @@ func statsFixture(t *testing.T) (s *eneo4j.Store, a, b engram.Namespace, ids [4]
 		{id: ids[3], ns: b, typ: engram.Procedural},
 	})
 	e, f := string(uniqueID("stats-e")), string(uniqueID("stats-f"))
+	// Registered before any entity is created, so a failed setup step cannot leak them.
+	// Entities are global and Delete leaves them behind.
+	d := testDriver(t)
+	t.Cleanup(func() {
+		_, _ = neo4jdriver.ExecuteQuery(context.Background(), d,
+			`MATCH (e:Entity) WHERE e.name IN $n DETACH DELETE e`,
+			map[string]any{"n": []string{e, f}}, neo4jdriver.EagerResultTransformer)
+	})
 	for id, names := range map[engram.MemoryID][]string{ids[1]: {e, f}, ids[2]: {e, f}, ids[3]: {e}} {
 		if err := s.LinkEntities(ctx, id, names); err != nil {
 			t.Fatalf("LinkEntities: %v", err)
@@ -73,11 +81,6 @@ func statsFixture(t *testing.T) (s *eneo4j.Store, a, b engram.Namespace, ids [4]
 	if err := s.Link(ctx, ids[2], []engram.Link{{To: ids[3], Weight: 0.5}}); err != nil {
 		t.Fatalf("Link: %v", err)
 	}
-	t.Cleanup(func() {
-		// Entities are global and Delete leaves them behind.
-		rawCount(t, `MATCH (e:Entity) WHERE e.name IN $n DETACH DELETE e RETURN 0 AS c`,
-			map[string]any{"n": []string{e, f}})
-	})
 	return s, a, b, ids
 }
 
@@ -216,8 +219,14 @@ func TestStoreStatsReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if !after.LastAccessed.Equal(before.LastAccessed) || after.AccessCount != before.AccessCount || after.Stability != before.Stability {
-		t.Errorf("stats mutated the row: before %+v after %+v", before, after)
+	if !after.LastAccessed.Equal(before.LastAccessed) {
+		t.Errorf("LastAccessed changed: before %v after %v", before.LastAccessed, after.LastAccessed)
+	}
+	if after.AccessCount != before.AccessCount {
+		t.Errorf("AccessCount changed: before %d after %d", before.AccessCount, after.AccessCount)
+	}
+	if after.Stability != before.Stability {
+		t.Errorf("Stability changed: before %v after %v", before.Stability, after.Stability)
 	}
 }
 
@@ -229,16 +238,28 @@ func testDriver(t *testing.T) neo4jdriver.DriverWithContext {
 		t.Skipf("neo4j unavailable (%v)", err)
 	}
 	t.Cleanup(func() { _ = d.Close(context.Background()) })
+	// NewDriverWithContext opens no connection, so probe it or a down server fails later.
+	vctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := d.VerifyConnectivity(vctx); err != nil {
+		t.Skipf("neo4j unavailable (%v); start it with: docker compose up -d --wait neo4j", err)
+	}
 	return d
 }
 
 func TestStoreStatsRoutingRejectsWrite(t *testing.T) {
+	s := testStore(t)
 	d := testDriver(t)
+	id := uniqueID("routing")
+	putRows(t, s, []statsRow{{id: id, ns: "routing-probe", typ: engram.Episodic}})
 	_, err := neo4jdriver.ExecuteQuery(context.Background(), d,
-		`CREATE (n:StatsRoutingProbe) RETURN n`, nil,
+		`MATCH (m:Memory {id:$id}) SET m.stability = 99`, map[string]any{"id": string(id)},
 		neo4jdriver.EagerResultTransformer, neo4jdriver.ExecuteQueryWithReadersRouting())
 	if err == nil || !strings.Contains(err.Error(), "AccessMode") {
 		t.Fatalf("write through readers routing: err = %v, want one containing AccessMode", err)
+	}
+	if got, gerr := s.Get(context.Background(), id); gerr != nil || got.Stability != 2 {
+		t.Errorf("row after rejected write = %+v, %v; want Stability 2", got, gerr)
 	}
 }
 
