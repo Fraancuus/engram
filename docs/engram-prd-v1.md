@@ -85,7 +85,7 @@ Wire dependencies by hand in `main()` (no DI container), define interfaces where
  (embed·dedup·  (vector→graph→   (goroutine +        embeddings +
   link·entity)   rerank→assemble) time.Ticker:       reranker, CPU)
        │               │          type-aware R,
-       └───────────────┼──────────┴ soft-forget/prune)
+       └───────────────┼──────────┴ hard-prune)
                        ▼
              MemoryStore interface
           (Neo4j impl | Postgres impl)
@@ -155,9 +155,9 @@ R(Δt) = exp( -Δt / S(type, access_count, importance) )
 - `semantic`: large `S₀`, slow decay.
 - `procedural`: `S → ∞` w.r.t. time (no disuse decay); decays only when `superseded` (then drops to a fast curve toward archival).
 
-A scheduled sweep (goroutine + `time.Ticker`, interval configurable) recomputes `R`. Two tiers:
-- **Soft-forget:** `R < SOFT_THRESHOLD` → excluded from default `recall`, recoverable via `include_forgotten=true`.
-- **Hard prune:** `R < HARD_FLOOR` for `> GRACE_PERIOD` → archived/deleted. Pinned (`importance=1.0`/explicit) exempt.
+A scheduled sweep (goroutine + `time.Ticker`, interval configurable) hard-prunes: a memory whose `last_accessed` is older than `GRACE_PERIOD` and whose `R` is below `HARD_FLOOR` is deleted. Pinned memories are exempt.
+
+Soft-forgetting is not a sweep tier. `recall` drops rows with `R < SOFT_THRESHOLD` at read time and stores nothing; `include_forgotten=true` returns them. The `Forgotten` flag is set only by `forget`. Supersession happens at write time and through `forget`.
 
 > The type-keying is the honest fix to one-size-fits-all decay: you stop losing code standards while still forgetting stale chatter. It is also a sharp eval question (§7).
 
@@ -165,7 +165,14 @@ A scheduled sweep (goroutine + `time.Ticker`, interval configurable) recomputes 
 Explicit soft/hard forget by id; explicit **pin** (protect from decay); explicit **supersede** (mark replaced).
 
 ### 6.5 `memory_stats`
-Counts by type × namespace, retrievability histogram, store size, sweep stats (soft-forgotten/pruned/superseded since last run), recent access patterns. Feeds the future viz; operational sanity check now.
+Input `namespace?`; without it the call covers every namespace in the database. Output has four sections:
+
+- **`counts`:** total, live, superseded, forgotten and pinned rows, by type and by namespace. `live` means not superseded and not forgotten. The flags overlap, so `live + superseded + forgotten` can exceed `total`.
+- **`retrievability`:** the active decay model, a ten-bucket histogram over live rows with fixed width over [0,1], `below_recall_threshold` (live rows with R under the threshold recall applies), and `truncated` when the row cap sampled the live set.
+- **`store_size`:** memories, link edges and entity bridges.
+- **`sweep`:** `last_run_at`, `last_pruned` and `total_pruned`, in memory since process start, store-wide, and empty until the first sweep an hour in.
+
+Recent access patterns are deferred. Feeds the future viz; operational sanity check now.
 
 ---
 
@@ -199,7 +206,7 @@ Counts by type × namespace, retrievability histogram, store size, sweep stats (
 | `remember` | `content`, `type`, `namespace`, `importance?`, `source?`, `entities?`, `links?`, `supersedes?` | `memory_id`, `deduped`, `superseded?` |
 | `recall` | `query`, `namespaces?`, `k?`, `include_forgotten?` | ranked `[{id, content, score, type, namespace, provenance}]` |
 | `forget` | `id`, `mode: soft\|hard\|pin\|supersede` | `ok` |
-| `memory_stats` | `namespace?` | counts by type×namespace, retrievability histogram, sweep stats |
+| `memory_stats` | `namespace?` | counts by type×namespace, retrievability histogram, store size, sweep stats |
 
 Transport: stdio (v1). A real agent using Engram end-to-end over MCP is the v1 acceptance demo.
 
@@ -215,7 +222,7 @@ Tools are registered with the official SDK's generic `mcpsdk.AddTool`, which der
 - **M3 — Rerank.** Cross-encoder rerank + token-budget assembly. Reranker = `bge-reranker-v2-m3` on the TEI sidecar (`/rerank`), with `gte-reranker-modernbert-base` as the efficiency challenger; embedder stays `bge-small-en-v1.5` (384-dim). See [ADR-0002](adr/0002-embedding-model-and-amd-acceleration.md). **Landed** — rerank re-orders the expanded candidates (final authority; degrades to similarity order if the sidecar is down) and the output is packed under a token budget. The weighted score blend (§6.2 step 3: recency + importance) is deferred to M4 to land cohesively with retrievability; see [M3 design](engram-m3-design.md).
 - **M4 — Type-aware decay.** Per-type retrievability, supersession, scheduled sweep, reinforcement (+ edge propagation), soft-forget/hard-prune, `forget`/pin/supersede. **Landed** — decay/no-decay is the primary axis (`procedural`/pinned = permanent), `DecayModel` ships as type-aware/uniform/null impls for the eval's A/B/C arms; recall soft-forgets + reinforces, a background sweep hard-prunes, and `pin` is an explicit flag (not overloaded importance). See [M4 design](engram-m4-design.md).
 - **M5 — Eval.** Mixed-type dataset; A/B/C conditions; metrics + type-stratified recall; CI gate. *The milestone that makes it credible.*
-- **M6 — Polish.** `memory_stats`, README architecture + eval writeup, demo recording. **Status:** the eval correction and the README write-up landed; `memory_stats` and the demo recording remain open. See the [M6 design](../openspec/changes/archive/2026-11-04-m6-polish/design.md).
+- **M6 — Polish.** `memory_stats`, README architecture + eval writeup, demo recording. **Status:** the eval correction and the README write-up landed, and so did `memory_stats` and the agent acceptance (transcript at `openspec/changes/archive/2026-11-04-m6-stats-demo/results/e2e-transcript.md`). The demo recording remains open until Franco links it. See the [M6 design](../openspec/changes/archive/2026-11-04-m6-polish/design.md).
 
 **v1 = done when:** M5 reports the measured effect of type-aware decay, a real agent uses the MCP server end-to-end, and the README tells the architecture + eval story.
 

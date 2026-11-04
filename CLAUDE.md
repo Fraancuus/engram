@@ -16,8 +16,7 @@ Full spec: `docs/engram-prd-v1.md`. Go conventions: `docs/engram-go-rules.md`
   Reranker, DecayModel, Clock). `decay.go` holds the decay math. Imports NO infrastructure.
 - `neo4j/` — MemoryStore adapter (parameterized Cypher only).
 - `inference/` — Embedder/Reranker adapter (sidecar HTTP client).
-- `mcp/` — MCP adapter over stdio. Tools today: remember, recall, forget. `memory_stats`
-  is still to come (M6).
+- `mcp/` — MCP adapter over stdio. Tools: remember, recall, forget, memory_stats.
 - `sweep/` — the decay sweep goroutine; hard-prunes below the retrievability floor.
 - `schema/` — `001_init.cypher`: constraints + the vector index. Applied by hand; no Go
   code applies it.
