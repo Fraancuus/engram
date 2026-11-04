@@ -6,7 +6,7 @@ a new process, reads the store's stats, then forgets it. Run every command from 
 ## Prerequisites
 
 Docker, Go 1.26+, and the `claude` CLI. The Go bin directory (`$(go env GOPATH)/bin`) must be on
-`PATH`, so that `engramd` and `claude` both resolve.
+`PATH`, so that `engramd` resolves.
 
 ## 1. Stack, schema and binary
 
@@ -19,7 +19,7 @@ go install ./cmd/engramd                                            # puts engra
 ```
 
 `go install` copies the binary once. It goes stale until you run `go install ./cmd/engramd`
-again, so rerun it after any change to `engramd`, `mcp/`, `neo4j/` or `sweep/`.
+again, so rerun it after any Go change.
 
 To wire Claude Code for everyday use, not for the recording:
 
@@ -47,7 +47,8 @@ claude --strict-mcp-config --setting-sources "" --tools "" \
 - `--setting-sources ""` keeps your user hooks and settings out of the recording.
 - `--allowedTools 'mcp__engram__*'` lets the agent call Engram without a permission prompt.
 
-The config holds no local path, needs no file and leaves no state.
+The config holds no local path, needs no file and leaves no state. If Claude Code asks whether to
+trust the temp folder, accept: it is a fresh directory each time.
 
 ## 3. The three prompts
 
@@ -73,7 +74,7 @@ and the retrievability buckets put it near the top.
 
 > In the memory namespace demo/recording, forget the memory about the staging database rotation, but keep it recoverable. Show me the namespace's stats afterwards. Then delete it permanently and show the stats once more.
 
-The viewer should see a `forget` call in `soft` mode, then `memory_stats`: `counts.forgotten`
+The viewer should see a `recall` call to find the id, then a `forget` call in `soft` mode, then `memory_stats`: `counts.forgotten`
 counts the memory and `counts.live` no longer does, but `counts.total` still does. Then a `forget`
 call in `hard` mode, then `memory_stats` again with `counts.total` back at zero.
 
@@ -90,19 +91,28 @@ so a short session never reaches one. They are also store-wide, not per namespac
 
 ## Troubleshooting
 
-**`calling "initialize": EOF`.** This is all the client shows when `engramd` exits at start
-because Neo4j or the TEI sidecars are down. Run `docker compose up -d --wait`, then start the
-session again.
+**`calling "initialize": EOF` or `Connection closed`.** `engramd` exits at start when Neo4j is
+down. A Go SDK client then reports `calling "initialize": EOF`, and Claude Code marks the server
+failed with `Connection closed`. From the repo root, run `docker compose up -d --wait`, then start
+the session again.
 
-**Behaviour that does not match the code.** The installed binary is stale. Run
+**`embedding failed`.** With only the TEI sidecars down, `engramd` starts, but `remember` and
+`recall` report `embedding failed`. The same fix applies: from the repo root, run
+`docker compose up -d --wait`.
+
+**Behaviour that does not match the code.** The installed binary is stale. From the repo root, run
 `go install ./cmd/engramd` again.
 
 ## Cleanup
 
+From the repo root:
+
 ```bash
-docker compose down        # stop the stack, keep the data volume
-docker compose down -v     # stop the stack and delete the data
+docker compose down        # stop the stack, keep the data volumes
+docker compose down -v     # stop the stack and delete all volumes
 ```
+
+`down -v` also deletes both TEI model caches, so the next `up` downloads the models again.
 
 Prompt 3 already deletes the demo memory. If a take stops early, delete what is left with
 `forget` in `hard` mode, using the id from the `remember` result.
