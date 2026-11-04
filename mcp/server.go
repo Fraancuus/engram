@@ -146,7 +146,7 @@ func NewServer(t *Tools) *mcpsdk.Server {
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "memory_stats",
-		Description: "Report how many memories exist and how fresh they are, store-wide or for one namespace. Returns no content and, unlike recall, never reinforces. Counts cover all rows; live, superseded, forgotten and pinned overlap. The retrievability histogram and below_recall_threshold cover live rows, sampled when truncated is true. Scoped edge and bridge counts include those touching the namespace. Sweep stats are store-wide since process start, and read null and 0 until the first hourly sweep. An unknown namespace returns empty counts, not an error.",
+		Description: "Report how many memories exist and how fresh they are, store-wide or for one namespace. Returns no content and, unlike recall, never reinforces. Counts cover all rows; superseded, forgotten and pinned are overlapping flags, and live means neither superseded nor forgotten. The retrievability histogram and below_recall_threshold cover live rows, sampled when truncated is true. store_size follows namespace as well: scoped, it is that namespace's size, not the whole store's, and its edge and bridge counts include those touching the namespace. Sweep stats are store-wide since process start, and read null and 0 until the first hourly sweep. An unknown namespace returns empty counts, not an error.",
 		Annotations: &mcpsdk.ToolAnnotations{ReadOnlyHint: true},
 	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, in MemoryStatsInput) (*mcpsdk.CallToolResult, MemoryStatsOutput, error) {
 		out, err := t.MemoryStats(ctx, in)
