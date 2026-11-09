@@ -391,11 +391,9 @@ func TestDoMemoryStatsFoldAndStoreArgs(t *testing.T) {
 
 func TestMemoryStatsOverTransport(t *testing.T) {
 	t.Parallel()
-	call := func(t *testing.T, opts []Option, args map[string]any) map[string]any {
+	callOn := func(t *testing.T, ms *mock.MemStore, opts []Option, args map[string]any) map[string]any {
 		t.Helper()
 		ctx := context.Background()
-		ms := mock.NewMemStore()
-		putAll(t, ms, liveMem("1")) // namespace "a": an unknown namespace must differ from an empty store
 		tools := NewTools(&mock.FakeEmbedder{}, nil, engram.TypeAwareDecay{}, ms, fixedClock{}, opts...)
 		ct, st := mcpsdk.NewInMemoryTransports()
 		ss, err := NewServer(tools).Connect(ctx, st, nil)
@@ -439,6 +437,12 @@ func TestMemoryStatsOverTransport(t *testing.T) {
 		}
 		return got
 	}
+	call := func(t *testing.T, opts []Option, args map[string]any) map[string]any {
+		t.Helper()
+		ms := mock.NewMemStore()
+		putAll(t, ms, liveMem("1")) // namespace "a": an unknown namespace must differ from an empty store
+		return callOn(t, ms, opts, args)
+	}
 
 	// want builds the full wire shape for total live semantic rows in namespace a.
 	want := func(total int, byNS map[string]any, buckets map[int]float64, lastRunAt any) map[string]any {
@@ -466,6 +470,13 @@ func TestMemoryStatsOverTransport(t *testing.T) {
 	t.Run("unknown namespace", func(t *testing.T) {
 		t.Parallel()
 		got := call(t, nil, map[string]any{"namespace": "nope"})
+		if w := want(0, map[string]any{}, nil, nil); !reflect.DeepEqual(got, w) {
+			t.Errorf("got %#v\nwant %#v", got, w)
+		}
+	})
+	t.Run("empty store", func(t *testing.T) {
+		t.Parallel()
+		got := callOn(t, mock.NewMemStore(), nil, nil)
 		if w := want(0, map[string]any{}, nil, nil); !reflect.DeepEqual(got, w) {
 			t.Errorf("got %#v\nwant %#v", got, w)
 		}
