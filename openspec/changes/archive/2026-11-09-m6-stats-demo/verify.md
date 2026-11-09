@@ -79,6 +79,8 @@ warnings: 18, all "requirement text over 500 characters", six of them on this ch
 
 **Commit range**: `059396e..d364c67`, plus the commit carrying this report.
 
+**After archive**: `b8a6aa0` splits `doMemoryStats` and its transport test, because DeepSource flagged their cyclomatic complexity. It changes no behaviour or assertion. `reviewer` found it clean, and `./mcp` and `./cmd/engramd` passed under `-race` on the integration tag, with no skip.
+
 **Gate at `d364c67`**:
 
 - `go build ./...` ok; `gofmt -l` clean; `golangci-lint run` 0 issues on `./mcp` and `./mock`, plain and with `--build-tags integration`, and on the whole repo both ways at `1e04d00`.
