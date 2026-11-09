@@ -37,5 +37,5 @@ All Go tasks run under `go test -race`, scoped to the package named. A/B/C and t
 ## 8. Ship
 
 - [x] 8.1 Reviewers: `reviewer` on all Go; `security-auditor` on the MCP input and the new Cypher; whole-branch review. Then `/opsx:verify`, with the integration run, and the mismatch and expected skips recorded in `verify.md`.
-- [ ] 8.2 Finalize by the manual path: push with `git push -u origin feat/m6-stats-demo` and open the PR.
-- [ ] 8.3 `/opsx:archive` on this branch and push, then tell Franco it is ready to merge.
+- [x] 8.2 Finalize by the manual path: push with `git push -u origin feat/m6-stats-demo` and open the PR.
+- [x] 8.3 `/opsx:archive` on this branch and push, then tell Franco it is ready to merge.
