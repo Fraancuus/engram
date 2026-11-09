@@ -389,113 +389,114 @@ func TestDoMemoryStatsFoldAndStoreArgs(t *testing.T) {
 	}
 }
 
+// connectStats serves tools over in-memory transports and returns the connected client.
+func connectStats(t *testing.T, ms *mock.MemStore, opts []Option) *mcpsdk.ClientSession {
+	t.Helper()
+	ctx := context.Background()
+	tools := NewTools(&mock.FakeEmbedder{}, nil, engram.TypeAwareDecay{}, ms, fixedClock{}, opts...)
+	ct, st := mcpsdk.NewInMemoryTransports()
+	ss, err := NewServer(tools).Connect(ctx, st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ss.Close() })
+	cs, err := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+	return cs
+}
+
+// statsOverTransport calls memory_stats on ms through a real client and returns the decoded wire result.
+func statsOverTransport(t *testing.T, ms *mock.MemStore, opts []Option, args map[string]any) map[string]any {
+	t.Helper()
+	ctx := context.Background()
+	cs := connectStats(t, ms, opts)
+
+	lt, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, tl := range lt.Tools {
+		names = append(names, tl.Name)
+		if tl.Name == "memory_stats" && (tl.Annotations == nil || !tl.Annotations.ReadOnlyHint) {
+			t.Error("memory_stats lacks ReadOnlyHint")
+		}
+	}
+	sort.Strings(names)
+	if want := []string{"forget", "memory_stats", "recall", "remember"}; !reflect.DeepEqual(names, want) {
+		t.Errorf("tools = %v, want %v", names, want)
+	}
+
+	res, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: "memory_stats", Arguments: args})
+	if err != nil || res.IsError {
+		t.Fatalf("CallTool: err %v result %+v", err, res)
+	}
+	raw, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// seededStatsOverTransport is statsOverTransport over a store holding one live row in namespace a.
+func seededStatsOverTransport(t *testing.T, opts []Option, args map[string]any) map[string]any {
+	t.Helper()
+	ms := mock.NewMemStore()
+	putAll(t, ms, liveMem("1")) // namespace "a": an unknown namespace must differ from an empty store
+	return statsOverTransport(t, ms, opts, args)
+}
+
+// wantStatsWire builds the full wire shape for total live semantic rows in namespace a.
+func wantStatsWire(total int, byNS map[string]any, buckets map[int]float64, lastRunAt any) map[string]any {
+	bs := make([]any, 10)
+	for i := range bs {
+		bs[i] = map[string]any{"min": float64(i) / 10, "max": float64(i+1) / 10, "count": buckets[i]}
+	}
+	live := float64(total)
+	return map[string]any{
+		"counts": map[string]any{
+			"total": live, "live": live, "superseded": 0.0, "forgotten": 0.0, "pinned": 0.0,
+			"by_type":      map[string]any{"episodic": 0.0, "semantic": live, "procedural": 0.0},
+			"by_namespace": byNS,
+		},
+		"retrievability": map[string]any{
+			"decay": "type-aware", "buckets": bs, "below_recall_threshold": 0.0, "truncated": false,
+		},
+		"store_size": map[string]any{"memories": live, "link_edges": 0.0, "entity_bridges": 0.0},
+		"sweep":      map[string]any{"last_run_at": lastRunAt, "last_pruned": 0.0, "total_pruned": 0.0},
+	}
+}
+
 func TestMemoryStatsOverTransport(t *testing.T) {
 	t.Parallel()
-	callOn := func(t *testing.T, ms *mock.MemStore, opts []Option, args map[string]any) map[string]any {
-		t.Helper()
-		ctx := context.Background()
-		tools := NewTools(&mock.FakeEmbedder{}, nil, engram.TypeAwareDecay{}, ms, fixedClock{}, opts...)
-		ct, st := mcpsdk.NewInMemoryTransports()
-		ss, err := NewServer(tools).Connect(ctx, st, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = ss.Close() }()
-		cs, err := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test"}, nil).Connect(ctx, ct, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = cs.Close() }()
-
-		lt, err := cs.ListTools(ctx, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var names []string
-		for _, tl := range lt.Tools {
-			names = append(names, tl.Name)
-			if tl.Name == "memory_stats" && (tl.Annotations == nil || !tl.Annotations.ReadOnlyHint) {
-				t.Error("memory_stats lacks ReadOnlyHint")
-			}
-		}
-		sort.Strings(names)
-		if want := []string{"forget", "memory_stats", "recall", "remember"}; !reflect.DeepEqual(names, want) {
-			t.Errorf("tools = %v, want %v", names, want)
-		}
-
-		res, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: "memory_stats", Arguments: args})
-		if err != nil || res.IsError {
-			t.Fatalf("CallTool: err %v result %+v", err, res)
-		}
-		raw, err := json.Marshal(res.StructuredContent)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var got map[string]any
-		if err := json.Unmarshal(raw, &got); err != nil {
-			t.Fatal(err)
-		}
-		return got
-	}
-	call := func(t *testing.T, opts []Option, args map[string]any) map[string]any {
-		t.Helper()
-		ms := mock.NewMemStore()
-		putAll(t, ms, liveMem("1")) // namespace "a": an unknown namespace must differ from an empty store
-		return callOn(t, ms, opts, args)
-	}
-
-	// want builds the full wire shape for total live semantic rows in namespace a.
-	want := func(total int, byNS map[string]any, buckets map[int]float64, lastRunAt any) map[string]any {
-		bs := make([]any, 10)
-		for i := range bs {
-			bs[i] = map[string]any{"min": float64(i) / 10, "max": float64(i+1) / 10, "count": buckets[i]}
-		}
-		live := float64(total)
-		return map[string]any{
-			"counts": map[string]any{
-				"total": live, "live": live, "superseded": 0.0, "forgotten": 0.0, "pinned": 0.0,
-				"by_type":      map[string]any{"episodic": 0.0, "semantic": live, "procedural": 0.0},
-				"by_namespace": byNS,
-			},
-			"retrievability": map[string]any{
-				"decay": "type-aware", "buckets": bs, "below_recall_threshold": 0.0, "truncated": false,
-			},
-			"store_size": map[string]any{"memories": live, "link_edges": 0.0, "entity_bridges": 0.0},
-			"sweep":      map[string]any{"last_run_at": lastRunAt, "last_pruned": 0.0, "total_pruned": 0.0},
-		}
-	}
 	// liveMem is a semantic row last accessed at T, so R = 1 at T: top bucket.
 	aOnly := map[string]any{"a": map[string]any{"episodic": 0.0, "semantic": 1.0, "procedural": 0.0}}
 
 	t.Run("unknown namespace", func(t *testing.T) {
 		t.Parallel()
-		got := call(t, nil, map[string]any{"namespace": "nope"})
-		if w := want(0, map[string]any{}, nil, nil); !reflect.DeepEqual(got, w) {
+		got := seededStatsOverTransport(t, nil, map[string]any{"namespace": "nope"})
+		if w := wantStatsWire(0, map[string]any{}, nil, nil); !reflect.DeepEqual(got, w) {
 			t.Errorf("got %#v\nwant %#v", got, w)
 		}
 	})
 	t.Run("empty store", func(t *testing.T) {
 		t.Parallel()
-		got := callOn(t, mock.NewMemStore(), nil, nil)
-		if w := want(0, map[string]any{}, nil, nil); !reflect.DeepEqual(got, w) {
+		got := statsOverTransport(t, mock.NewMemStore(), nil, nil)
+		if w := wantStatsWire(0, map[string]any{}, nil, nil); !reflect.DeepEqual(got, w) {
 			t.Errorf("got %#v\nwant %#v", got, w)
 		}
 	})
 	t.Run("blank namespace is a tool error", func(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()
-		tools := NewTools(&mock.FakeEmbedder{}, nil, engram.TypeAwareDecay{}, mock.NewMemStore(), fixedClock{})
-		ct, st := mcpsdk.NewInMemoryTransports()
-		ss, err := NewServer(tools).Connect(ctx, st, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = ss.Close() }()
-		cs, err := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test"}, nil).Connect(ctx, ct, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = cs.Close() }()
+		cs := connectStats(t, mock.NewMemStore(), nil)
 		res, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: "memory_stats", Arguments: map[string]any{"namespace": "  "}})
 		if err != nil || !res.IsError {
 			t.Fatalf("CallTool: err %v, IsError %v, want a tool error", err, res != nil && res.IsError)
@@ -512,8 +513,8 @@ func TestMemoryStatsOverTransport(t *testing.T) {
 	})
 	t.Run("seeded store", func(t *testing.T) {
 		t.Parallel()
-		got := call(t, nil, nil)
-		if w := want(1, aOnly, map[int]float64{9: 1}, nil); !reflect.DeepEqual(got, w) {
+		got := seededStatsOverTransport(t, nil, nil)
+		if w := wantStatsWire(1, aOnly, map[int]float64{9: 1}, nil); !reflect.DeepEqual(got, w) {
 			t.Errorf("got %#v\nwant %#v", got, w)
 		}
 	})
@@ -523,8 +524,8 @@ func TestMemoryStatsOverTransport(t *testing.T) {
 		opt := WithSweepStats(func() engram.SweepStats {
 			return engram.SweepStats{LastRunAt: at, LastPruned: 2, TotalPruned: 7}
 		})
-		got := call(t, []Option{opt}, nil)
-		w := want(1, aOnly, map[int]float64{9: 1}, at.Format(time.RFC3339Nano))
+		got := seededStatsOverTransport(t, []Option{opt}, nil)
+		w := wantStatsWire(1, aOnly, map[int]float64{9: 1}, at.Format(time.RFC3339Nano))
 		w["sweep"].(map[string]any)["last_pruned"], w["sweep"].(map[string]any)["total_pruned"] = 2.0, 7.0
 		if !reflect.DeepEqual(got, w) {
 			t.Errorf("got %#v\nwant %#v", got, w)

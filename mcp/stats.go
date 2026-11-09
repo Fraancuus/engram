@@ -108,9 +108,19 @@ func (t *Tools) doMemoryStats(ctx context.Context, in MemoryStatsInput) (out Mem
 		return MemoryStatsOutput{}, errors.New("memory_stats: store unavailable")
 	}
 
-	out.Counts.ByNamespace = map[string]TypeCounts{}
-	for _, g := range counts.Groups {
-		c := &out.Counts
+	out.Counts = foldCounts(counts.Groups)
+	out.StoreSize = StoreSize{Memories: out.Counts.Total, LinkEdges: counts.LinkEdges, EntityBridges: counts.EntityBridges}
+	out.Retrievability = t.retrievabilityStats(rows)
+	out.Sweep = t.sweepReport()
+	return out, nil
+}
+
+// foldCounts folds the per-(namespace, type) groups into totals, by-type and by-namespace counts.
+func foldCounts(groups []engram.CountGroup) MemoryCounts {
+	var out MemoryCounts
+	out.ByNamespace = map[string]TypeCounts{}
+	for _, g := range groups {
+		c := &out
 		c.Total += g.Total
 		c.Live += g.Live
 		c.Superseded += g.Superseded
@@ -129,34 +139,43 @@ func (t *Tools) doMemoryStats(ctx context.Context, in MemoryStatsInput) (out Mem
 		}
 		c.ByNamespace[string(g.Namespace)] = byNS
 	}
-	out.StoreSize = StoreSize{Memories: out.Counts.Total, LinkEdges: counts.LinkEdges, EntityBridges: counts.EntityBridges}
+	return out
+}
 
-	out.Retrievability.Truncated = len(rows) > t.statsRowCap
-	if out.Retrievability.Truncated {
+// retrievabilityStats truncates rows to the cap and builds the retrievability histogram.
+func (t *Tools) retrievabilityStats(rows []engram.Memory) RetrievabilityStats {
+	var out RetrievabilityStats
+	out.Truncated = len(rows) > t.statsRowCap
+	if out.Truncated {
 		rows = rows[:t.statsRowCap]
 	}
 	now := t.clock.Now()
 	hist := engram.RetrievabilityHistogram(rows, t.decay, now)
-	out.Retrievability.Decay = engram.DecayName(t.decay)
-	out.Retrievability.Buckets = make([]HistogramBucket, engram.HistogramBuckets)
+	out.Decay = engram.DecayName(t.decay)
+	out.Buckets = make([]HistogramBucket, engram.HistogramBuckets)
 	for i, n := range hist {
-		out.Retrievability.Buckets[i] = HistogramBucket{
+		out.Buckets[i] = HistogramBucket{
 			Min: float64(i) / engram.HistogramBuckets, Max: float64(i+1) / engram.HistogramBuckets, Count: n,
 		}
 	}
 	for _, m := range rows {
 		if t.decay.Retrievability(m, now) < t.softThreshold {
-			out.Retrievability.BelowRecallThreshold++
+			out.BelowRecallThreshold++
 		}
 	}
+	return out
+}
 
+// sweepReport reports the decay sweep's state, or the zero value without a sweep source.
+func (t *Tools) sweepReport() SweepReport {
+	var out SweepReport
 	if t.sweepStats != nil {
 		s := t.sweepStats()
-		out.Sweep.LastPruned, out.Sweep.TotalPruned = s.LastPruned, s.TotalPruned
+		out.LastPruned, out.TotalPruned = s.LastPruned, s.TotalPruned
 		if !s.LastRunAt.IsZero() {
 			at := s.LastRunAt.UTC() // systemClock is local; Neo4j-sourced times are UTC
-			out.Sweep.LastRunAt = &at
+			out.LastRunAt = &at
 		}
 	}
-	return out, nil
+	return out
 }
