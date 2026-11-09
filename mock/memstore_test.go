@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -432,5 +434,191 @@ func TestMemStorePropagateCapIgnoresSuperseded(t *testing.T) {
 		if want := i >= 5 && i < 25; m.LastAccessed.Equal(t1) != want {
 			t.Errorf("n%02d refreshed=%v, want %v", i, m.LastAccessed.Equal(t1), want)
 		}
+	}
+}
+
+// statsFixture builds the shared store fixture (see the m6-stats-demo plan); the Neo4j
+// integration test asserts the same numbers.
+func statsFixture(t *testing.T) *MemStore {
+	t.Helper()
+	s := NewMemStore()
+	m1 := mem("m1", "a", 0.9)
+	m1.Type, m1.Superseded, m1.Forgotten = engram.Episodic, true, true
+	m1.Content, m1.Source = "c1", "s1"
+	m2 := mem("m2", "a", 0.9)
+	m2.Type = engram.Episodic
+	m3 := mem("m3", "a", 0.9)
+	m3.Type, m3.Pinned = engram.Semantic, true
+	m4 := mem("m4", "b", 0.9)
+	m4.Type = engram.Procedural
+	m2.Content, m2.Source, m3.Content, m3.Source, m4.Content, m4.Source = "c2", "s2", "c3", "s3", "c4", "s4"
+	mustPut(t, s, m1, m2, m3, m4)
+	for id, ents := range map[engram.MemoryID][]string{"m2": {"e", "f"}, "m3": {"e", "f"}, "m4": {"e"}} {
+		if err := s.LinkEntities(ctx, id, ents); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for from, to := range map[engram.MemoryID]engram.MemoryID{"m2": "m3", "m3": "m2"} {
+		if err := s.Link(ctx, from, []engram.Link{{To: to, Weight: 0.9}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Link(ctx, "m3", []engram.Link{{To: "m4", Weight: 0.9}}); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+var (
+	groupAEpisodic = engram.CountGroup{Namespace: "a", Type: engram.Episodic, Total: 2, Live: 1, Superseded: 1, Forgotten: 1}
+	groupASemantic = engram.CountGroup{Namespace: "a", Type: engram.Semantic, Total: 1, Live: 1, Pinned: 1}
+	groupBProc     = engram.CountGroup{Namespace: "b", Type: engram.Procedural, Total: 1, Live: 1}
+)
+
+func TestMemStoreCountsFlagsOverlap(t *testing.T) {
+	t.Parallel()
+	s := statsFixture(t)
+	for _, tc := range []struct {
+		name          string
+		ns            engram.Namespace
+		groups        []engram.CountGroup
+		edges, bridge int
+	}{
+		{"a", "a", []engram.CountGroup{groupAEpisodic, groupASemantic}, 2, 3},
+		{"b", "b", []engram.CountGroup{groupBProc}, 1, 2},
+		{"all", "", []engram.CountGroup{groupAEpisodic, groupASemantic, groupBProc}, 2, 3},
+	} {
+		got, err := s.Counts(ctx, tc.ns)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if !slices.Equal(got.Groups, tc.groups) {
+			t.Errorf("%s: groups %+v, want %+v", tc.name, got.Groups, tc.groups)
+		}
+		if got.LinkEdges != tc.edges || got.EntityBridges != tc.bridge {
+			t.Errorf("%s: edges %d bridges %d, want %d %d", tc.name, got.LinkEdges, got.EntityBridges, tc.edges, tc.bridge)
+		}
+	}
+}
+
+// A pair counts for a namespace when either endpoint is in it: m3(a)-m4(b) counts for b.
+func TestMemStoreCountsScopeEitherEndpoint(t *testing.T) {
+	t.Parallel()
+	got, err := statsFixture(t).Counts(ctx, "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LinkEdges != 1 || got.EntityBridges != 2 {
+		t.Fatalf("edges %d bridges %d, want 1 2", got.LinkEdges, got.EntityBridges)
+	}
+}
+
+func TestMemStoreCountsUnknownNamespace(t *testing.T) {
+	t.Parallel()
+	got, err := statsFixture(t).Counts(ctx, "nope")
+	if err != nil || len(got.Groups) != 0 || got.LinkEdges != 0 || got.EntityBridges != 0 {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+func TestMemStoreLiveMemoriesOrderProjectionLimit(t *testing.T) {
+	t.Parallel()
+	s := NewMemStore()
+	for _, id := range []string{"m3", "m1", "m2", "m0"} {
+		m := mem(id, "a", 0.9)
+		m.Content, m.Source = "c", "src"
+		m.LastAccessed = t0.Add(time.Hour)
+		m.Superseded = id == "m0"
+		mustPut(t, s, m)
+	}
+	fo := mem("m1a", "a", 0.9)
+	fo.Forgotten = true
+	other := mem("m0o", "b", 0.9)
+	mustPut(t, s, fo, other)
+	got, err := s.LiveMemories(ctx, "a", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != "m1" || got[1].ID != "m2" {
+		t.Fatalf("got %+v", got)
+	}
+	for _, m := range got {
+		if m.Embedding != nil || m.Content != "" || m.Source != "" || !m.LastAccessed.Equal(t0.Add(time.Hour)) {
+			t.Errorf("bad projection %+v", m)
+		}
+	}
+}
+
+func TestMemStoreStatsReadOnly(t *testing.T) {
+	t.Parallel()
+	s := statsFixture(t)
+	snap := func() []engram.Memory {
+		var out []engram.Memory
+		for _, id := range []engram.MemoryID{"m1", "m2", "m3", "m4"} {
+			m, _ := s.Snapshot(id)
+			out = append(out, m)
+		}
+		return out
+	}
+	before := snap()
+	_, _ = s.Counts(ctx, "")
+	_, _ = s.LiveMemories(ctx, "", 10)
+	if !reflect.DeepEqual(before, snap()) {
+		t.Fatal("stats methods mutated the store")
+	}
+}
+
+func TestMemStoreStatsConcurrent(t *testing.T) {
+	t.Parallel()
+	s := NewMemStore()
+	for i := 0; i < 50; i++ {
+		mustPut(t, s, mem(fmt.Sprintf("m%d", i), "a", 0.9))
+	}
+	// Chain links and shared entities so the pair loops run while Delete mutates them.
+	for i := 0; i < 50; i++ {
+		id := engram.MemoryID(fmt.Sprintf("m%d", i))
+		if err := s.Link(ctx, id, []engram.Link{{To: engram.MemoryID(fmt.Sprintf("m%d", (i+1)%50)), Weight: 0.5}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.LinkEntities(ctx, id, []string{fmt.Sprintf("e%d", i%5)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wg sync.WaitGroup
+	for g := 0; g < 4; g++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 100; i++ {
+				_, _ = s.Counts(ctx, "a")
+				_, _ = s.LiveMemories(ctx, "a", 5)
+			}
+		}()
+		go func(g int) {
+			defer wg.Done()
+			for i := g; i < 50; i += 4 {
+				_ = s.Delete(ctx, engram.MemoryID(fmt.Sprintf("m%d", i)))
+			}
+		}(g)
+	}
+	wg.Wait()
+}
+
+func TestMemStoreCountsSingleFlags(t *testing.T) {
+	t.Parallel()
+	s := NewMemStore()
+	sup, fog, pin, plain := mem("s", "a", 0.9), mem("f", "a", 0.9), mem("p", "a", 0.9), mem("n", "a", 0.9)
+	sup.Superseded, fog.Forgotten, pin.Pinned = true, true, true
+	for _, m := range []*engram.Memory{&sup, &fog, &pin, &plain} {
+		m.Type = engram.Episodic
+	}
+	mustPut(t, s, sup, fog, pin, plain)
+	got, err := s.Counts(ctx, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []engram.CountGroup{{Namespace: "a", Type: engram.Episodic, Total: 4, Live: 2, Superseded: 1, Forgotten: 1, Pinned: 1}}
+	if !slices.Equal(got.Groups, want) {
+		t.Fatalf("got %+v, want %+v", got.Groups, want)
 	}
 }

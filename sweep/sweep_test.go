@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -147,5 +148,123 @@ func TestSweepPrunesSupersededSemantic(t *testing.T) {
 				t.Errorf("pruned %d: stale kept=%v (want %v), live kept=%v (want true)", n, staleKept, !tc.wantGone, liveKept)
 			}
 		})
+	}
+}
+
+// stepClock is a settable virtual clock; the mutex keeps it race-clean.
+type stepClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *stepClock) Now() time.Time  { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
+func (c *stepClock) set(t time.Time) { c.mu.Lock(); c.t = t; c.mu.Unlock() }
+
+type panicPruner struct{}
+
+func (panicPruner) PruneCandidates(context.Context, time.Time, int) ([]engram.Memory, error) {
+	panic("boom")
+}
+func (panicPruner) Delete(context.Context, engram.MemoryID) error { return nil }
+
+var statsT0 = time.Unix(1_700_000_000, 0).UTC()
+
+func statsSweeper(p Pruner, d engram.DecayModel, c engram.Clock) *Sweeper {
+	return New(p, d, c, time.Hour, 30*24*time.Hour, 0.02, 100,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+func TestStatsBeforeFirstTick(t *testing.T) {
+	t.Parallel()
+	got := testSweeper(&mock.FakeStore{}, mock.FakeDecay{}).Stats()
+	if got != (engram.SweepStats{}) {
+		t.Errorf("Stats() = %+v, want zero", got)
+	}
+}
+
+func TestTickAccumulatesAtVirtualTime(t *testing.T) {
+	t.Parallel()
+	clk := &stepClock{t: statsT0}
+	p := &mock.FakeStore{PruneCands: []engram.Memory{{ID: "a"}, {ID: "b"}}}
+	s := statsSweeper(p, mock.FakeDecay{R: 0}, clk)
+	s.tick(context.Background())
+	clk.set(statsT0.Add(time.Hour))
+	p.PruneCands = nil
+	s.tick(context.Background())
+	want := engram.SweepStats{LastRunAt: statsT0.Add(time.Hour), LastPruned: 0, TotalPruned: 2}
+	if got := s.Stats(); got != want {
+		t.Errorf("Stats() = %+v, want %+v", got, want)
+	}
+}
+
+func TestTickPruneBoundaryRecorded(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		r    float64
+		want int
+	}{{"at floor", 0.02, 0}, {"just below", 0.0199, 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := &mock.FakeStore{PruneCands: []engram.Memory{{ID: "a"}}}
+			s := statsSweeper(p, mock.FakeDecay{R: tc.r}, &stepClock{t: statsT0})
+			s.tick(context.Background())
+			want := engram.SweepStats{LastRunAt: statsT0, LastPruned: tc.want, TotalPruned: tc.want}
+			if got := s.Stats(); got != want {
+				t.Errorf("Stats() = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestTickFailureLeavesStats(t *testing.T) {
+	t.Parallel()
+	clk := &stepClock{t: statsT0}
+	p := &mock.FakeStore{PruneCands: []engram.Memory{{ID: "a"}}}
+	s := statsSweeper(p, mock.FakeDecay{R: 0}, clk)
+	s.tick(context.Background())
+	before := s.Stats()
+	clk.set(statsT0.Add(time.Hour))
+	p.PruneErr = errors.New("boom")
+	s.tick(context.Background())
+	if got := s.Stats(); got != before || before.TotalPruned != 1 {
+		t.Errorf("Stats() = %+v, want unchanged %+v (TotalPruned 1)", got, before)
+	}
+}
+
+func TestTickPanicLeavesStats(t *testing.T) {
+	t.Parallel()
+	clk := &stepClock{t: statsT0}
+	s := statsSweeper(&mock.FakeStore{PruneCands: []engram.Memory{{ID: "a"}}}, mock.FakeDecay{R: 0}, clk)
+	s.tick(context.Background())
+	before := s.Stats()
+	s.pruner = panicPruner{}
+	clk.set(statsT0.Add(time.Hour))
+	s.tick(context.Background())
+	if got := s.Stats(); got != before || before.TotalPruned != 1 {
+		t.Errorf("Stats() = %+v, want unchanged %+v (TotalPruned 1)", got, before)
+	}
+}
+
+func TestStatsConcurrentWithTick(t *testing.T) {
+	t.Parallel()
+	s := statsSweeper(&mock.FakeStore{}, mock.FakeDecay{R: 0}, &stepClock{t: statsT0})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for range 100 {
+			s.tick(context.Background())
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 100 {
+			_ = s.Stats()
+		}
+	}()
+	wg.Wait()
+	if s.Stats().LastRunAt.IsZero() {
+		t.Error("LastRunAt zero after 100 ticks")
 	}
 }

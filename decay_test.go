@@ -201,3 +201,90 @@ func TestRetrievabilitySupersededSemantic(t *testing.T) {
 		}
 	}
 }
+
+// rStub reads R straight from Importance so tests control it exactly.
+type rStub struct{ NullDecay }
+
+func (rStub) Retrievability(m Memory, _ time.Time) float64 { return m.Importance }
+
+func histOf(rs ...float64) [HistogramBuckets]int {
+	ms := make([]Memory, len(rs))
+	for i, r := range rs {
+		ms[i] = Memory{Importance: r}
+	}
+	return RetrievabilityHistogram(ms, rStub{}, decayBase)
+}
+
+func TestRetrievabilityHistogramBoundaries(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		r      float64
+		bucket int
+	}{{0, 0}, {0.0999, 0}, {0.1, 1}, {0.5, 5}, {0.9, 9}, {0.9999, 9}, {1.0, 9}}
+	for _, tc := range tests {
+		h := histOf(tc.r)
+		for i, n := range h {
+			want := 0
+			if i == tc.bucket {
+				want = 1
+			}
+			if n != want {
+				t.Errorf("R=%v: bucket %d = %d, want %d (hist %v)", tc.r, i, n, want, h)
+			}
+		}
+	}
+}
+
+func TestRetrievabilityHistogramClamps(t *testing.T) {
+	t.Parallel()
+	h := histOf(-0.5, 1.5)
+	if h[0] != 1 || h[HistogramBuckets-1] != 1 {
+		t.Errorf("clamp: got %v, want one in bucket 0 and one in bucket 9", h)
+	}
+	for _, r := range []float64{math.Inf(1), 1e30} {
+		if h := histOf(r); h[HistogramBuckets-1] != 1 {
+			t.Errorf("R=%v: got %v, want bucket 9", r, h)
+		}
+	}
+	for _, r := range []float64{math.Inf(-1), -1e30} {
+		if h := histOf(r); h[0] != 1 {
+			t.Errorf("R=%v: got %v, want bucket 0", r, h)
+		}
+	}
+	// NaN has no defined bucket: it must land in some in-range bucket without panicking.
+	total := 0
+	for _, n := range histOf(math.NaN()) {
+		total += n
+	}
+	if total != 1 {
+		t.Errorf("NaN: counted %d rows, want 1", total)
+	}
+	if got := RetrievabilityHistogram(nil, rStub{}, decayBase); got != [HistogramBuckets]int{} {
+		t.Errorf("empty input: got %v, want all zeros", got)
+	}
+}
+
+func TestRetrievabilityHistogramVirtualTime(t *testing.T) {
+	t.Parallel()
+	now := decayBase
+	ago := func(d float64) time.Time { return now.Add(-time.Duration(d * 24 * float64(time.Hour))) }
+	pinned := mem(Episodic, 0, ago(365))
+	pinned.Pinned = true
+	tests := []struct {
+		name   string
+		m      Memory
+		bucket int
+	}{
+		{"episodic 6d", mem(Episodic, 0, ago(6)), 0},
+		{"episodic 5.9d", mem(Episodic, 0, ago(5.9)), 0},
+		{"episodic 0d", mem(Episodic, 0, ago(0)), 9},
+		{"procedural 1y", mem(Procedural, 0, ago(365)), 9},
+		{"pinned episodic 1y", pinned, 9},
+	}
+	for _, tc := range tests {
+		h := RetrievabilityHistogram([]Memory{tc.m}, TypeAwareDecay{}, now)
+		if h[tc.bucket] != 1 {
+			t.Errorf("%s: want bucket %d, got %v", tc.name, tc.bucket, h)
+		}
+	}
+}

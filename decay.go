@@ -137,3 +137,21 @@ func DecayName(d DecayModel) string {
 	}
 	return ""
 }
+
+// HistogramBuckets is the number of fixed-width retrievability buckets over [0,1].
+const HistogramBuckets = 10
+
+// RetrievabilityHistogram counts ms by retrievability at now. Buckets are half-open except
+// the last, which is closed so R = 1.0 lands in it. An out-of-range R clamps into the first
+// or last bucket, so a bad DecayModel cannot index out of bounds.
+func RetrievabilityHistogram(ms []Memory, d DecayModel, now time.Time) [HistogramBuckets]int {
+	var h [HistogramBuckets]int
+	for _, m := range ms {
+		// Clamp R first: an out-of-range float-to-int conversion is implementation-defined.
+		// NaN survives min and max, so the index clamp stays; R=1 lands in the last bucket.
+		r := min(max(d.Retrievability(m, now), 0), 1)
+		i := int(r * HistogramBuckets)
+		h[min(max(i, 0), HistogramBuckets-1)]++
+	}
+	return h
+}

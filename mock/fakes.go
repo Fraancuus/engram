@@ -63,6 +63,14 @@ type FakeStore struct {
 	PruneCands       []engram.Memory
 	LastPropagateID  engram.MemoryID
 	LastPropagateThr float64
+
+	CountsRes     engram.StoreCounts
+	CountsErr     error
+	LiveRes       []engram.Memory
+	LiveErr       error
+	LastCountsNS  engram.Namespace
+	LastLiveNS    engram.Namespace
+	LastLiveLimit int
 }
 
 // Put records m and returns the configured PutErr.
@@ -140,6 +148,18 @@ func (f *FakeStore) PropagateReinforce(_ context.Context, id engram.MemoryID, th
 // PruneCandidates returns the configured candidates/error.
 func (f *FakeStore) PruneCandidates(_ context.Context, _ time.Time, _ int) ([]engram.Memory, error) {
 	return f.PruneCands, f.PruneErr
+}
+
+// Counts records ns and returns the configured result/error.
+func (f *FakeStore) Counts(_ context.Context, ns engram.Namespace) (engram.StoreCounts, error) {
+	f.LastCountsNS = ns
+	return f.CountsRes, f.CountsErr
+}
+
+// LiveMemories records its arguments and returns the configured result/error.
+func (f *FakeStore) LiveMemories(_ context.Context, ns engram.Namespace, limit int) ([]engram.Memory, error) {
+	f.LastLiveNS, f.LastLiveLimit = ns, limit
+	return f.LiveRes, f.LiveErr
 }
 
 // FakeReranker is a programmable engram.Reranker for tests: it records the query/docs and

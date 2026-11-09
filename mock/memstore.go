@@ -346,11 +346,7 @@ func (s *MemStore) Len() int {
 func (s *MemStore) EdgeCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	n := 0
-	for _, nbs := range s.links {
-		n += len(nbs)
-	}
-	return n / 2
+	return s.edgeCountLocked("")
 }
 
 // BridgeCount reports the number of distinct unordered memory pairs sharing at least one
@@ -358,18 +354,109 @@ func (s *MemStore) EdgeCount() int {
 func (s *MemStore) BridgeCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.bridgeCountLocked("")
+}
+
+// inScope reports whether either endpoint of a pair is in ns; "" means every namespace.
+func (s *MemStore) inScope(ns engram.Namespace, a, b engram.MemoryID) bool {
+	return ns == "" || s.mems[a].Namespace == ns || s.mems[b].Namespace == ns
+}
+
+func (s *MemStore) edgeCountLocked(ns engram.Namespace) int {
+	n := 0
+	for a, nbs := range s.links {
+		for b := range nbs {
+			if a < b && s.inScope(ns, a, b) {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+func (s *MemStore) bridgeCountLocked(ns engram.Namespace) int {
 	type pair struct{ a, b engram.MemoryID }
 	pairs := map[pair]struct{}{}
 	for _, ms := range s.byEntity {
 		for a := range ms {
 			for b := range ms {
-				if a < b {
+				if a < b && s.inScope(ns, a, b) {
 					pairs[pair{a, b}] = struct{}{}
 				}
 			}
 		}
 	}
 	return len(pairs)
+}
+
+// Counts returns per-(namespace, type) memory counts, sorted by namespace then type, plus
+// the link-edge and entity-bridge pairs with an endpoint in ns. An empty ns means every
+// namespace. It is read-only.
+func (s *MemStore) Counts(_ context.Context, ns engram.Namespace) (engram.StoreCounts, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	type key struct {
+		ns engram.Namespace
+		t  engram.MemoryType
+	}
+	byKey := map[key]*engram.CountGroup{}
+	for _, m := range s.mems {
+		if ns != "" && m.Namespace != ns {
+			continue
+		}
+		k := key{m.Namespace, m.Type}
+		g := byKey[k]
+		if g == nil {
+			g = &engram.CountGroup{Namespace: m.Namespace, Type: m.Type}
+			byKey[k] = g
+		}
+		g.Total++
+		if !m.Superseded && !m.Forgotten {
+			g.Live++
+		}
+		if m.Superseded {
+			g.Superseded++
+		}
+		if m.Forgotten {
+			g.Forgotten++
+		}
+		if m.Pinned {
+			g.Pinned++
+		}
+	}
+	out := engram.StoreCounts{LinkEdges: s.edgeCountLocked(ns), EntityBridges: s.bridgeCountLocked(ns)}
+	for _, g := range byKey {
+		out.Groups = append(out.Groups, *g)
+	}
+	sort.Slice(out.Groups, func(i, j int) bool {
+		a, b := out.Groups[i], out.Groups[j]
+		if a.Namespace != b.Namespace {
+			return a.Namespace < b.Namespace
+		}
+		return a.Type < b.Type
+	})
+	return out, nil
+}
+
+// LiveMemories returns up to limit memories in ns (all namespaces when empty) that are
+// neither superseded nor forgotten, ordered by id ascending, without Embedding, Content
+// or Source. It is read-only.
+func (s *MemStore) LiveMemories(_ context.Context, ns engram.Namespace, limit int) ([]engram.Memory, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []engram.Memory
+	for _, m := range s.mems {
+		if (ns == "" || m.Namespace == ns) && !m.Superseded && !m.Forgotten {
+			p := project(m)
+			p.Content, p.Source = "", ""
+			out = append(out, p)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	if limit < len(out) {
+		out = out[:max(limit, 0)]
+	}
+	return out, nil
 }
 
 // Snapshot returns a copy of the stored memory, embedding included.

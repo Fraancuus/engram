@@ -7,12 +7,12 @@ Exported in-process entry to the MCP tools (mcp.Tools, DTOs, id-generator and re
 
 ### Requirement: Exported in-process tools
 Package `mcp` MUST export `NewTools(embedder engram.Embedder, reranker engram.Reranker,
-decay engram.DecayModel, store Store, clock engram.Clock, opts ...Option) *Tools` and the
+decay engram.DecayModel, store ServerStore, clock engram.Clock, opts ...Option) *Tools` and the
 methods `Remember(ctx, RememberInput) (RememberOutput, error)`, `Recall(ctx, RecallInput)
-(RecallOutput, error)`, `Forget(ctx, ForgetInput) (ForgetOutput, error)`, with the input and
-output structs exported and their JSON tags unchanged. `NewServer(t *Tools) *mcpsdk.Server`
-MUST register the same three tools over the same methods, so stdio and in-process callers
-run identical code.
+(RecallOutput, error)`, `Forget(ctx, ForgetInput) (ForgetOutput, error)`, `MemoryStats(ctx,
+MemoryStatsInput) (MemoryStatsOutput, error)`, with the input and output structs exported and
+the JSON tags of the first three unchanged. `NewServer(t *Tools) *mcpsdk.Server` MUST register
+the same four tools over the same methods, so stdio and in-process callers run identical code.
 
 #### Scenario: Same behaviour both ways
 - **WHEN** the existing handler unit tests are rewritten against `Tools`
@@ -22,10 +22,14 @@ run identical code.
 - **WHEN** `NewServer(NewTools(...))` serves a `recall` call
 - **THEN** the response equals `Tools.Recall` for the same input
 
-### Requirement: Store argument covers forget
-`NewTools` MUST accept one store value that satisfies both the remember/recall store
-interface and the forget method set (the existing `serverStore` union), and `*mock.MemStore`
-and `*neo4j.Store` MUST both satisfy it.
+#### Scenario: Four tools registered
+- **WHEN** a client lists the tools of `NewServer(NewTools(...))`
+- **THEN** it sees exactly `remember`, `recall`, `forget` and `memory_stats`
+
+### Requirement: Store argument covers forget and stats
+`NewTools` MUST accept one store value that satisfies the remember/recall store interface, the
+forget method set and the stats method set (`Counts`, `LiveMemories`), which together are
+`ServerStore`, and `*mock.MemStore` and `*neo4j.Store` MUST both satisfy it.
 
 #### Scenario: Both stores wire
 - **WHEN** the package compiles

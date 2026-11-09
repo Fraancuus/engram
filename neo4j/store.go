@@ -640,3 +640,128 @@ func recordValue[T any](rec *neo4jdriver.Record, key string) (T, error) {
 	}
 	return t, nil
 }
+
+// Counts returns per-(namespace, type) memory counts plus the link-edge and entity-bridge
+// pairs with an endpoint in ns; an empty ns means every namespace. All three queries run
+// with readers routing, so the server rejects any write on this path.
+func (s *Store) Counts(ctx context.Context, ns engram.Namespace) (engram.StoreCounts, error) {
+	const groupsQ = `
+MATCH (m:Memory) WHERE $ns = '' OR m.namespace = $ns
+RETURN m.namespace AS namespace, m.type AS type, count(m) AS total,
+  sum(CASE WHEN coalesce(m.superseded,false) OR coalesce(m.forgotten,false) THEN 0 ELSE 1 END) AS live,
+  sum(CASE WHEN coalesce(m.superseded,false) THEN 1 ELSE 0 END) AS superseded,
+  sum(CASE WHEN coalesce(m.forgotten,false) THEN 1 ELSE 0 END) AS forgotten,
+  sum(CASE WHEN coalesce(m.pinned,false) THEN 1 ELSE 0 END) AS pinned
+ORDER BY namespace, type`
+	// Distinct undirected pairs: a->b and b->a can both exist.
+	const edgesQ = `
+MATCH (a:Memory)-[:LINKS]-(b:Memory)
+WHERE a.id < b.id AND ($ns = '' OR a.namespace = $ns OR b.namespace = $ns)
+RETURN count(DISTINCT [a.id, b.id]) AS n`
+	// shortcut: quadratic in a hub entity's mentions. If stats get slow, the fallback is a
+	// per-entity sum(n*(n-1)/2), but that overcounts pairs sharing 2+ entities and breaks
+	// parity with MemStore.
+	const bridgesQ = `
+MATCH (a:Memory)
+CALL (a) {
+  MATCH (a)-[:MENTIONS]->(:Entity)<-[:MENTIONS]-(b:Memory)
+  WHERE a.id < b.id AND ($ns = '' OR a.namespace = $ns OR b.namespace = $ns)
+  RETURN count(DISTINCT b) AS c
+}
+RETURN sum(c) AS n`
+	params := map[string]any{"ns": string(ns)}
+
+	res, err := neo4jdriver.ExecuteQuery(ctx, s.driver, groupsQ, params,
+		neo4jdriver.EagerResultTransformer, neo4jdriver.ExecuteQueryWithReadersRouting())
+	if err != nil {
+		return engram.StoreCounts{}, fmt.Errorf("count memory groups: %w", err)
+	}
+	var out engram.StoreCounts
+	for _, rec := range res.Records {
+		g, err := mapCountGroup(rec)
+		if err != nil {
+			return engram.StoreCounts{}, fmt.Errorf("count memory groups: %w", err)
+		}
+		out.Groups = append(out.Groups, g)
+	}
+	if out.LinkEdges, err = s.countN(ctx, "count link edges", edgesQ, params); err != nil {
+		return engram.StoreCounts{}, err
+	}
+	if out.EntityBridges, err = s.countN(ctx, "count entity bridges", bridgesQ, params); err != nil {
+		return engram.StoreCounts{}, err
+	}
+	return out, nil
+}
+
+// countN runs a read-only query returning one integer column n.
+func (s *Store) countN(ctx context.Context, op, q string, params map[string]any) (int, error) {
+	res, err := neo4jdriver.ExecuteQuery(ctx, s.driver, q, params,
+		neo4jdriver.EagerResultTransformer, neo4jdriver.ExecuteQueryWithReadersRouting())
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", op, err)
+	}
+	if len(res.Records) != 1 {
+		return 0, fmt.Errorf("%s: got %d records, want 1", op, len(res.Records))
+	}
+	n, err := recordValue[int64](res.Records[0], "n")
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", op, err)
+	}
+	return int(n), nil
+}
+
+func mapCountGroup(rec *neo4jdriver.Record) (engram.CountGroup, error) {
+	var g engram.CountGroup
+	ns, err := recordValue[string](rec, "namespace")
+	if err != nil {
+		return g, err
+	}
+	typ, err := recordValue[string](rec, "type")
+	if err != nil {
+		return g, err
+	}
+	g.Namespace, g.Type = engram.Namespace(ns), engram.MemoryType(typ)
+	for key, dst := range map[string]*int{"total": &g.Total, "live": &g.Live,
+		"superseded": &g.Superseded, "forgotten": &g.Forgotten, "pinned": &g.Pinned} {
+		n, err := recordValue[int64](rec, key)
+		if err != nil {
+			return g, err
+		}
+		*dst = int(n)
+	}
+	return g, nil
+}
+
+// LiveMemories returns up to limit memories in ns (all namespaces when empty) that are
+// neither superseded nor forgotten, ordered by id ascending, without Embedding, Content or
+// Source. It is read-only.
+func (s *Store) LiveMemories(ctx context.Context, ns engram.Namespace, limit int) ([]engram.Memory, error) {
+	// content and source are projected as '' on purpose: mapToMemory keeps requiring them
+	// everywhere else, and stats never needs the text.
+	const q = `
+MATCH (m:Memory)
+WHERE ($ns = '' OR m.namespace = $ns)
+  AND coalesce(m.superseded,false) = false AND coalesce(m.forgotten,false) = false
+RETURN m {.id, .namespace, .type, .importance, .stability, .superseded, .pinned, .forgotten,
+          .access_count, .created_at, .last_accessed, content: '', source: ''} AS m
+ORDER BY m.id LIMIT $limit`
+	res, err := neo4jdriver.ExecuteQuery(ctx, s.driver, q,
+		map[string]any{"ns": string(ns), "limit": limit},
+		neo4jdriver.EagerResultTransformer, neo4jdriver.ExecuteQueryWithReadersRouting())
+	if err != nil {
+		return nil, fmt.Errorf("live memories: %w", err)
+	}
+	out := make([]engram.Memory, 0, len(res.Records))
+	for _, rec := range res.Records {
+		p, err := recordValue[map[string]any](rec, "m")
+		if err != nil {
+			return nil, fmt.Errorf("live memories: %w", err)
+		}
+		m, err := mapToMemory(p)
+		if err != nil {
+			return nil, fmt.Errorf("live memories: %w", err)
+		}
+		out = append(out, m)
+	}
+	return out, nil
+}

@@ -4,7 +4,7 @@
 > service over a graph + vector store, with **type-aware forgetting**, namespaced
 > "universes", and an eval that measures what forgetting buys and what it costs.
 
-**Status:** v1 in progress — **M4 type-aware decay landed** (per-type retrievability, reinforce-on-access, the decay sweep, supersession, and the `forget` tool). M5 eval landed; M6 eval correction landed (the numbers below). Next: `memory_stats` and the demo.
+**Status:** v1 in progress — **M4 type-aware decay landed** (per-type retrievability, reinforce-on-access, the decay sweep, supersession, and the `forget` tool). M5 eval landed; M6 eval correction landed (the numbers below), and so did `memory_stats` with the agent acceptance run. One thing is open: the demo recording.
 **Module:** `github.com/Fraancuus/engram` · **Go:** 1.26
 
 Most "agent memory" projects are a vector store with `save()` and `search()`. They
@@ -129,6 +129,13 @@ on this dataset, because its content is generator ids, not text.
 **Thresholds.** On the normalised index scale, dedup is 0.95 (raw cosine 0.90) and
 auto-link and propagation are 0.925 (raw cosine 0.85).
 
+## Demo
+
+[docs/demo.md](docs/demo.md) gives the commands and the three agent prompts to record a Claude
+Code agent using Engram over stdio. The kept transcript of the acceptance run is at
+[openspec/changes/archive/2026-11-09-m6-stats-demo/results/e2e-transcript.md](openspec/changes/archive/2026-11-09-m6-stats-demo/results/e2e-transcript.md).
+The recording itself is still open.
+
 ## Developing
 
 ```bash
@@ -149,20 +156,25 @@ the tools. See [CONTRIBUTING.md](CONTRIBUTING.md) for the gates-vs-agents workfl
 
 ## Run Engram
 
-Bring up the stack, apply the schema, and serve the MCP tools over stdio:
+Bring up the stack, apply the schema, install the binary, and add it to Claude Code:
 
 ```bash
 docker compose up -d --wait                                        # Neo4j + TEI embed + TEI rerank (first run pulls images + models)
 docker compose exec -T neo4j cypher-shell < schema/001_init.cypher # apply schema (idempotent)
-go run ./cmd/engramd                                               # serves the MCP tools over stdio
+go install ./cmd/engramd                                           # puts engramd on PATH
+claude mcp add --scope local engram -- engramd                     # per person, tracks nothing in the repo
 ```
 
 `engramd` speaks the Model Context Protocol over stdio, so point any MCP client at the
-command (`go run ./cmd/engramd`, or a built binary). It exposes three tools:
+`engramd` command. The installed binary goes stale until you rerun `go install ./cmd/engramd`.
+With Neo4j down, `engramd` exits at start: a Go SDK client reports `calling "initialize": EOF`
+and Claude Code marks the server failed with `Connection closed`. See
+[docs/demo.md](docs/demo.md). `engramd` exposes four tools:
 
 - **`remember`** — `{content, type, namespace, importance?, source?, entities?, links?, supersedes?}` → `{memory_id, deduped, superseded?}`. Embeds the content, deduplicates within the namespace (reinforcing a near-identical memory instead of inserting), writes `:Entity` nodes + `[:MENTIONS]` edges, and **auto-links** to sufficiently-similar neighbors (plus any explicit `links`). A procedural or semantic write naming `supersedes` replaces those memories; such a superseding write never dedups into what it replaces, and dedups only into identical content of its own type.
 - **`recall`** — `{query, namespaces?, k?, include_forgotten?}` → ranked `[{id, content, score, type, namespace, provenance}]`. Vector kNN seeds are expanded via 1-hop `[:LINKS]` and entity bridges (cross-namespace unless scoped), scored as similarity + 0.3 importance + 0.01 retrievability. Retrievability filters candidates before the pool is cut (**decayed/soft-forgotten memories excluded** unless `include_forgotten`) and adds at most 0.01 to the score, so it only breaks near-ties. Results are then **reranked by a cross-encoder** and packed under a **token budget**; returned memories are **reinforced on access**. `provenance.retrieved_via` reports how each result surfaced (`vector` / `link` / `entity:<name>`).
 - **`forget`** — `{id, mode}` → `{ok}`, where `mode` is `soft` (exclude from recall, recoverable), `hard` (delete), `pin` (protect from decay), or `supersede` (mark replaced).
+- **`memory_stats`** — `{namespace?}` → `{counts, retrievability, store_size, sweep}`. `counts` holds the total, live, superseded, forgotten and pinned rows, plus all rows by type and by namespace. `retrievability` is the active decay model, a ten-bucket histogram over live rows, the number below the recall threshold, and whether it was sampled. `store_size` counts memories, link edges and entity bridges, and follows `namespace` like the rest. `sweep` gives the last run time and the pruned counts. Without `namespace` it covers every namespace in the database. The sweep figures are in memory since process start, so they read empty in a short session.
 
 A background **decay sweep** periodically hard-prunes memories whose retrievability has fallen below a floor (protected: pinned memories always; under type-aware, also procedural memories that are not superseded). The eval measures the effect of this forgetting.
 
@@ -185,7 +197,7 @@ Config (env vars, with defaults): `NEO4J_URI` (`neo4j://localhost:7687`), `NEO4J
 
 `M0` skeleton → `M1` core remember/recall → `M2` graph + entity bridges →
 `M3` rerank → `M4` type-aware decay → `M5` eval (the credibility milestone) →
-`M6` polish (eval correction and write-up done; `memory_stats` and the demo remain). See [docs/engram-prd-v1.md](docs/engram-prd-v1.md) §9.
+`M6` polish (eval correction, write-up, `memory_stats` and the agent acceptance done; the demo recording remains). See [docs/engram-prd-v1.md](docs/engram-prd-v1.md) §9.
 
 ## License
 

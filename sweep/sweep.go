@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/Fraancuus/engram"
@@ -29,6 +30,9 @@ type Sweeper struct {
 	hardFloor float64
 	batch     int
 	log       *slog.Logger
+
+	mu    sync.Mutex
+	stats engram.SweepStats
 }
 
 // New constructs a Sweeper. interval is the tick period; grace is how long past its last
@@ -100,12 +104,29 @@ func (s *Sweeper) tick(ctx context.Context) {
 			s.log.Error("sweep: recovered panic", "panic", r)
 		}
 	}()
-	n, err := s.SweepOnce(ctx, s.clock.Now())
+	now := s.clock.Now()
+	n, err := s.SweepOnce(ctx, now)
 	if err != nil {
 		s.log.Error("sweep failed", "err", err)
 		return
 	}
+	s.record(now, n)
 	if n > 0 {
 		s.log.Info("sweep pruned decayed memories", "count", n)
 	}
+}
+
+// record stores a completed pass. A pass that returns an error never reaches it; a pass
+// whose deletes all failed still records, with count 0.
+func (s *Sweeper) record(now time.Time, pruned int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stats = engram.SweepStats{LastRunAt: now, LastPruned: pruned, TotalPruned: s.stats.TotalPruned + pruned}
+}
+
+// Stats returns a copy of the stats for completed passes since process start.
+func (s *Sweeper) Stats() engram.SweepStats {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stats
 }
