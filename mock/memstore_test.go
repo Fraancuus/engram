@@ -363,16 +363,6 @@ func TestMemStoreConcurrentSearchDelete(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		mustPut(t, s, mem(fmt.Sprintf("m%d", i), "a", 0.9))
 	}
-	// Chain links and shared entities so the pair loops run while Delete mutates them.
-	for i := 0; i < 50; i++ {
-		id := engram.MemoryID(fmt.Sprintf("m%d", i))
-		if err := s.Link(ctx, id, []engram.Link{{To: engram.MemoryID(fmt.Sprintf("m%d", (i+1)%50)), Weight: 0.5}}); err != nil {
-			t.Fatal(err)
-		}
-		if err := s.LinkEntities(ctx, id, []string{fmt.Sprintf("e%d", i%5)}); err != nil {
-			t.Fatal(err)
-		}
-	}
 	var wg sync.WaitGroup
 	for g := 0; g < 4; g++ {
 		wg.Add(2)
@@ -583,6 +573,16 @@ func TestMemStoreStatsConcurrent(t *testing.T) {
 	s := NewMemStore()
 	for i := 0; i < 50; i++ {
 		mustPut(t, s, mem(fmt.Sprintf("m%d", i), "a", 0.9))
+	}
+	// Chain links and shared entities so the pair loops run while Delete mutates them.
+	for i := 0; i < 50; i++ {
+		id := engram.MemoryID(fmt.Sprintf("m%d", i))
+		if err := s.Link(ctx, id, []engram.Link{{To: engram.MemoryID(fmt.Sprintf("m%d", (i+1)%50)), Weight: 0.5}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.LinkEntities(ctx, id, []string{fmt.Sprintf("e%d", i%5)}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	var wg sync.WaitGroup
 	for g := 0; g < 4; g++ {
