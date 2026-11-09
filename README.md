@@ -133,7 +133,7 @@ auto-link and propagation are 0.925 (raw cosine 0.85).
 
 [docs/demo.md](docs/demo.md) gives the commands and the three agent prompts to record a Claude
 Code agent using Engram over stdio. The kept transcript of the acceptance run is at
-[openspec/changes/archive/2026-11-04-m6-stats-demo/results/e2e-transcript.md](openspec/changes/archive/2026-11-04-m6-stats-demo/results/e2e-transcript.md).
+[openspec/changes/archive/2026-11-09-m6-stats-demo/results/e2e-transcript.md](openspec/changes/archive/2026-11-09-m6-stats-demo/results/e2e-transcript.md).
 The recording itself is still open.
 
 ## Developing

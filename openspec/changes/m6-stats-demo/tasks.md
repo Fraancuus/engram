@@ -32,10 +32,10 @@ All Go tasks run under `go test -race`, scoped to the package named. A/B/C and t
 
 - [x] 7.1 Real run per design D12: `go install ./cmd/engramd`, three `claude -p` processes against the real stack, whitelist sanitize, negative search, keep `results/e2e-transcript.jsonl` and `results/e2e-transcript.md`. Proof: the transcript itself shows `remember`, then `recall` of the same id in a later process, `forget` and `memory_stats`.
 - [x] 7.2 Docs, quoting `design.md`: `docs/demo.md` (D13); README ("three tools", the fourth bullet, status lines at the top and under Milestones, a Demo section, the `claude mcp add` wiring); PRD sections 4, 6.3, 6.5, 8 and the M6 status line (D14); the `mcp/` line in `CLAUDE.md`. Run the commands in `docs/demo.md` once from Git Bash, with `claude -p` for the agent steps. Verify `claude mcp add` against an isolated `CLAUDE_CONFIG_DIR` with `engramd` installed, so the user's config is untouched.
-- [ ] 7.3 Eval non-movement: `go run ./cmd/eval --ci` passes and `git diff origin/main -- eval/baseline.json` is empty. Recorded in `verify.md` with the A/B/C table.
+- [x] 7.3 Eval non-movement: `go run ./cmd/eval --ci` passes and `git diff origin/main -- eval/baseline.json` is empty. Recorded in `verify.md` with the A/B/C table.
 
 ## 8. Ship
 
-- [ ] 8.1 Reviewers: `reviewer` on all Go; `security-auditor` on the MCP input and the new Cypher; whole-branch review. Then `/opsx:verify`, with the integration run, and the mismatch and expected skips recorded in `verify.md`.
+- [x] 8.1 Reviewers: `reviewer` on all Go; `security-auditor` on the MCP input and the new Cypher; whole-branch review. Then `/opsx:verify`, with the integration run, and the mismatch and expected skips recorded in `verify.md`.
 - [ ] 8.2 Finalize by the manual path: push with `git push -u origin feat/m6-stats-demo` and open the PR.
 - [ ] 8.3 `/opsx:archive` on this branch and push, then tell Franco it is ready to merge.
