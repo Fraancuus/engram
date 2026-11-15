@@ -155,7 +155,7 @@ R(Δt) = exp( -Δt / S(type, access_count, importance) )
 - `semantic`: large `S₀`, slow decay.
 - `procedural`: `S → ∞` w.r.t. time (no disuse decay); decays only when `superseded` (then drops to a fast curve toward archival).
 
-A scheduled sweep (goroutine + `time.Ticker`, hourly) hard-prunes: a memory whose `last_accessed` is older than `GRACE_PERIOD` and whose `R` is below `HARD_FLOOR` is deleted. Pinned memories are exempt.
+A scheduled sweep (a goroutine; first pass one minute after start, then hourly) hard-prunes: a memory whose `last_accessed` is older than `GRACE_PERIOD` and whose `R` is below `HARD_FLOOR` is deleted. Pinned memories are exempt.
 
 Soft-forgetting is not a sweep tier. `recall` drops rows with `R < SOFT_THRESHOLD` at read time and stores no flag; `include_forgotten=true` returns them. The `Forgotten` flag is set only by `forget`. Supersession happens at write time and through `forget`.
 
@@ -170,7 +170,7 @@ Input `namespace?`; without it the call covers every namespace in the database. 
 - **`counts`:** total, live, superseded, forgotten and pinned rows, plus all rows by type and by namespace. `live` means not superseded and not forgotten. The flags overlap, so `live + superseded + forgotten` can exceed `total`.
 - **`retrievability`:** the active decay model, a ten-bucket histogram over live rows with fixed width over [0,1], `below_recall_threshold` (live rows with R under the threshold recall applies), and `truncated` when the row cap sampled the live set.
 - **`store_size`:** memories, link edges and entity bridges. It follows `namespace`: scoped, it is that namespace's size, and an edge or bridge counts when either endpoint is in the namespace.
-- **`sweep`:** `last_run_at`, `last_pruned` and `total_pruned`, in memory since process start, store-wide, and empty until the first sweep an hour in.
+- **`sweep`:** `last_run_at`, `last_pruned` and `total_pruned`, in memory since process start, store-wide, and empty until the first sweep, one minute after start.
 
 Recent access patterns are deferred. Feeds the future viz; operational sanity check now.
 
