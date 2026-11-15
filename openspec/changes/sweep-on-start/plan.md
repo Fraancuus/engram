@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task, with superpowers:test-driven-development inside each task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** `engramd` runs its first decay sweep one minute after start instead of one hour, so hard-prune runs in ordinary sessions.
+**Goal:** `engramd` runs its first decay sweep one minute after start instead of one hour, then one a day, so hard-prune runs in ordinary sessions.
 
-**Architecture:** `sweep.Sweeper.Run` gains a `firstDelay` argument: one pass when it elapses, then one per interval. Each pass still reads `now` from the injected `engram.Clock`; only the schedule uses Go timers, and its tests run on virtual time with `testing/synctest`. `SweepOnce` stops logging an error for a row that is already gone. Integration fixtures stop writing rows a real pass would delete.
+**Architecture:** `sweep.Sweeper.Run` gains a `firstDelay` argument: one pass when it elapses, then one per interval. `engramd` sets the interval to 24 hours. Each pass still reads `now` from the injected `engram.Clock`; only the schedule uses Go timers, and its tests run on virtual time with `testing/synctest`. `SweepOnce` stops logging an error for a row that is already gone. Integration fixtures stop writing rows a real pass would delete.
 
 **Tech Stack:** Go 1.26, standard library only (`time`, `testing/synctest`, `log/slog`). No new dependency.
 
@@ -16,7 +16,7 @@
 - No `time.Now` call in `sweep/sweep.go` or `sweep/sweep_test.go`. Pass time comes from `engram.Clock`. (`sweep/sweep_integration_test.go:44` already has one and is not touched.)
 - `sweep.New` keeps its signature. Nothing under `eval/`, `cmd/eval/`, `mock/`, `schema/` or the root package is edited, and no production file under `neo4j/` or `inference/`. If a step seems to need that, stop and report.
 - `SweepOnce` returns the same count and the same error as today for every input.
-- First delay in `cmd/engramd`: exactly `time.Minute`. Interval stays `time.Hour`.
+- First delay in `cmd/engramd`: exactly `time.Minute`. Interval in `cmd/engramd`: exactly `24 * time.Hour` (it is `time.Hour` today, and changes in Task 5, not before). The `time.Hour` default inside `sweep.New` and the `time.Hour` the eval passes are not touched.
 - Inside a `synctest.Test` bubble do not call `t.Run`, `t.Parallel` or `t.Deadline` (`t.Parallel` panics there). Put `t.Run` outside the bubble and open one bubble per case. Every goroutine started in a bubble must have returned before the bubble function returns.
 - RED means an assertion fails against the old behaviour, not a compile error. Task 1 stubs the signature first for that reason.
 - Every test passes under `go test -race`. Memory on the dev machine is short: run only the packages a step names, one `go test` at a time, and never `./eval` except where a step says so.
@@ -432,7 +432,7 @@ git commit -m "test: integration fixtures a real sweep cannot delete"
 
 ---
 
-### Task 5: `engramd` waits one minute
+### Task 5: `engramd` waits one minute, then sweeps once a day
 
 **Files:**
 - Modify: `cmd/engramd/main.go` (the sweep constants on lines 33-39, the `Run` call, the startup `slog.Info` line)
@@ -440,7 +440,7 @@ git commit -m "test: integration fixtures a real sweep cannot delete"
 
 **Interfaces:**
 - Consumes: `(*Sweeper).Run(ctx context.Context, firstDelay time.Duration)` from Task 1.
-- Produces: the startup log attributes `sweep_first_delay=1m0s` and `sweep_interval=1h0m0s`.
+- Produces: the startup log attributes `sweep_first_delay=1m0s` and `sweep_interval=24h0m0s`.
 
 - [ ] **Step 1: Write the failing assertions in `TestStdioAllTools`**
 
@@ -473,7 +473,7 @@ default:
 Right after `a.close(t)` (process `a` has exited there, so its captured stderr is complete):
 
 ```go
-for _, want := range []string{"sweep_first_delay=1m0s", "sweep_interval=1h0m0s"} {
+for _, want := range []string{"sweep_first_delay=1m0s", "sweep_interval=24h0m0s"} {
 	if !strings.Contains(a.stderr.String(), want) {
 		t.Errorf("engramd startup log lacks %s:\n%s", want, a.stderr)
 	}
@@ -484,11 +484,11 @@ for _, want := range []string{"sweep_first_delay=1m0s", "sweep_interval=1h0m0s"}
 
 Run from Git Bash, with the stack up:
 `go test -race -tags integration -run TestStdioAllTools -v ./cmd/engramd/`
-Expected: FAIL with `engramd startup log lacks sweep_first_delay=1m0s`. A `SKIP` naming `unavailable` proves nothing: report it and stop.
+Expected: FAIL with `engramd startup log lacks sweep_first_delay=1m0s` and `engramd startup log lacks sweep_interval=24h0m0s`. A `SKIP` naming `unavailable` proves nothing: report it and stop.
 
 - [ ] **Step 3: Implement**
 
-In `cmd/engramd/main.go`: add `sweepFirstDelay = time.Minute` to the sweep `const` block with the comment `// first pass: early enough for an ordinary session, late enough that a process which only lists tools does no sweep work`; change the call to `sweeper.Run(ctx, sweepFirstDelay)`; add `"sweep_first_delay", sweepFirstDelay.String()` to the startup `slog.Info` attributes, before `"sweep_interval"`.
+In `cmd/engramd/main.go`: add `sweepFirstDelay = time.Minute` to the sweep `const` block with the comment `// first pass: early enough for an ordinary session, late enough that a process which only lists tools does no sweep work`; change `sweepInterval` from `time.Hour` to `24 * time.Hour` with the comment `// a row becomes prunable only after sweepGrace, so one pass a day is enough`; change the call to `sweeper.Run(ctx, sweepFirstDelay)`; add `"sweep_first_delay", sweepFirstDelay.String()` to the startup `slog.Info` attributes, before `"sweep_interval"`.
 
 - [ ] **Step 4: Run it and see it pass**
 
@@ -500,7 +500,7 @@ Expected: `--- PASS: TestStdioAllTools`, no `SKIP`, the untagged package `ok`, a
 ```bash
 graphify update .
 git add cmd/engramd/main.go cmd/engramd/stdio_integration_test.go
-git commit -m "feat(engramd): sweep one minute after start"
+git commit -m "feat(engramd): sweep one minute after start, then daily"
 ```
 
 ---
@@ -522,7 +522,7 @@ Replace the paragraph with:
 ```markdown
 **The `sweep` section fills in after a minute.** `sweep.last_run_at` is `null` and `last_pruned`
 and `total_pruned` are 0 until the first sweep pass completes. A stdio client starts `engramd` for
-its own session, and the first pass runs one minute after start, then hourly. A take shorter than
+its own session, and the first pass runs one minute after start, then once a day. A take shorter than
 a minute shows the empty block; a longer one shows a timestamp and the counts of that pass. The
 stats are kept in memory from process start, are not persisted, and are store-wide, not per
 namespace.
@@ -530,7 +530,7 @@ namespace.
 
 - [ ] **Step 2: `docs/engram-prd-v1.md`**
 
-Line 158: replace `A scheduled sweep (goroutine + `time.Ticker`, hourly) hard-prunes:` with `A scheduled sweep (a goroutine; first pass one minute after start, then hourly) hard-prunes:`.
+Line 158: replace `A scheduled sweep (goroutine + `time.Ticker`, hourly) hard-prunes:` with `A scheduled sweep (a goroutine; first pass one minute after start, then daily) hard-prunes:`.
 Line 173: replace `and empty until the first sweep an hour in.` with `and empty until the first sweep, one minute after start.`
 
 - [ ] **Step 3: `README.md`**
@@ -543,14 +543,14 @@ Where it describes running the integration tests, add: `Integration fixtures mus
 
 - [ ] **Step 5: Check nothing still states the old wait**
 
-Run: `grep -rn -i -E "hour after start|an hour in|first hourly|read empty in a short session" README.md docs/demo.md docs/engram-prd-v1.md mcp/ cmd/ sweep/`
-Expected: no output.
+Run: `grep -rn -i -E "hourly|hour after start|an hour in|read empty in a short session" --exclude='*_test.go' README.md docs/demo.md docs/engram-prd-v1.md mcp/ cmd/ sweep/`
+Expected: no output. Test files are excluded because Task 3's assertion names the word. If `hourly` still appears somewhere this plan does not name, report the line; do not reword it on your own.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add docs/demo.md docs/engram-prd-v1.md README.md CONTRIBUTING.md
-git commit -m "docs: the first sweep runs one minute after start"
+git commit -m "docs: the first sweep runs one minute after start, then daily"
 ```
 
 ---
@@ -584,7 +584,7 @@ Expected: passes, table equal to the baseline. Report the A/B/C table. Any diffe
 
 - [ ] **Step 5: Acceptance on the real binary**
 
-Build `engramd`, start it with an MCP client that stays connected for at least 70 seconds, call `memory_stats`, and record the `sweep` block and the startup log line in `verify.md`. Expected: `sweep.last_run_at` is an RFC 3339 timestamp. This is the first real pass on the dev store: it deletes the backlog (design.md, Risks). Record how many rows it pruned. Do this step only after Franco has confirmed Open Question 4.
+Build `engramd`, start it with an MCP client that stays connected for at least 70 seconds, call `memory_stats`, and record the `sweep` block and the startup log line in `verify.md`. Expected: `sweep.last_run_at` is an RFC 3339 timestamp. This is the first real pass on the dev store: it deletes the backlog (design.md, Risks). Record how many rows it pruned. Franco agreed to this pass on 2026-11-15.
 
 - [ ] **Step 6: Project agents**
 

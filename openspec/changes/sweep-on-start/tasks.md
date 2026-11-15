@@ -27,14 +27,14 @@ and `mock.FakeDecay` already give the tests what they need. Every Go task runs u
 
 ## 5. Command: `engramd` (`cmd/engramd/`)
 
-- [ ] 5.1 Add `sweepFirstDelay = time.Minute`, pass it to `Run`, and add `sweep_first_delay` to the startup log line. Proof: `TestStdioAllTools` (integration tag) asserts the captured stderr of process `a` contains `sweep_first_delay=1m0s` and `sweep_interval=1h0m0s`.
+- [ ] 5.1 Add `sweepFirstDelay = time.Minute`, set `sweepInterval` to `24 * time.Hour`, pass the delay to `Run`, and add `sweep_first_delay` to the startup log line. Proof: `TestStdioAllTools` (integration tag) asserts the captured stderr of process `a` contains `sweep_first_delay=1m0s` and `sweep_interval=24h0m0s`.
 - [ ] 5.2 `TestStdioAllTools` checks the shape of the `sweep` block and no longer asserts it is empty: `last_run_at` null or RFC 3339, counts zero or more, and counts 0 when `last_run_at` is null. Proof: `go test -race -tags integration -run TestStdioAllTools -v ./cmd/engramd/` passes with the stack up, with no skip naming `unavailable`.
 
 ## 6. Docs
 
 - [ ] 6.1 `docs/demo.md`: replace the paragraph that says the `sweep` section reads empty because the first sweep is an hour after start.
-- [ ] 6.2 `docs/engram-prd-v1.md` lines 158 and 173, and `README.md:177`: state the first pass one minute after start. `CONTRIBUTING.md`: one line on integration fixtures (pinned, live procedural, or younger than 30 days).
-- [ ] 6.3 Proof for 6.1 and 6.2: `grep -rn -i -E "hour after start|an hour in|first hourly|read empty in a short session" README.md docs/demo.md docs/engram-prd-v1.md mcp/ cmd/ sweep/` prints nothing.
+- [ ] 6.2 `docs/engram-prd-v1.md` lines 158 and 173, and `README.md:177`: state the first pass one minute after start, then one a day. `CONTRIBUTING.md`: one line on integration fixtures (pinned, live procedural, or younger than 30 days).
+- [ ] 6.3 Proof for 6.1 and 6.2: `grep -rn -i -E "hourly|hour after start|an hour in|read empty in a short session" --exclude='*_test.go' README.md docs/demo.md docs/engram-prd-v1.md mcp/ cmd/ sweep/` prints nothing.
 
 ## 7. Verify
 
@@ -42,5 +42,5 @@ and `mock.FakeDecay` already give the tests what they need. Every Go task runs u
 - [ ] 7.2 Precondition for integration: `TestStoreSearch` fails on the dev volume today because of leftover test rows (design.md, Risks). Clear them with Franco's agreement first, and say so in `verify.md`.
 - [ ] 7.3 Integration with the stack up and the schema applied: `go test -race -tags integration -p 2 -v` on every package except the body of `./eval`. No skip may name `unavailable`.
 - [ ] 7.4 `go run ./cmd/eval --ci` once more on the final tree; report the A/B/C table.
-- [ ] 7.5 Acceptance on the real binary: run `engramd` for more than one minute, call `memory_stats`, and record in `verify.md` that `sweep.last_run_at` is a timestamp, with the pruned counts. This is the first real pass on the dev store: it deletes the backlog.
+- [ ] 7.5 Acceptance on the real binary: run `engramd` for more than one minute, call `memory_stats`, and record in `verify.md` that `sweep.last_run_at` is a timestamp, with the pruned counts. This is the first real pass on the dev store: it deletes the backlog. Franco agreed to it on 2026-11-15.
 - [ ] 7.6 Project agents: `reviewer` on the Go diff, `scoping-ux` on the tool description. Resolve every blocking finding.

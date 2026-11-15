@@ -101,21 +101,25 @@ Why an argument to `Run` and not a field set by `New`: the delay matters only to
 has one caller, and `New` already takes eight positional arguments and has three callers. One
 of them is the eval, which this change must not touch.
 
-### D2. `engramd` waits one minute
+### D2. `engramd` waits one minute, then sweeps once a day
 
 `cmd/engramd/main.go` gains `sweepFirstDelay = time.Minute` next to `sweepInterval`, passes it
-to `Run`, and adds it to the startup log line as `sweep_first_delay`.
+to `Run`, and adds it to the startup log line as `sweep_first_delay`. `sweepInterval` changes
+from one hour to 24 hours.
 
-Three schedules were weighed. The table shows what each one does for the kinds of process that
-exist.
+Franco chose this schedule in the plan review on 2026-11-15: the first pass when the server
+starts, one minute in, and one pass a day after that.
 
-| Process | At start (delay 0) | One minute, then hourly (recommended) | Every ten minutes, no code change |
+Three schedules were weighed for the first pass. The table shows what each one does for the
+kinds of process that exist.
+
+| Process | At start (delay 0) | One minute after start (chosen) | Every ten minutes, no code change |
 |---|---|---|---|
 | Tool-listing probe, lives under a second | Starts a pass and abandons it | Nothing | Nothing |
 | One-shot `claude -p` run, seconds to a minute | Prunes | Usually nothing | Nothing |
 | Integration suite's `engramd` (5.4 s measured) | Sweeps the shared store mid-suite | Nothing | Nothing |
 | Working session, ten minutes or more | Prunes | Prunes | Prunes |
-| Session of several hours | 1 pass, then hourly | 1 pass, then hourly | A pass every ten minutes |
+| Session of several hours | 1 pass, at start | 1 pass, one minute in | A pass every ten minutes |
 | New code | 1 line | A parameter and its tests | None |
 
 Why one minute and not zero:
@@ -140,7 +144,17 @@ minutes still misses sessions under ten minutes, and a first pass at one minute 
 store scan every minute for the life of every process.
 
 One minute is a judgement, not a measured optimum. It is long against the integration suite's
-5.4 seconds and short against a working session. The choice is Open Question 1.
+5.4 seconds and short against a working session.
+
+Why daily and not hourly: a row becomes prunable only after 30 idle days, so a second pass an
+hour after the first finds nothing new. Fewer passes also mean fewer moments at which two
+processes overlap. The interval now matters only to a process that lives longer than a day.
+
+"One sweep a day" holds per process, not per store. Every `engramd` process sweeps once, a
+minute after it starts, so five sessions in a day are five passes, each a matter of
+milliseconds once the backlog is gone. One pass a day for the whole store would need the
+persisted last-sweep time of Alternative C in brainstorm.md, or a worker outside `engramd`.
+That is Open Question 1.
 
 ### D3. Decay time stays on the injected clock; the schedule stays on Go timers
 
@@ -286,10 +300,10 @@ tests wrote, none is a sweep candidate; of the rows the unedited tests wrote, 32
 ### D8. Docs
 
 - `docs/demo.md:87-90` says the `sweep` section reads empty because the first sweep is an hour
-  after start. New text: empty until the first pass, one minute after start; in memory per
-  process; store-wide.
-- `docs/engram-prd-v1.md:158` says the sweep is hourly: add the first pass. Line 173 says
-  "empty until the first sweep an hour in": correct it.
+  after start. New text: empty until the first pass, one minute after start, then one pass a
+  day; in memory per process; store-wide.
+- `docs/engram-prd-v1.md:158` says the sweep is hourly: it becomes one minute after start, then
+  daily. Line 173 says "empty until the first sweep an hour in": correct it.
 - `README.md:177` says the sweep figures "read empty in a short session": correct it.
 - `plans/m6-stats-demo/`, `docs/engram-m4-plan.md` (its `Run` sketch at line 259) and archived
   OpenSpec changes are records and are not edited.
@@ -329,9 +343,13 @@ No branch changes. This is listed because the change makes these branches run in
   are in namespaces the integration tests create (`itest-*`, `m1-*` to `m4-*`, `sweep-*`); no row
   outside a test namespace is a candidate. Every integration run before D7 adds more rows of
   the same kind, so the count on the day will be higher. The pass runs in the first session
-  started with a rebuilt `engramd`, one minute in, not at merge. → Franco confirms before apply. Anything that
-  must survive is pinned, or the Neo4j volume is dumped, first. The PR body states the numbers.
+  started with a rebuilt `engramd`, one minute in, not at merge. → Franco confirmed on
+  2026-11-15 that the first real pass may run on the dev store, because the rows are test
+  leftovers. The PR body states the numbers.
 - **[A session under a minute never prunes.]** → Accepted. See D2.
+- **[Several sessions a day mean several passes a day.]** Each process sweeps once, a minute
+  after it starts. → Accepted unless Franco wants one pass a day for the whole store (Open
+  Question 1).
 - **[No automated test sees a populated `sweep` block through the real binary.]** The unit tests
   cover the schedule, `tick`, `Stats` and the wire shape; the one untested link is
   `WithSweepStats(sweeper.Stats)` in `main.go`. → Verify runs `engramd` for more than a minute
@@ -363,10 +381,19 @@ happens one minute into the first session started with a rebuilt `engramd`. Roll
 reverting the PR and rebuilding. It restores no row; rows a pass deleted are gone unless the
 Neo4j volume was dumped first.
 
+## Decisions
+
+Franco answered the plan's questions on 2026-11-15:
+
+1. The first pass runs one minute after the server starts, and one pass a day follows (D2).
+2. D4, the `ErrNotFound` branch, is in this change.
+3. D7, the fixture edits, is in this change.
+4. The first real pass may run on the dev store. The 290 rows are test leftovers.
+
 ## Open Questions
 
-1. When does the first pass run? Recommended: one minute after start, hourly after (D2). The
-   others: at start, or every ten minutes with no code change.
-2. Is D4 (the `ErrNotFound` branch) in this change? Recommended: yes.
-3. Is D7 (the fixture edits) in this change? Recommended: yes.
-4. Franco confirms the first real pass on his store, or pins rows or dumps the volume first.
+1. Is one pass per `engramd` process enough, with the sweeper goroutine as the worker that
+   repeats it daily? Recommended: yes. The alternative is one pass a day for the whole store,
+   which needs a persisted last-sweep time or a worker outside `engramd`, and is a larger change.
+2. May the leftover rows in the integration-test namespaces be removed so `TestStoreSearch` can
+   pass (Risks)? Recommended: yes, before the integration task.

@@ -12,6 +12,12 @@
 - Reason: sessions end before the hour.
 - Impact: non-breaking for agents. `Run` has one caller. `sweep.New` and `SweepOnce` keep their signatures.
 
+**Cadence after the first pass**
+- From: one pass an hour.
+- To: one pass every 24 hours (`sweepInterval` in `cmd/engramd`).
+- Reason: Franco's decision of 2026-11-15. A row becomes prunable only after 30 idle days, so one pass a day is enough.
+- Impact: only a process that lives longer than a day sees the difference. Each process still sweeps once, a minute after it starts.
+
 **A row that is gone by the time a pass reaches it**
 - From: `SweepOnce` logs `sweep: delete failed` at error level when `Delete` returns `engram.ErrNotFound`.
 - To: it skips the row: not counted, no error logged.
@@ -58,7 +64,7 @@
 ## Impact
 
 - `sweep/sweep.go`: `Run` gains `firstDelay`; `SweepOnce` gains the `ErrNotFound` branch. `sweep/sweep_test.go`: schedule tests on virtual time (`testing/synctest`, standard library since Go 1.25; `go.mod` says 1.26).
-- `cmd/engramd/main.go`: `sweepFirstDelay`, the `Run` call, the startup log line. `cmd/engramd/stdio_integration_test.go`: the `sweep` assertion and the startup-log assertion.
+- `cmd/engramd/main.go`: `sweepFirstDelay`, `sweepInterval` (one hour to 24 hours), the `Run` call, the startup log line. `cmd/engramd/stdio_integration_test.go`: the `sweep` assertion and the startup-log assertion.
 - `mcp/server.go`: the `memory_stats` description string. No field, schema or handler change.
 - `neo4j/decay_integration_test.go`, `mcp/m1_integration_test.go`, `mcp/m4_integration_test.go`: fixture timestamps.
 - `docs/demo.md`, `docs/engram-prd-v1.md`, `README.md`, `CONTRIBUTING.md`.
