@@ -1,5 +1,6 @@
 // Package sweep runs Engram's periodic decay sweep: it hard-prunes memories whose
-// retrievability has fallen below a floor, on a ticker that exits on context cancellation.
+// retrievability has fallen below a floor, first after a delay and then on a ticker, until
+// context cancellation.
 package sweep
 
 import (
@@ -83,9 +84,18 @@ func (s *Sweeper) SweepOnce(ctx context.Context, now time.Time) (pruned int, err
 	return pruned, nil
 }
 
-// Run drives SweepOnce on a ticker until ctx is cancelled. Each tick recovers from a panic
-// so one bad sweep cannot take the process down.
-func (s *Sweeper) Run(ctx context.Context) {
+// Run drives SweepOnce until ctx is cancelled: one pass once firstDelay has elapsed, then one
+// per interval. A firstDelay of zero runs the first pass immediately. Each pass recovers from
+// a panic so one bad sweep cannot take the process down.
+func (s *Sweeper) Run(ctx context.Context, firstDelay time.Duration) {
+	first := time.NewTimer(firstDelay)
+	defer first.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-first.C:
+		s.tick(ctx)
+	}
 	t := time.NewTicker(s.interval)
 	defer t.Stop()
 	for {

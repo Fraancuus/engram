@@ -78,7 +78,7 @@ func run() error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		sweeper.Run(ctx)
+		sweeper.Run(ctx, sweepInterval)
 	}()
 
 	// Logs go to stderr (slog default); stdout carries the MCP stdio protocol.
