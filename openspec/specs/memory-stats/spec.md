@@ -130,12 +130,14 @@ change. The Neo4j queries behind it MUST run with readers routing, so the server
 - **THEN** Neo4j rejects it with an access-mode error
 
 ### Requirement: Sweep stats
-`Sweeper.tick` MUST record each completed pass in memory with `SweepOnce` unchanged: `LastRunAt` is
-the `now` the pass ran at, `LastPruned` its count, `TotalPruned` the sum since process start. A
-failed or panicking pass MUST leave them unchanged. `Stats()` MUST be safe to call while a tick runs.
-The tool MUST report them as `sweep.last_run_at`, `sweep.last_pruned` and `sweep.total_pruned`, with
-`last_run_at` null before the first completed pass, and they MUST NOT depend on `namespace`.
-`WithSweepStats` MUST supply them to `Tools`; without it the tool MUST report the empty values.
+`Sweeper.tick` MUST record each completed pass in memory without changing what `SweepOnce` returns:
+`LastRunAt` is the `now` the pass ran at, `LastPruned` its count, `TotalPruned` the sum since process
+start. A failed or panicking pass MUST leave them unchanged. `Stats()` MUST be safe to call while a
+tick runs. The tool MUST report them as `sweep.last_run_at`, `sweep.last_pruned` and
+`sweep.total_pruned`, with `last_run_at` null before the first completed pass, and they MUST NOT
+depend on `namespace`. `WithSweepStats` MUST supply them to `Tools`; without it the tool MUST report
+the empty values. The tool description MUST say that sweep stats cover only this server process's
+passes and that null and 0 say nothing about the store, and MUST NOT name a duration.
 
 #### Scenario: Before the first tick
 - **WHEN** no pass has completed
@@ -157,6 +159,14 @@ The tool MUST report them as `sweep.last_run_at`, `sweep.last_pruned` and `sweep
 - **WHEN** `Stats` and `tick` run concurrently under the race detector
 - **THEN** no race is reported
 
+#### Scenario: Real binary, a pass may or may not have completed
+- **WHEN** `memory_stats` is called on a running `engramd` at any moment after start
+- **THEN** `sweep.last_run_at` is JSON null or an RFC 3339 string, both counts are numbers zero or more, and if `last_run_at` is null both counts are 0
+
+#### Scenario: Description says whose passes the stats cover
+- **WHEN** a client lists the tools
+- **THEN** the `memory_stats` description says the sweep stats cover this server process's passes, and does not contain "hourly"
+
 ### Requirement: Errors stay legible
 A store failure MUST reach the caller as `memory_stats: store unavailable`, with the detail logged
 and not returned. A panic in the handler MUST be recovered and returned as
@@ -167,8 +177,8 @@ and not returned. A panic in the handler MUST be recovered and returned as
 - **THEN** the returned error is `memory_stats: store unavailable` and does not contain the statement
 
 ### Requirement: The eval does not move
-This capability MUST NOT change `Recall`, `Remember`, `SweepOnce` or any eval constant, and MUST NOT
-change `eval/baseline.json`. A/B/C and the CI gate are unaffected.
+This capability MUST NOT change `Recall`, `Remember`, the count or error `SweepOnce` returns, or any
+eval constant, and MUST NOT change `eval/baseline.json`. A/B/C and the CI gate are unaffected.
 
 #### Scenario: Gate and baseline
 - **WHEN** verify runs `go run ./cmd/eval --ci` and `git diff origin/main -- eval/baseline.json`
