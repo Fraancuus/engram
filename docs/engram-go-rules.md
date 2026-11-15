@@ -19,7 +19,7 @@
 ## 2. Errors
 - Wrap with context using `%w`: `fmt.Errorf("recall %q: %w", query, err)`. Always add what you were doing; never return a bare `err` from deep in a call stack without context.
 - Compare with `errors.Is` / `errors.As`, never string matching.
-- Define sentinel errors (`var ErrNamespaceUnknown = errors.New(...)`) for conditions callers branch on.
+- Define sentinel errors (`var ErrNotFound = errors.New(...)`) for conditions callers branch on.
 - **Never** `panic` in library code or request paths. `panic` is for truly unrecoverable init-time invariants only. The decay goroutine and MCP handlers must never panic the process — recover at the goroutine boundary if needed and log.
 - Don't log *and* return the same error (double-reporting). Handle it once, at the layer that can decide.
 
@@ -49,7 +49,7 @@
 - **Inject the clock.** No `time.Now()` inside decay or retrievability logic — take `now time.Time` or a `Clock` interface. The eval virtualizes time; a buried clock makes simulation impossible. This is the single most important rule in this file.
 - **Decay is pure functions** behind `DecayModel`, keyed by memory type. No I/O, deterministic, table-testable. "Uniform vs. type-aware" must be a strategy swap, not a rewrite.
 - **All Cypher is parameterized.** Never build a query by concatenating agent/user input. Parameters only.
-- **MCP tool inputs are untrusted.** Validate types and bounds (`k` within limits, `namespace` against a known set, ids well-formed) at the handler boundary before anything touches them.
+- **MCP tool inputs are untrusted.** Validate types and bounds (`k` within limits, `namespace` not blank and at most 256 bytes, ids well-formed) at the handler boundary before anything touches them.
 - Errors crossing the MCP boundary are legible to a calling agent — actionable messages, never internal stack/query dumps.
 
 ## 7. Testing
