@@ -23,7 +23,7 @@ func TestM4SoftForgetAndInclude(t *testing.T) {
 		Content: "An old episodic event that should fade with disuse.", Type: "episodic", Namespace: ns,
 	})
 
-	t0 := (fixedClock{}).Now()
+	t0 := h.clock.Now()
 	h.clock = clockAt(t0.Add(365 * 24 * time.Hour)) // a year later; episodic S0 is 2 days
 
 	def, err := h.doRecall(context.Background(),
