@@ -32,10 +32,12 @@ var _ engram.Clock = systemClock{}
 
 // Decay sweep configuration (see docs/engram-m4-design.md).
 const (
-	sweepInterval = time.Hour
-	sweepGrace    = 30 * 24 * time.Hour
-	sweepFloor    = 0.02
-	sweepBatch    = 500
+	// first pass: early enough for an ordinary session, late enough that a process which only lists tools does no sweep work
+	sweepFirstDelay = time.Minute
+	sweepInterval   = time.Hour
+	sweepGrace      = 30 * 24 * time.Hour
+	sweepFloor      = 0.02
+	sweepBatch      = 500
 )
 
 func main() {
@@ -78,11 +80,11 @@ func run() error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		sweeper.Run(ctx, sweepInterval)
+		sweeper.Run(ctx, sweepFirstDelay)
 	}()
 
 	// Logs go to stderr (slog default); stdout carries the MCP stdio protocol.
-	slog.Info("engramd serving MCP over stdio", "tools", "remember,recall,forget,memory_stats", "sweep_interval", sweepInterval.String(), "decay", decayName)
+	slog.Info("engramd serving MCP over stdio", "tools", "remember,recall,forget,memory_stats", "sweep_first_delay", sweepFirstDelay.String(), "sweep_interval", sweepInterval.String(), "decay", decayName)
 	serveErr := mcp.Serve(ctx, srv)
 	stop() // cancel ctx (even on a clean client disconnect) so the sweep goroutine drains
 	wg.Wait()
