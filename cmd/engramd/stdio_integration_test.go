@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -164,6 +165,11 @@ func TestStdioAllTools(t *testing.T) {
 		t.Fatalf("remember returned no memory_id: %v", rem)
 	}
 	a.close(t)
+	for _, want := range []string{"sweep_first_delay=1m0s", "sweep_interval=1h0m0s"} {
+		if !strings.Contains(a.stderr.String(), want) {
+			t.Errorf("engramd startup log lacks %s:\n%s", want, a.stderr)
+		}
+	}
 
 	// Process B: recall, stats, soft forget, stats, unscoped and unknown stats, hard forget.
 	b := startEngramd(ctx, t, bin, env)
@@ -183,12 +189,32 @@ func TestStdioAllTools(t *testing.T) {
 		{"counts.live", path(t, stats, "counts", "live"), 1.0},
 		{"counts.by_type.semantic", path(t, stats, "counts", "by_type", "semantic"), 1.0},
 		{"retrievability.truncated", path(t, stats, "retrievability", "truncated"), false},
-		{"sweep.last_run_at", path(t, stats, "sweep", "last_run_at"), nil},
 	}
 	for _, c := range checks {
 		if c.got != c.want {
 			t.Errorf("stats %s = %v, want %v", c.name, c.got, c.want)
 		}
+	}
+	// The real binary may or may not have completed a sweep pass by now, so check the shape of
+	// the block, not that it is empty. mcp/stats_test.go pins the exact empty wire shape.
+	lastRun := path(t, stats, "sweep", "last_run_at")
+	lastPruned, okLP := path(t, stats, "sweep", "last_pruned").(float64)
+	totalPruned, okTP := path(t, stats, "sweep", "total_pruned").(float64)
+	if !okLP || !okTP || lastPruned < 0 || totalPruned < 0 {
+		t.Errorf("sweep counts = %v, %v; want numbers zero or more",
+			path(t, stats, "sweep", "last_pruned"), path(t, stats, "sweep", "total_pruned"))
+	}
+	switch v := lastRun.(type) {
+	case nil:
+		if lastPruned != 0 || totalPruned != 0 {
+			t.Errorf("sweep.last_run_at is null but counts are %v, %v", lastPruned, totalPruned)
+		}
+	case string:
+		if _, err := time.Parse(time.RFC3339, v); err != nil {
+			t.Errorf("sweep.last_run_at = %q, want RFC 3339: %v", v, err)
+		}
+	default:
+		t.Errorf("sweep.last_run_at is %T, want null or a string", lastRun)
 	}
 	sum := 0.0
 	buckets, ok := path(t, stats, "retrievability", "buckets").([]any)

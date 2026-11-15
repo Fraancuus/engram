@@ -1,9 +1,11 @@
 // Package sweep runs Engram's periodic decay sweep: it hard-prunes memories whose
-// retrievability has fallen below a floor, on a ticker that exits on context cancellation.
+// retrievability has fallen below a floor, first after a delay and then on a ticker, until
+// context cancellation.
 package sweep
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -62,7 +64,8 @@ func New(p Pruner, d engram.DecayModel, c engram.Clock, interval, grace time.Dur
 
 // SweepOnce runs one prune pass as of now: it fetches candidates older than the grace
 // period and deletes those whose retrievability is below the hard floor (pinned memories
-// are skipped defensively). now is passed explicitly so the eval can virtualize time.
+// are skipped defensively). A candidate that is already gone is skipped and not logged.
+// now is passed explicitly so the eval can virtualize time.
 func (s *Sweeper) SweepOnce(ctx context.Context, now time.Time) (pruned int, err error) {
 	cands, err := s.pruner.PruneCandidates(ctx, now.Add(-s.grace), s.batch)
 	if err != nil {
@@ -74,6 +77,9 @@ func (s *Sweeper) SweepOnce(ctx context.Context, now time.Time) (pruned int, err
 		}
 		if s.decay.Retrievability(m, now) < s.hardFloor {
 			if err := s.pruner.Delete(ctx, m.ID); err != nil {
+				if errors.Is(err, engram.ErrNotFound) {
+					continue // deleted since the candidate read
+				}
 				s.log.Error("sweep: delete failed", "id", m.ID, "err", err)
 				continue
 			}
@@ -83,9 +89,18 @@ func (s *Sweeper) SweepOnce(ctx context.Context, now time.Time) (pruned int, err
 	return pruned, nil
 }
 
-// Run drives SweepOnce on a ticker until ctx is cancelled. Each tick recovers from a panic
-// so one bad sweep cannot take the process down.
-func (s *Sweeper) Run(ctx context.Context) {
+// Run drives SweepOnce until ctx is cancelled: one pass once firstDelay has elapsed, then one
+// per interval. A firstDelay of zero runs the first pass immediately. Each pass recovers from
+// a panic so one bad sweep cannot take the process down.
+func (s *Sweeper) Run(ctx context.Context, firstDelay time.Duration) {
+	first := time.NewTimer(firstDelay)
+	defer first.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-first.C:
+		s.tick(ctx)
+	}
 	t := time.NewTicker(s.interval)
 	defer t.Stop()
 	for {

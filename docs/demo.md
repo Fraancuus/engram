@@ -84,10 +84,12 @@ call in `hard` mode, then `memory_stats` again with `counts.total` back at zero.
 database, including any left by earlier runs and tests. The prompts above name the namespace, so
 the output stays scoped. If an unscoped call appears on screen, stop the take and run it again.
 
-**The `sweep` section reads empty.** `sweep.last_run_at` is `null` and `last_pruned` and
-`total_pruned` are 0. The stats are kept in memory from process start and are not persisted. A
-stdio client starts `engramd` for its own session, and the first sweep runs an hour after start,
-so a short session never reaches one. They are also store-wide, not per namespace.
+**The `sweep` section fills in after a minute.** `sweep.last_run_at` is `null` and `last_pruned`
+and `total_pruned` are 0 until the first sweep pass completes. A stdio client starts `engramd` for
+its own session, and the first pass runs one minute after start, then hourly. A take shorter than
+a minute shows the empty block; a longer one shows a timestamp and the counts of that pass. The
+stats are kept in memory, are not persisted, and cover all namespaces but only this process's
+passes.
 
 **Scoped `store_size` is the namespace's size.** If the agent reports a scoped call's `store_size`
 as the whole store's size, stop the take and run it again.
