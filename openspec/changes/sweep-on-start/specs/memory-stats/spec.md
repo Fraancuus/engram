@@ -8,7 +8,7 @@ tick runs. The tool MUST report them as `sweep.last_run_at`, `sweep.last_pruned`
 `sweep.total_pruned`, with `last_run_at` null before the first completed pass, and they MUST NOT
 depend on `namespace`. `WithSweepStats` MUST supply them to `Tools`; without it the tool MUST report
 the empty values. The tool description MUST say that sweep stats cover only this server process's
-passes and that null and 0 mean it has completed none, and MUST NOT name a duration for that wait.
+passes and that null and 0 say nothing about the store, and MUST NOT name a duration.
 
 #### Scenario: Before the first tick
 - **WHEN** no pass has completed

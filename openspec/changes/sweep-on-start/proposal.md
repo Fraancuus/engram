@@ -12,12 +12,6 @@
 - Reason: sessions end before the hour.
 - Impact: non-breaking for agents. `Run` has one caller. `sweep.New` and `SweepOnce` keep their signatures.
 
-**Cadence after the first pass**
-- From: one pass an hour.
-- To: one pass every 24 hours (`sweepInterval` in `cmd/engramd`).
-- Reason: Franco's decision of 2026-11-15. A row becomes prunable only after 30 idle days, so one pass a day is enough.
-- Impact: only a process that lives longer than a day sees the difference. Each process still sweeps once, a minute after it starts.
-
 **A row that is gone by the time a pass reaches it**
 - From: `SweepOnce` logs `sweep: delete failed` at error level when `Delete` returns `engram.ErrNotFound`.
 - To: it skips the row: not counted, no error logged.
@@ -26,7 +20,7 @@
 
 **What `memory_stats` says about the sweep**
 - From: the tool description says "Sweep stats are store-wide since process start, and read null and 0 until the first hourly sweep."
-- To: "Sweep stats ignore namespace and cover only this server process's passes; null and 0 mean it has not swept yet."
+- To: "Sweep stats span all namespaces but only this server process's passes; null and 0 say nothing about the store."
 - Reason: the old sentence becomes false, and it never said the stats are per process.
 - Impact: the stats fields and their meaning do not change. `sweep.last_run_at` is still null until a pass completes.
 
@@ -40,17 +34,17 @@
 - `TestStdioAllTools` stops asserting `sweep.last_run_at` is null on the real binary and checks the shape of the block.
 - `docs/demo.md`, `docs/engram-prd-v1.md` and `README.md` stop saying the first sweep is an hour in. `CONTRIBUTING.md` gains one line on integration fixtures.
 
-**Consequence to accept.** Hard-prune now runs in ordinary sessions for the first time. The first pass permanently deletes the backlog: unpinned memories idle more than 30 days whose retrievability is below 0.02, in every namespace, up to 500 candidates per pass. Soft-forgotten and superseded rows are deleted by the same rule, and after that `include_forgotten` cannot bring them back. On the dev store on 2026-11-15 that is 290 of 301 candidates, all in namespaces the integration tests create. The pass happens one minute into the first session started with a rebuilt `engramd`, not at merge. Reverting restores no row.
+**Consequence to accept.** Hard-prune now runs in ordinary sessions for the first time. The first pass permanently deletes the backlog: unpinned memories idle more than 30 days whose retrievability is below 0.02, in every namespace, up to 500 candidates per pass. Soft-forgotten and superseded rows are deleted by the same rule, and after that `include_forgotten` cannot bring them back. On the dev store on 2026-11-15 that is 163 of 164 candidates, all in namespaces the integration tests create. The pass happens one minute into the first session started with a rebuilt `engramd`, not at merge. Reverting restores no row.
 
 **Out of scope**
 - A flag or environment variable for the first delay or the interval.
-- Persisting the time of the last sweep, or coordinating passes between processes.
+- Persisting the time of the last sweep, or coordinating passes between processes. Franco wants at most one pass a day for the whole store; that is the next change, `sweep-daily-claim`.
 - Per-namespace sweep behaviour (v2).
 - Ordering or paging `PruneCandidates`. Today it has no `ORDER BY` and a limit of 500, so with more than 500 idle rows above the floor, rows below the floor can go unexamined. That predates this change and is listed for Franco as a follow-up.
 - Stopping a pass early when its context is cancelled.
 - Changing the grace period, the floor, the batch size or the decay model.
 - A sweep at shutdown.
-- `TestStoreSearch`, which fails on the dev volume today for a reason unrelated to the sweep (see design.md, Risks).
+- Making `TestStoreSearch` robust. It broke on the dev volume for a reason unrelated to the sweep and was cleared by removing leftover test rows (see design.md, Risks).
 
 ## Capabilities
 
@@ -64,7 +58,7 @@
 ## Impact
 
 - `sweep/sweep.go`: `Run` gains `firstDelay`; `SweepOnce` gains the `ErrNotFound` branch. `sweep/sweep_test.go`: schedule tests on virtual time (`testing/synctest`, standard library since Go 1.25; `go.mod` says 1.26).
-- `cmd/engramd/main.go`: `sweepFirstDelay`, `sweepInterval` (one hour to 24 hours), the `Run` call, the startup log line. `cmd/engramd/stdio_integration_test.go`: the `sweep` assertion and the startup-log assertion.
+- `cmd/engramd/main.go`: `sweepFirstDelay`, the `Run` call, the startup log line. `cmd/engramd/stdio_integration_test.go`: the `sweep` assertion and the startup-log assertion.
 - `mcp/server.go`: the `memory_stats` description string. No field, schema or handler change.
 - `neo4j/decay_integration_test.go`, `mcp/m1_integration_test.go`, `mcp/m4_integration_test.go`: fixture timestamps.
 - `docs/demo.md`, `docs/engram-prd-v1.md`, `README.md`, `CONTRIBUTING.md`.

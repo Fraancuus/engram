@@ -20,8 +20,8 @@ first pass happen early in the life of the process.
   (`eval/arm.go:215-217`). It never calls `Run`.
 
 **The design.** `Run` takes a first delay: `Run(ctx, firstDelay)`. It runs one pass when the
-first delay has elapsed, then one per interval as today. `cmd/engramd` passes one minute and
-sets the interval to 24 hours. Each pass still reads its `now` from the injected clock. The schedule itself stays on Go timers, and
+first delay has elapsed, then one per interval as today. `cmd/engramd` passes one minute. Each
+pass still reads its `now` from the injected clock. The schedule itself stays on Go timers, and
 its tests run on virtual time with `testing/synctest`. `New` keeps its signature, so the eval's
 call site does not change.
 
@@ -43,10 +43,9 @@ Three things follow from sweeping for real, and the change covers them:
 
 **What sweeping for real means.** This change is the first time hard-prune runs in ordinary
 sessions. The first pass after it ships deletes the backlog, permanently. On the dev store
-(read-only count, 2026-11-15): 301 rows are candidates, and 290 of them would be deleted (183
-episodic, 107 semantic). Eleven survive: 6 live procedural rows, which never decay, and 5
-semantic rows still above the floor. All 301 sit in namespaces the integration tests create
-(`itest-*`, `m1-*` to `m4-*`, `sweep-*`). No row outside a test namespace is a candidate today.
+(read-only count, 2026-11-15): 164 rows are candidates and 163 of them would be deleted (118
+semantic, 45 episodic). All sit in the `m1-*` to `m4-*` namespaces the `mcp` integration tests
+create. No row outside a test namespace is a candidate today.
 
 ## Alternatives Considered
 
@@ -78,15 +77,15 @@ semantic rows still above the floor. All 301 sit in namespaces the integration t
     the integration suite starts (the whole test took 5.4 s in the last run).
   - No sub-minute process starts a pass it cannot finish, and startup does not compete with the
     first tool calls.
-  - The cadence is set apart from the first pass, so it can be chosen on its own.
+  - The hourly cadence stays as M4 designed it.
   - Alternative A is this alternative with a delay of zero, so the choice is one constant.
 - **Cons**:
   - A session shorter than the delay never prunes.
   - No automated test sees a populated `sweep` block through the real binary, because that
     would mean waiting out the delay.
   - One more argument on `Run`, and about a hundred lines of schedule tests.
-- **Why chosen**: it fixes exactly what was reported (the first pass waits a full tick)
-  without tying the first pass to the cadence.
+- **Why chosen**: it fixes exactly what was reported (the first pass waits a full tick) and
+  leaves the cadence alone.
 
 ### Alternative C: Sweep at start, rate-limited by a persisted last-sweep time
 
@@ -95,8 +94,8 @@ semantic rows still above the floor. All 301 sit in namespaces the integration t
 - **Pros**: many short sessions cost one pass per hour in total, however they overlap.
 - **Cons**: a new node in the schema, a new method on the store port, a read-then-write race
   between processes, and persisted state for a stats block that is in-memory by decision (M6).
-- **Why not chosen**: the cost it removes is small (see below), and it is far larger than the
-  problem.
+- **Why not chosen here**: it is far larger than the reported problem. Franco decided on
+  2026-11-15 that he wants it, as its own change: `sweep-daily-claim`.
 
 ### Alternative D: Shorten the interval, change no code
 
@@ -125,14 +124,10 @@ semantic rows still above the floor. All 301 sit in namespaces the integration t
 
 ## Agreed Approach
 
-Alternative B, with a first delay of one minute and an interval of 24 hours in `cmd/engramd`.
-Franco chose it in the plan review on 2026-11-15: the first pass when the server starts, then
-one a day. He also confirmed the `ErrNotFound` handling, the fixture edits, and the first real
-pass on the dev store.
-
-**Daily, not hourly.** A row becomes prunable only after 30 idle days, so a pass an hour after
-the first finds nothing new. One pass a day is enough, and it holds per process: every `engramd`
-process sweeps once, a minute after it starts.
+Alternative B, with a first delay of one minute in `cmd/engramd`. Franco chose it in the plan
+review on 2026-11-15, and confirmed the `ErrNotFound` handling, the fixture edits and the first
+real pass on the dev store. The hourly interval stays. One pass a day for the whole store is
+the follow-up change `sweep-daily-claim`.
 
 **Sweep at start versus a first delay.** Both fix the reported problem. With the fixtures made
 fresh, a pass at start no longer breaks today's integration suite, so the choice rests on three
@@ -166,8 +161,8 @@ is no longer logged. It was already skipped and not counted, so the count and th
 1. `Run(ctx, firstDelay)`: the delay is an argument to `Run`, not a field set in `New`. `Run`
    has one caller, and `New` has three (`cmd/engramd`, the eval, the tests).
 2. A first delay of zero runs the first pass immediately.
-3. `cmd/engramd` uses `sweepFirstDelay = time.Minute` and `sweepInterval = 24 * time.Hour`,
-   both constants. No flag and no environment variable.
+3. `cmd/engramd` uses `sweepFirstDelay = time.Minute`, a constant next to `sweepInterval`. No
+   flag and no environment variable.
 4. Scheduling uses `time.NewTimer` and `time.NewTicker`. `tick` keeps reading `s.clock.Now()`.
 5. Schedule tests use `testing/synctest`. The plan's tests were dry-run in a scratch copy:
    they fail on the old behaviour with the predicted message, pass after, and stay green over
@@ -178,8 +173,8 @@ is no longer logged. It was already skipped and not counted, so the count and th
    in three `neo4j` tests, and a clock fixed at the real start time instead of 2023 in the `mcp`
    integration helper.
 8. The stats contract does not change: `last_run_at` is null until a pass completes. The
-   `memory_stats` description says whose passes the stats cover: "Sweep stats ignore namespace
-   and cover only this server process's passes; null and 0 mean it has not swept yet."
+   `memory_stats` description says whose passes the stats cover: "Sweep stats span all
+   namespaces but only this server process's passes; null and 0 say nothing about the store."
 9. `TestStdioAllTools` checks the shape of the `sweep` block, not that it is empty. The exact
    null-and-zero wire shape stays pinned by `mcp/stats_test.go`, which injects the stats.
 10. Docs that state the one-hour wait are corrected: `docs/demo.md`, `docs/engram-prd-v1.md`
@@ -188,14 +183,4 @@ is no longer logged. It was already skipped and not counted, so the count and th
 
 ## Open Questions
 
-Answered by Franco on 2026-11-15: the first pass runs one minute after the server starts and
-one pass a day follows; the `ErrNotFound` handling and the fixture edits are in this change; the
-first real pass may run on the dev store.
-
-Still open:
-
-1. **Is one pass per `engramd` process enough?** Recommended: yes, with the sweeper goroutine as
-   the worker that repeats it daily. One pass a day for the whole store would need a persisted
-   last-sweep time (Alternative C) or a worker outside `engramd`.
-2. **May the leftover integration-test rows be removed?** `TestStoreSearch` fails on the dev
-   volume until they are. Recommended: yes, before the integration task.
+None. Franco answered them on 2026-11-15, and design.md records the decisions.

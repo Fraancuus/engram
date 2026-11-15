@@ -5,7 +5,7 @@
 began, and MUST NOT wait for the interval before it. After the first pass it MUST run one pass per
 interval. A `firstDelay` of zero MUST run the first pass immediately. `Run` MUST return when `ctx` is
 cancelled, whether it is waiting for the first delay or for a tick. `cmd/engramd` MUST pass a first
-delay of one minute with an interval of 24 hours, and MUST name both in its startup log line.
+delay of one minute with an interval of one hour, and MUST name both in its startup log line.
 
 #### Scenario: Delay boundary at fixed virtual time
 - **WHEN** `Run` starts at virtual schedule time S with a first delay of one minute and an interval of one hour
@@ -25,7 +25,7 @@ delay of one minute with an interval of 24 hours, and MUST name both in its star
 
 #### Scenario: engramd names its schedule
 - **WHEN** `engramd` starts
-- **THEN** its startup log line names the first delay of one minute and the interval of 24 hours
+- **THEN** its startup log line names the first delay of one minute and the interval of one hour
 
 #### Scenario: A session longer than the first delay
 - **WHEN** `engramd` has served for more than one minute, its first pass completed without error, and `memory_stats` is called

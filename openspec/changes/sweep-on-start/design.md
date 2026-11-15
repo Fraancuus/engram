@@ -59,7 +59,8 @@ Facts the design rests on, each read in the code:
 **Non-Goals:**
 
 - Making the schedule configurable at run time.
-- Coordinating passes between processes, or persisting when the last pass ran.
+- Coordinating passes between processes, or persisting when the last pass ran. That is the
+  follow-up change `sweep-daily-claim`.
 - Changing what a pass deletes: grace period, floor, batch size and decay model are untouched.
 - Fixing the candidate cap (see Risks).
 
@@ -101,25 +102,21 @@ Why an argument to `Run` and not a field set by `New`: the delay matters only to
 has one caller, and `New` already takes eight positional arguments and has three callers. One
 of them is the eval, which this change must not touch.
 
-### D2. `engramd` waits one minute, then sweeps once a day
+### D2. `engramd` waits one minute
 
 `cmd/engramd/main.go` gains `sweepFirstDelay = time.Minute` next to `sweepInterval`, passes it
-to `Run`, and adds it to the startup log line as `sweep_first_delay`. `sweepInterval` changes
-from one hour to 24 hours.
+to `Run`, and adds it to the startup log line as `sweep_first_delay`.
 
-Franco chose this schedule in the plan review on 2026-11-15: the first pass when the server
-starts, one minute in, and one pass a day after that.
+Three schedules were weighed. The table shows what each one does for the kinds of process that
+exist.
 
-Three schedules were weighed for the first pass. The table shows what each one does for the
-kinds of process that exist.
-
-| Process | At start (delay 0) | One minute after start (chosen) | Every ten minutes, no code change |
+| Process | At start (delay 0) | One minute, then hourly (chosen) | Every ten minutes, no code change |
 |---|---|---|---|
 | Tool-listing probe, lives under a second | Starts a pass and abandons it | Nothing | Nothing |
 | One-shot `claude -p` run, seconds to a minute | Prunes | Usually nothing | Nothing |
 | Integration suite's `engramd` (5.4 s measured) | Sweeps the shared store mid-suite | Nothing | Nothing |
 | Working session, ten minutes or more | Prunes | Prunes | Prunes |
-| Session of several hours | 1 pass, at start | 1 pass, one minute in | A pass every ten minutes |
+| Session of several hours | 1 pass, then hourly | 1 pass, then hourly | A pass every ten minutes |
 | New code | 1 line | A parameter and its tests | None |
 
 Why one minute and not zero:
@@ -144,17 +141,12 @@ minutes still misses sessions under ten minutes, and a first pass at one minute 
 store scan every minute for the life of every process.
 
 One minute is a judgement, not a measured optimum. It is long against the integration suite's
-5.4 seconds and short against a working session.
+5.4 seconds and short against a working session. Franco chose it in the plan review on
+2026-11-15.
 
-Why daily and not hourly: a row becomes prunable only after 30 idle days, so a second pass an
-hour after the first finds nothing new. Fewer passes also mean fewer moments at which two
-processes overlap. The interval now matters only to a process that lives longer than a day.
-
-"One sweep a day" holds per process, not per store. Every `engramd` process sweeps once, a
-minute after it starts, so five sessions in a day are five passes, each a matter of
-milliseconds once the backlog is gone. One pass a day for the whole store would need the
-persisted last-sweep time of Alternative C in brainstorm.md, or a worker outside `engramd`.
-That is Open Question 1.
+The hourly interval is left as it is. Franco also wants at most one pass a day for the whole
+store. That needs state shared between processes, so it is its own change, `sweep-daily-claim`,
+which follows this one and keeps the hourly tick as the moment each process tries.
 
 ### D3. Decay time stays on the injected clock; the schedule stays on Go timers
 
@@ -227,11 +219,12 @@ What changes is how soon a pass completes.
 
   with
 
-  > Sweep stats ignore namespace and cover only this server process's passes; null and 0 mean it has not swept yet.
+  > Sweep stats span all namespaces but only this server process's passes; null and 0 say nothing about the store.
 
   The stats are per process, so every new session starts at null even if another process swept
   a minute earlier. The new sentence says that, and it names no duration, because the delay
-  belongs to `cmd/engramd`, not to `mcp`.
+  belongs to `cmd/engramd`, not to `mcp`. It stays true when the follow-up change lets only one
+  process a day sweep.
 - The `memory-stats` spec scenario "Before the first tick" keeps its name and text. Its WHEN
   ("no pass has completed") never depended on the schedule, so it is not racy, and OpenSpec does
   not let a MODIFIED block drop or rename a scenario. The delta adds two scenarios next to it:
@@ -300,10 +293,10 @@ tests wrote, none is a sweep candidate; of the rows the unedited tests wrote, 32
 ### D8. Docs
 
 - `docs/demo.md:87-90` says the `sweep` section reads empty because the first sweep is an hour
-  after start. New text: empty until the first pass, one minute after start, then one pass a
-  day; in memory per process; store-wide.
-- `docs/engram-prd-v1.md:158` says the sweep is hourly: it becomes one minute after start, then
-  daily. Line 173 says "empty until the first sweep an hour in": correct it.
+  after start. New text: empty until the first pass, one minute after start; in memory per
+  process; store-wide.
+- `docs/engram-prd-v1.md:158` says the sweep is hourly: add the first pass. Line 173 says
+  "empty until the first sweep an hour in": correct it.
 - `README.md:177` says the sweep figures "read empty in a short session": correct it.
 - `plans/m6-stats-demo/`, `docs/engram-m4-plan.md` (its `Run` sketch at line 259) and archived
   OpenSpec changes are records and are not edited.
@@ -338,18 +331,14 @@ No branch changes. This is listed because the change makes these branches run in
 ## Risks / Trade-offs
 
 - **[The first real pass deletes the backlog.]** Hard-prune has effectively never run. Read-only
-  count on the dev store, 2026-11-15: 301 candidates, of which 290 would be deleted (183
-  episodic, 107 semantic) and 11 kept (6 live procedural, 5 semantic above the floor). All 301
-  are in namespaces the integration tests create (`itest-*`, `m1-*` to `m4-*`, `sweep-*`); no row
+  count on the dev store on 2026-11-15, after the leftover `neo4j` test rows were removed: 164
+  candidates, of which 163 would be deleted (118 semantic, 45 episodic) and 1 semantic row kept.
+  All 164 are in the `m1-*` to `m4-*` namespaces that the `mcp` integration tests create; no row
   outside a test namespace is a candidate. Every integration run before D7 adds more rows of
-  the same kind, so the count on the day will be higher. The pass runs in the first session
-  started with a rebuilt `engramd`, one minute in, not at merge. → Franco confirmed on
-  2026-11-15 that the first real pass may run on the dev store, because the rows are test
-  leftovers. The PR body states the numbers.
+  the same kind. The pass runs in the first session started with a rebuilt `engramd`, one
+  minute in, not at merge. → Franco agreed on 2026-11-15 that it may run on the dev store. The
+  PR body states the numbers.
 - **[A session under a minute never prunes.]** → Accepted. See D2.
-- **[Several sessions a day mean several passes a day.]** Each process sweeps once, a minute
-  after it starts. → Accepted unless Franco wants one pass a day for the whole store (Open
-  Question 1).
 - **[No automated test sees a populated `sweep` block through the real binary.]** The unit tests
   cover the schedule, `tick`, `Stats` and the wire shape; the one untested link is
   `WithSweepStats(sweeper.Stats)` in `main.go`. → Verify runs `engramd` for more than a minute
@@ -357,19 +346,18 @@ No branch changes. This is listed because the change makes these branches run in
 - **[A future integration fixture is old and decayed.]** A developer's own session can delete it
   mid-test. → D7 fixes today's fixtures. The rule for new ones goes in `CONTRIBUTING.md` in one
   line: integration fixtures are pinned, live procedural, or younger than 30 days.
-- **[`TestStoreSearch` fails on the dev volume today.]** It is unrelated to this change, but it
-  blocks a green integration run. The `neo4j` and `sweep` integration tests write rows with the
-  same one-hot embedding on every run and never remove them: 512 such rows on 2026-11-15, in
-  `itest-*` and `sweep-*` namespaces. `Search` asks the vector index for the 50 nearest rows
-  store-wide and filters by namespace afterwards. All 50 come back as exact ties, the test's new
-  row is rarely among them, and the filter leaves nothing. It passed earlier the same day and
-  has failed on every run since. → Before the integration task, the leftover rows in the
-  integration-test namespaces are removed with Franco's agreement. Making those tests clean up
-  after themselves, and the store-wide-then-filter search behind the failure, are listed for
-  Franco as follow-ups.
+- **[`TestStoreSearch` breaks when test rows pile up.]** It is unrelated to this change, but it
+  blocked a green integration run. The `neo4j` and `sweep` integration tests write rows with the
+  same one-hot embedding on every run and never remove them. `Search` asks the vector index for
+  the 50 nearest rows store-wide and filters by namespace afterwards, so with 512 identical
+  vectors in the store the test's new row was rarely among the 50 and the filter left nothing.
+  → Cleared on 2026-11-15 with Franco's agreement: the 684 rows in `itest-*` and `sweep-*`
+  namespaces were deleted, and the test passes again. It will come back after enough runs.
+  Making those tests clean up after themselves, and the store-wide-then-filter search behind
+  the failure, are listed for Franco as follow-ups.
 - **[The candidate cap can starve the sweep.]** `PruneCandidates` returns at most 500 rows in no
   set order. If more than 500 rows are idle past the grace period and above the floor, rows
-  below the floor may never be examined. This predates the change; today 301 rows are
+  below the floor may never be examined. This predates the change; on 2026-11-15, 164 rows are
   candidates. → Out of scope; listed for Franco as a follow-up.
 - **[`testing/synctest` needs Go 1.25 or newer.]** → `go.mod` says 1.26 and CI reads the version
   from it.
@@ -385,15 +373,16 @@ Neo4j volume was dumped first.
 
 Franco answered the plan's questions on 2026-11-15:
 
-1. The first pass runs one minute after the server starts, and one pass a day follows (D2).
+1. The first pass runs one minute after the server starts (D2).
 2. D4, the `ErrNotFound` branch, is in this change.
 3. D7, the fixture edits, is in this change.
-4. The first real pass may run on the dev store. The 290 rows are test leftovers.
+4. The first real pass may run on the dev store. The rows are test leftovers.
+5. At most one pass a day for the whole store, with the time of the last pass kept as
+   operational state in Neo4j, is a separate change: `sweep-daily-claim`. This change leaves the
+   hourly interval alone.
+6. The leftover rows in the `itest-*` and `sweep-*` namespaces could be deleted. That was done
+   the same day: 684 rows.
 
 ## Open Questions
 
-1. Is one pass per `engramd` process enough, with the sweeper goroutine as the worker that
-   repeats it daily? Recommended: yes. The alternative is one pass a day for the whole store,
-   which needs a persisted last-sweep time or a worker outside `engramd`, and is a larger change.
-2. May the leftover rows in the integration-test namespaces be removed so `TestStoreSearch` can
-   pass (Risks)? Recommended: yes, before the integration task.
+None.
