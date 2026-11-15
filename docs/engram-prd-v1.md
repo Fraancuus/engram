@@ -170,7 +170,7 @@ Input `namespace?`; without it the call covers every namespace in the database. 
 - **`counts`:** total, live, superseded, forgotten and pinned rows, plus all rows by type and by namespace. `live` means not superseded and not forgotten. The flags overlap, so `live + superseded + forgotten` can exceed `total`.
 - **`retrievability`:** the active decay model, a ten-bucket histogram over live rows with fixed width over [0,1], `below_recall_threshold` (live rows with R under the threshold recall applies), and `truncated` when the row cap sampled the live set.
 - **`store_size`:** memories, link edges and entity bridges. It follows `namespace`: scoped, it is that namespace's size, and an edge or bridge counts when either endpoint is in the namespace.
-- **`sweep`:** `last_run_at`, `last_pruned` and `total_pruned`, in memory since process start, store-wide, and empty until the first sweep, one minute after start.
+- **`sweep`:** `last_run_at`, `last_pruned` and `total_pruned`, in memory per process, all namespaces, and empty until its first sweep, one minute after start.
 
 Recent access patterns are deferred. Feeds the future viz; operational sanity check now.
 

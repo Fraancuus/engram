@@ -68,7 +68,9 @@ go test -race ./...
 Fakes live in `mock/` and implement the same domain ports as the real adapters; the
 eval harness reuses them.
 
-Integration fixtures must be pinned, live procedural, or younger than 30 days: a running engramd sweeps the same store and hard-deletes anything older that has decayed.
+Integration fixtures must be pinned, last accessed within 30 days, or procedural and not
+superseded (kept only while `engramd` runs the default type-aware decay): a running
+`engramd` sweeps the same store and hard-deletes anything older that has decayed.
 
 ## Before you push
 

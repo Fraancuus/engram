@@ -64,7 +64,7 @@ func New(p Pruner, d engram.DecayModel, c engram.Clock, interval, grace time.Dur
 
 // SweepOnce runs one prune pass as of now: it fetches candidates older than the grace
 // period and deletes those whose retrievability is below the hard floor (pinned memories
-// are skipped defensively). A candidate that is already gone is skipped without an error.
+// are skipped defensively). A candidate that is already gone is skipped and not logged.
 // now is passed explicitly so the eval can virtualize time.
 func (s *Sweeper) SweepOnce(ctx context.Context, now time.Time) (pruned int, err error) {
 	cands, err := s.pruner.PruneCandidates(ctx, now.Add(-s.grace), s.batch)

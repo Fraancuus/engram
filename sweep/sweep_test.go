@@ -310,7 +310,12 @@ func TestRunFirstPassAfterFirstDelay(t *testing.T) {
 		if got := s.Stats().TotalPruned; got != 1 {
 			t.Fatalf("at the first delay: %d passes, want 1", got)
 		}
-		time.Sleep(time.Hour)
+		time.Sleep(time.Hour - time.Nanosecond)
+		synctest.Wait()
+		if got := s.Stats().TotalPruned; got != 1 {
+			t.Fatalf("one nanosecond before the second pass is due: %d passes, want 1", got)
+		}
+		time.Sleep(time.Nanosecond)
 		synctest.Wait()
 		if got := s.Stats().TotalPruned; got != 2 {
 			t.Fatalf("one interval after the first pass: %d passes, want 2", got)
