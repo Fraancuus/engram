@@ -5,6 +5,7 @@ package sweep
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -63,7 +64,8 @@ func New(p Pruner, d engram.DecayModel, c engram.Clock, interval, grace time.Dur
 
 // SweepOnce runs one prune pass as of now: it fetches candidates older than the grace
 // period and deletes those whose retrievability is below the hard floor (pinned memories
-// are skipped defensively). now is passed explicitly so the eval can virtualize time.
+// are skipped defensively). A candidate that is already gone is skipped without an error.
+// now is passed explicitly so the eval can virtualize time.
 func (s *Sweeper) SweepOnce(ctx context.Context, now time.Time) (pruned int, err error) {
 	cands, err := s.pruner.PruneCandidates(ctx, now.Add(-s.grace), s.batch)
 	if err != nil {
@@ -75,6 +77,9 @@ func (s *Sweeper) SweepOnce(ctx context.Context, now time.Time) (pruned int, err
 		}
 		if s.decay.Retrievability(m, now) < s.hardFloor {
 			if err := s.pruner.Delete(ctx, m.ID); err != nil {
+				if errors.Is(err, engram.ErrNotFound) {
+					continue // deleted since the candidate read
+				}
 				s.log.Error("sweep: delete failed", "id", m.ID, "err", err)
 				continue
 			}

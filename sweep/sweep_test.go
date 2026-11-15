@@ -1,10 +1,13 @@
 package sweep
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -385,5 +388,49 @@ func TestRunFirstPassFloorBoundary(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+func TestSweepOnceAlreadyDeletedIsNotAnError(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	p := &mock.FakeStore{
+		PruneCands: []engram.Memory{{ID: "a"}, {ID: "b"}},
+		DeleteErr:  fmt.Errorf("delete: %w", engram.ErrNotFound), // wrapped, as neo4j.Store returns it
+	}
+	s := New(p, mock.FakeDecay{R: 0}, &stepClock{t: statsT0}, time.Hour, 30*24*time.Hour, 0.02, 100,
+		slog.New(slog.NewTextHandler(&logs, nil)))
+
+	n, err := s.SweepOnce(context.Background(), statsT0)
+	if n != 0 || err != nil {
+		t.Fatalf("SweepOnce = (%d, %v), want (0, nil)", n, err)
+	}
+	if len(p.Deleted) != 2 {
+		t.Errorf("attempted %d deletes, want 2: the pass must continue past a missing row", len(p.Deleted))
+	}
+	if logs.Len() != 0 {
+		t.Errorf("logged %q, want nothing for rows that were already gone", logs.String())
+	}
+
+	s.tick(context.Background())
+	want := engram.SweepStats{LastRunAt: statsT0, LastPruned: 0, TotalPruned: 0}
+	if got := s.Stats(); got != want {
+		t.Errorf("Stats() = %+v, want %+v", got, want)
+	}
+}
+
+func TestSweepOnceOtherDeleteErrorStillLogged(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	p := &mock.FakeStore{PruneCands: []engram.Memory{{ID: "a"}}, DeleteErr: errors.New("boom")}
+	s := New(p, mock.FakeDecay{R: 0}, &stepClock{t: statsT0}, time.Hour, 30*24*time.Hour, 0.02, 100,
+		slog.New(slog.NewTextHandler(&logs, nil)))
+
+	n, err := s.SweepOnce(context.Background(), statsT0)
+	if n != 0 || err != nil {
+		t.Fatalf("SweepOnce = (%d, %v), want (0, nil)", n, err)
+	}
+	if got := strings.Count(logs.String(), "level=ERROR"); got != 1 {
+		t.Errorf("%d error-level records, want 1; log: %q", got, logs.String())
 	}
 }
