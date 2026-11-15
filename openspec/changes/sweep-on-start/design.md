@@ -294,7 +294,7 @@ tests wrote, none is a sweep candidate; of the rows the unedited tests wrote, 32
 
 - `docs/demo.md:87-90` says the `sweep` section reads empty because the first sweep is an hour
   after start. New text: empty until the first pass, one minute after start; in memory per
-  process; store-wide.
+  process; all namespaces.
 - `docs/engram-prd-v1.md:158` says the sweep is hourly: add the first pass. Line 173 says
   "empty until the first sweep an hour in": correct it.
 - `README.md:177` says the sweep figures "read empty in a short session": correct it.
@@ -345,7 +345,8 @@ No branch changes. This is listed because the change makes these branches run in
   once, calls `memory_stats`, and records the output in `verify.md`.
 - **[A future integration fixture is old and decayed.]** A developer's own session can delete it
   mid-test. → D7 fixes today's fixtures. The rule for new ones goes in `CONTRIBUTING.md` in one
-  line: integration fixtures are pinned, live procedural, or younger than 30 days.
+  line: integration fixtures are pinned, last accessed within 30 days, or procedural and not
+  superseded.
 - **[`TestStoreSearch` breaks when test rows pile up.]** It is unrelated to this change, but it
   blocked a green integration run. The `neo4j` and `sweep` integration tests write rows with the
   same one-hot embedding on every run and never remove them. `Search` asks the vector index for
