@@ -2,7 +2,6 @@ package neo4j
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -177,12 +176,23 @@ LIMIT $k`
 }
 
 // Reinforce records an access: it increments access_count and sets last_accessed to now.
-// It returns engram.ErrNotFound if no memory has the given id.
+// It returns engram.ErrNotFound if no memory has the given id, including one deleted while
+// this call waited for its lock.
 func (s *Store) Reinforce(ctx context.Context, id engram.MemoryID, now time.Time) error {
+	// The statement writes before it reads. The SET of last_accessed takes the row's write
+	// lock, so a row deleted while this call waited is gone at the second MATCH, the count is
+	// 0, and the code below maps 0 to engram.ErrNotFound. The increment is on the re-matched
+	// row, not in the first SET, because a statement that reads a property before it writes
+	// deadlocks against the lock-first DeleteIfStale. The driver retries the deadlock, so the
+	// call still succeeds, but it takes about 2 s instead of a few milliseconds. Any writer on
+	// :Memory must write before it reads.
 	const q = `
 MATCH (m:Memory {id: $id})
-SET m.access_count = m.access_count + 1, m.last_accessed = $now
-RETURN count(m) AS c`
+SET m.last_accessed = $now
+WITH m
+MATCH (x:Memory {id: $id})
+SET x.access_count = x.access_count + 1
+RETURN count(x) AS c`
 	res, err := neo4jdriver.ExecuteQuery(ctx, s.driver, q,
 		map[string]any{"id": string(id), "now": now.UTC()}, neo4jdriver.EagerResultTransformer)
 	if err != nil {
@@ -375,15 +385,31 @@ func (s *Store) Supersede(ctx context.Context, ids []engram.MemoryID) error {
 }
 
 // SetForgotten soft-forgets the memory (excluded from default recall). Returns
-// engram.ErrNotFound if no memory has the id.
+// engram.ErrNotFound if no memory has the id, including one deleted while this call waited
+// for its lock.
 func (s *Store) SetForgotten(ctx context.Context, id engram.MemoryID) error {
-	const q = `MATCH (m:Memory {id: $id}) SET m.forgotten = true RETURN count(m) AS c`
+	// The second MATCH runs once the SET holds the row's lock, so a row deleted while the SET
+	// waited counts 0, which flagOne maps to engram.ErrNotFound.
+	const q = `
+MATCH (m:Memory {id: $id})
+SET m.forgotten = true
+WITH m
+MATCH (x:Memory {id: $id})
+RETURN count(x) AS c`
 	return s.flagOne(ctx, "set forgotten", id, q)
 }
 
-// Pin protects the memory from decay. Returns engram.ErrNotFound if no memory has the id.
+// Pin protects the memory from decay. Returns engram.ErrNotFound if no memory has the id,
+// including one deleted while this call waited for its lock.
 func (s *Store) Pin(ctx context.Context, id engram.MemoryID) error {
-	const q = `MATCH (m:Memory {id: $id}) SET m.pinned = true RETURN count(m) AS c`
+	// The second MATCH runs once the SET holds the row's lock, so a row deleted while the SET
+	// waited counts 0, which flagOne maps to engram.ErrNotFound.
+	const q = `
+MATCH (m:Memory {id: $id})
+SET m.pinned = true
+WITH m
+MATCH (x:Memory {id: $id})
+RETURN count(x) AS c`
 	return s.flagOne(ctx, "pin", id, q)
 }
 
@@ -427,18 +453,43 @@ RETURN c`
 	return nil
 }
 
-// DeleteIfStale deletes the memory unconditionally, as Delete does, and reports whether it did;
-// an unknown id is (false, nil).
-// shortcut: no stale re-check yet, so a row changed since the candidate read is still deleted, as
-// before; the lock-first statement replaces this body in the next commit to this file.
-func (s *Store) DeleteIfStale(ctx context.Context, id engram.MemoryID, _ time.Time) (bool, error) {
-	if err := s.Delete(ctx, id); err != nil {
-		if errors.Is(err, engram.ErrNotFound) {
-			return false, nil
-		}
-		return false, err
+// DeleteIfStale deletes the memory and its relationships only if it is still stale: unpinned,
+// with last_accessed before `before`, the predicate PruneCandidates(before) uses. It reports
+// whether it deleted. A row that changed since the sweep read it, or that is already gone, is
+// (false, nil). The re-check is complete only while every write that raises retrievability
+// sets last_accessed or pinned.
+func (s *Store) DeleteIfStale(ctx context.Context, id engram.MemoryID, before time.Time) (bool, error) {
+	// The SET is there for its lock, and the REMOVE takes the property off again in the same
+	// statement, so no row ever carries it. Neo4j takes a node's write lock when a statement
+	// first writes to it, not when it matches it. Writing a dummy property first makes this
+	// statement wait for any writer that got there earlier, and the WHERE after it then reads
+	// committed values. Without the dummy write the WHERE reads the row before the lock, and
+	// a row pinned or reinforced a moment ago is deleted anyway. The pair is not dead code: it
+	// is the form the Neo4j Operations Manual gives in "Concurrent data access", "Lost
+	// updates", example "Dummy property to acquire a write lock"
+	// (https://neo4j.com/docs/operations-manual/current/database-internals/concurrent-data-access/).
+	const q = `
+MATCH (m:Memory {id: $id})
+SET m.sweep_check = true
+REMOVE m.sweep_check
+WITH m
+WHERE m.last_accessed < $before AND coalesce(m.pinned, false) = false
+DETACH DELETE m
+RETURN count(*) AS deleted`
+	res, err := neo4jdriver.ExecuteQuery(ctx, s.driver, q,
+		map[string]any{"id": string(id), "before": before.UTC()}, neo4jdriver.EagerResultTransformer)
+	if err != nil {
+		return false, fmt.Errorf("delete if stale %q: %w", id, err)
 	}
-	return true, nil
+	// count(*) always returns one row, so none is a malformed result, not a missing memory.
+	if len(res.Records) == 0 {
+		return false, fmt.Errorf("delete if stale %q: no result row", id)
+	}
+	n, err := recordValue[int64](res.Records[0], "deleted")
+	if err != nil {
+		return false, fmt.Errorf("delete if stale %q: %w", id, err)
+	}
+	return n > 0, nil
 }
 
 // PruneCandidates returns up to limit non-pinned memories whose last_accessed predates
