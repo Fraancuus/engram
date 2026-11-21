@@ -92,8 +92,10 @@ type RememberOutput struct {
 
 // doRemember validates the input, deduplicates within the namespace (reinforcing an
 // existing near-identical memory instead of inserting), and otherwise stores a new
-// memory with its entity links. Internal failures are logged and returned as a generic
-// error so nothing internal leaks to the caller.
+// memory with its entity links. A dedup target deleted between the search and its
+// reinforce does not fail the write: the content is stored as a new memory. Internal
+// failures are logged and returned as a generic error so nothing internal leaks to the
+// caller.
 func (t *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberOutput, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -167,19 +169,27 @@ func (t *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberO
 		return RememberOutput{}, errors.New("remember: store unavailable")
 	}
 	if target, ok := t.dedupTarget(candidates, replaces, mt, in.Content); ok {
-		if err := t.store.Reinforce(ctx, target.ID, t.clock.Now()); err != nil {
+		err := t.store.Reinforce(ctx, target.ID, t.clock.Now())
+		switch {
+		case err == nil:
+			// Reinforce has committed last_accessed = now, so the sweep's DeleteIfStale keeps
+			// the row while the entities are linked. Merge any supplied entities onto the
+			// existing memory so a retry after a prior LinkEntities failure (or genuinely new
+			// mentions) still records them.
+			if len(in.Entities) > 0 {
+				if err := t.store.LinkEntities(ctx, target.ID, in.Entities); err != nil {
+					t.log.Error("remember: link entities on dedup failed", "err", err)
+					return RememberOutput{}, errors.New("remember: store unavailable")
+				}
+			}
+			return RememberOutput{MemoryID: string(target.ID), Deduped: true, Superseded: t.applySupersedes(ctx, replaces)}, nil
+		case errors.Is(err, engram.ErrNotFound):
+			// The target was deleted since the search. Fall through and store the content as a
+			// new memory: failing here would lose it.
+		default:
 			t.log.Error("remember: reinforce failed", "err", err)
 			return RememberOutput{}, errors.New("remember: store unavailable")
 		}
-		// Merge any supplied entities onto the existing memory so a retry after a prior
-		// LinkEntities failure (or genuinely new mentions) still records them.
-		if len(in.Entities) > 0 {
-			if err := t.store.LinkEntities(ctx, target.ID, in.Entities); err != nil {
-				t.log.Error("remember: link entities on dedup failed", "err", err)
-				return RememberOutput{}, errors.New("remember: store unavailable")
-			}
-		}
-		return RememberOutput{MemoryID: string(target.ID), Deduped: true, Superseded: t.applySupersedes(ctx, replaces)}, nil
 	}
 
 	id, err := t.newID()
