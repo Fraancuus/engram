@@ -72,7 +72,7 @@ type FakeStore struct {
 	StaleBefore   []time.Time               // the cutoff of every DeleteIfStale call
 	PruneBefore   time.Time                 // the cutoff of the last PruneCandidates call
 
-	CountsRes    engram.StoreCounts
+	CountsRes     engram.StoreCounts
 	CountsErr     error
 	LiveRes       []engram.Memory
 	LiveErr       error
