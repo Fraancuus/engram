@@ -29,7 +29,7 @@ The domain package does not change. Every Go task runs under `go test -race`. Th
 
 ## 6. Verify
 
-- [ ] 6.1 `go build ./...`, `go test -race -coverprofile=cover.out ./...`, `golangci-lint run ./...`, and `graphify update .`.
-- [ ] 6.2 Integration with the stack up and the schema applied: `go test -race -count=1 -tags integration -p 2 -v` on every package except the body of `./eval`. No skip may name `unavailable`.
-- [ ] 6.3 `go run ./cmd/eval --ci` on the final tree, compared with `main`'s full output as in 2.2; report the A/B/C table.
-- [ ] 6.4 Project agents: `reviewer` on the Go diff, `security-auditor` on the store queries and the handlers, and a skeptic review of the whole branch that tries to refute each finding, because `remember` is a write path. Resolve every blocking finding.
+- [x] 6.1 `go build ./...`, `go test -race -coverprofile=cover.out ./...`, `golangci-lint run ./...`, and `graphify update .`.
+- [x] 6.2 Integration with the stack up and the schema applied: `go test -race -count=1 -tags integration -p 2 -v` on every package except the body of `./eval`. No skip may name `unavailable`.
+- [x] 6.3 `go run ./cmd/eval --ci` on the final tree, compared with `main`'s full output as in 2.2; report the A/B/C table.
+- [x] 6.4 Project agents: `reviewer` on the Go diff, `security-auditor` on the store queries and the handlers, and a skeptic review of the whole branch that tries to refute each finding, because `remember` is a write path. Resolve every blocking finding.
