@@ -15,7 +15,8 @@ import (
 
 // Pruner is the narrow store capability the sweep consumes, defined here at the consumer and
 // satisfied by *neo4j.Store and the fakes in mock. DeleteIfStale deletes a candidate only while
-// it is still unpinned and last accessed before `before`, and reports whether it did.
+// it is still unpinned and last accessed before `before`, and reports whether it did. A row
+// that is already gone is (false, nil), not an error.
 type Pruner interface {
 	PruneCandidates(ctx context.Context, before time.Time, limit int) ([]engram.Memory, error)
 	DeleteIfStale(ctx context.Context, id engram.MemoryID, before time.Time) (deleted bool, err error)
@@ -65,7 +66,8 @@ func New(p Pruner, d engram.DecayModel, c engram.Clock, interval, grace time.Dur
 // SweepOnce runs one prune pass as of now: it fetches candidates last accessed before now minus
 // the grace period and deletes those whose retrievability is below the hard floor (pinned
 // memories are skipped defensively). Each delete re-checks the same cutoff in the store, so a
-// candidate pinned, reinforced or deleted since the read is kept, not counted and not logged.
+// candidate pinned or reinforced since the read is kept, and one already deleted is skipped;
+// neither is counted or logged.
 // now is passed explicitly so the eval can virtualize time.
 func (s *Sweeper) SweepOnce(ctx context.Context, now time.Time) (pruned int, err error) {
 	before := now.Add(-s.grace)

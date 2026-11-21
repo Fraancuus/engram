@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -204,9 +205,12 @@ func TestDoRememberStoresContentWhenDedupTargetIsGone(t *testing.T) {
 		supersedes     []string
 		wantSuperseded []string
 		wantStoreSup   string // fmt.Sprint of FakeStore.Superseded
+		entities       []string
 	}{
 		{name: "target gone", cands: []engram.RecallResult{cand("gone", 0.97, false)},
 			wantStoreSup: "[]"},
+		{name: "target gone with entities", cands: []engram.RecallResult{cand("gone", 0.97, false)},
+			wantStoreSup: "[]", entities: []string{"Ada"}},
 		// The correction dedups into its own earlier insert, which the sweep deleted.
 		{name: "target gone on a correction", cands: []engram.RecallResult{cand("gone", 0.99, false)},
 			supersedes: []string{"old"}, wantSuperseded: []string{"old"}, wantStoreSup: "[[old]]"},
@@ -215,11 +219,28 @@ func TestDoRememberStoresContentWhenDedupTargetIsGone(t *testing.T) {
 			t.Parallel()
 			st := &mock.FakeStore{SearchResults: tc.cands, ReinforceErrs: map[engram.MemoryID]error{"gone": gone}}
 			h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+			var logs bytes.Buffer
+			h.log = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 			in := validRemember()
 			in.Supersedes = tc.supersedes
+			in.Entities = tc.entities
 			out, err := h.doRemember(context.Background(), in)
 			if err != nil {
 				t.Fatalf("doRemember: %v; want the content stored when the dedup target is gone", err)
+			}
+			if !slices.Equal(st.Reinforced, []engram.MemoryID{"gone"}) {
+				t.Errorf("Reinforced = %v, want exactly [gone]", st.Reinforced)
+			}
+			if n := strings.Count(logs.String(), "level=DEBUG"); n != 1 {
+				t.Errorf("%d debug records, want 1; log: %q", n, logs.String())
+			}
+			if len(tc.entities) > 0 {
+				if !slices.Equal(st.Linked["test-id"], tc.entities) {
+					t.Errorf("Linked[test-id] = %v, want %v", st.Linked["test-id"], tc.entities)
+				}
+				if _, ok := st.Linked["gone"]; ok || len(st.Linked) != 1 {
+					t.Errorf("Linked = %v, want only the new id", st.Linked)
+				}
 			}
 			if out.Deduped || out.MemoryID != "test-id" {
 				t.Errorf("out = %+v, want the new id test-id and deduped false", out)

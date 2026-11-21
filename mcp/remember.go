@@ -184,6 +184,7 @@ func (t *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberO
 			}
 			return RememberOutput{MemoryID: string(target.ID), Deduped: true, Superseded: t.applySupersedes(ctx, replaces)}, nil
 		case errors.Is(err, engram.ErrNotFound):
+			t.log.Debug("remember: dedup target deleted before its reinforce", "id", target.ID)
 			// The target was deleted since the search. Fall through and store the content as a
 			// new memory: failing here would lose it.
 		default:

@@ -597,11 +597,12 @@ func TestRecallToleratesDeletedHit(t *testing.T) {
 		name           string
 		errs           map[engram.MemoryID]error
 		wantErrRecords int
+		wantGone       []string // ids that get one debug record each
 		wantPropagated []engram.MemoryID
 	}{
-		{"second hit gone", map[engram.MemoryID]error{"s2": gone("s2")}, 0, []engram.MemoryID{"s1", "s3"}},
-		{"every hit gone", map[engram.MemoryID]error{"s1": gone("s1"), "s2": gone("s2"), "s3": gone("s3")}, 0, nil},
-		{"another error is still logged", map[engram.MemoryID]error{"s2": errors.New("db-down")}, 1, []engram.MemoryID{"s1", "s3"}},
+		{"second hit gone", map[engram.MemoryID]error{"s2": gone("s2")}, 0, []string{"s2"}, []engram.MemoryID{"s1", "s3"}},
+		{"every hit gone", map[engram.MemoryID]error{"s1": gone("s1"), "s2": gone("s2"), "s3": gone("s3")}, 0, []string{"s1", "s2", "s3"}, nil},
+		{"another error is still logged", map[engram.MemoryID]error{"s2": errors.New("db-down")}, 1, nil, []engram.MemoryID{"s1", "s3"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -616,7 +617,7 @@ func TestRecallToleratesDeletedHit(t *testing.T) {
 			}
 			h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
 			h.reranker = nil // a FakeReranker without scores logs an error of its own
-			h.log = slog.New(slog.NewTextHandler(&logs, nil))
+			h.log = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 			out, err := h.doRecall(context.Background(), RecallInput{Query: "q"})
 			if err != nil {
@@ -631,6 +632,14 @@ func TestRecallToleratesDeletedHit(t *testing.T) {
 			}
 			if n := strings.Count(logs.String(), "level=ERROR"); n != tc.wantErrRecords {
 				t.Errorf("%d error-level records, want %d; log: %q", n, tc.wantErrRecords, logs.String())
+			}
+			if n := strings.Count(logs.String(), "level=DEBUG"); n != len(tc.wantGone) {
+				t.Errorf("%d debug records, want %d; log: %q", n, len(tc.wantGone), logs.String())
+			}
+			for _, id := range tc.wantGone {
+				if !strings.Contains(logs.String(), "id="+id) {
+					t.Errorf("log does not name the gone id %s: %q", id, logs.String())
+				}
 			}
 			if !slices.Equal(st.Propagated, tc.wantPropagated) {
 				t.Errorf("PropagateReinforce ids = %v, want %v", st.Propagated, tc.wantPropagated)

@@ -184,8 +184,9 @@ func (s *Store) Reinforce(ctx context.Context, id engram.MemoryID, now time.Time
 	// 0, and the code below maps 0 to engram.ErrNotFound. The increment is on the re-matched
 	// row, not in the first SET, because a statement that reads a property before it writes
 	// deadlocks against the lock-first DeleteIfStale. The driver retries the deadlock, so the
-	// call still succeeds, but it takes about 2 s instead of a few milliseconds. Any writer on
-	// :Memory must write before it reads.
+	// call still succeeds, but it takes about 2 s instead of a few milliseconds. A writer that
+	// reports on one row must write before it reads. PropagateReinforce reads its neighbours
+	// first: it claims nothing about one row and relies on the driver's retry.
 	const q = `
 MATCH (m:Memory {id: $id})
 SET m.last_accessed = $now

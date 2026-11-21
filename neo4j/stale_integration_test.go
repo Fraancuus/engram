@@ -122,6 +122,12 @@ func TestStoreDeleteIfStale(t *testing.T) {
 			}
 		}
 
+		// The setup gives x three edges: x to y, y to x, and x to the entity.
+		if n := rawCount(t, `MATCH (:Memory {id: $x})-[r]-() RETURN count(r) AS c`,
+			map[string]any{"x": string(x)}); n != 3 {
+			t.Fatalf("%d relationships on x before the delete, want 3", n)
+		}
+
 		deleted, err := s.DeleteIfStale(ctx, x, cutoff)
 		if !deleted || err != nil {
 			t.Fatalf("DeleteIfStale = (%v, %v), want (true, <nil>)", deleted, err)
@@ -218,28 +224,30 @@ RETURN m.id AS id, coalesce(m.pinned, false) AS pinned, m.access_count AS access
 // ago). Every round must end in one of two states: the writer returned nil, DeleteIfStale
 // returned false, and the row is there with the write applied; or the writer returned
 // engram.ErrNotFound, DeleteIfStale returned true, and the row is gone. Both states must occur
-// in each pairing, so a run in which the two calls never overlapped cannot pass. The test
-// asserts no wall time: a deadlock retry costs about 2 s and is correct, so a time limit would
-// only make it flaky. The context deadline is there only to stop a hang.
+// in each pairing, which shows that both orders happened. It does not show that the calls
+// overlapped at the server: rounds that alternate without overlapping also give both states.
+// Only a failing run against a delete without its dummy write, or against the old writers,
+// shows overlap (design D7). The test asserts no wall time: a deadlock retry costs about 2 s
+// and is correct, so a time limit would only make it flaky. Each round has its own 30 s
+// context, there only to stop a hang, so many correct retries across the 200 rounds cannot
+// fail the test on time.
 func TestStoreWriterNeverAcknowledgesADeletedRow(t *testing.T) {
 	s := testStore(t)
 	d := testDriver(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	cutoff := now.Add(-time.Hour)
 	const rounds = 100
 
 	for _, tc := range []struct {
 		name    string
-		write   func(id engram.MemoryID) error
+		write   func(ctx context.Context, id engram.MemoryID) error
 		applied func(r rowState) bool // the writer's change is on the kept row
 		want    string                // what applied checks, for the failure message
 	}{
-		{"Reinforce", func(id engram.MemoryID) error { return s.Reinforce(ctx, id, now) },
+		{"Reinforce", func(ctx context.Context, id engram.MemoryID) error { return s.Reinforce(ctx, id, now) },
 			func(r rowState) bool { return r.accessCount == 1 && r.lastAccessed.Equal(now) }, // rows start at 0
 			fmt.Sprintf("access_count 1 and last_accessed %v", now)},
-		{"Pin", func(id engram.MemoryID) error { return s.Pin(ctx, id) },
+		{"Pin", func(ctx context.Context, id engram.MemoryID) error { return s.Pin(ctx, id) },
 			func(r rowState) bool { return r.pinned }, "pinned true"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -255,6 +263,7 @@ func TestStoreWriterNeverAcknowledgesADeletedRow(t *testing.T) {
 				// on odd ones, so both orders occur as well as true overlaps.
 				lag := time.Duration(i%3) * time.Millisecond
 				writerFirst := i%2 == 0
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				gate := make(chan struct{})
 				var wg sync.WaitGroup
 				wg.Add(2)
@@ -264,7 +273,7 @@ func TestStoreWriterNeverAcknowledgesADeletedRow(t *testing.T) {
 					if !writerFirst {
 						time.Sleep(lag)
 					}
-					outs[i].writeErr = tc.write(id)
+					outs[i].writeErr = tc.write(ctx, id)
 				}()
 				go func() {
 					defer wg.Done()
@@ -276,6 +285,7 @@ func TestStoreWriterNeverAcknowledgesADeletedRow(t *testing.T) {
 				}()
 				close(gate)
 				wg.Wait()
+				cancel()
 			}
 
 			rows := rowStates(t, d, ids) // nothing touches a row after its round
@@ -296,7 +306,7 @@ func TestStoreWriterNeverAcknowledgesADeletedRow(t *testing.T) {
 			}
 			t.Logf("%s: %d rounds kept the row with the write, %d deleted it, of %d", tc.name, kept, gone, rounds)
 			if kept == 0 || gone == 0 {
-				t.Errorf("%s: %d kept, %d deleted; both end states must occur, or the writer and the delete did not race",
+				t.Errorf("%s: %d kept, %d deleted; both end states must occur, or one side always won",
 					tc.name, kept, gone)
 			}
 		})

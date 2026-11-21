@@ -277,8 +277,9 @@ func (t *Tools) reinforce(ctx context.Context, results []engram.RecallResult, no
 		if err := t.store.Reinforce(ctx, r.ID, now); err != nil {
 			if errors.Is(err, engram.ErrNotFound) {
 				// The sweep or a hard forget removed the row after the search: a benign race.
-				// Debug and not silence, so a store that starts returning not-found for live
-				// rows still shows when the log level allows debug.
+				// Debug and not silence, so a host that lowers the slog level can see a store
+				// that starts returning not-found for live rows. engramd logs at Info and has
+				// no switch for that today.
 				t.log.Debug("recall: hit deleted before its reinforce", "id", r.ID)
 				continue
 			}
