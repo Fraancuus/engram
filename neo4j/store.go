@@ -2,6 +2,7 @@ package neo4j
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -424,6 +425,20 @@ RETURN c`
 		return fmt.Errorf("delete %q: %w", id, engram.ErrNotFound)
 	}
 	return nil
+}
+
+// DeleteIfStale deletes the memory unconditionally, as Delete does, and reports whether it did;
+// an unknown id is (false, nil).
+// shortcut: no stale re-check yet, so a row changed since the candidate read is still deleted, as
+// before; the lock-first statement replaces this body in the next commit to this file.
+func (s *Store) DeleteIfStale(ctx context.Context, id engram.MemoryID, _ time.Time) (bool, error) {
+	if err := s.Delete(ctx, id); err != nil {
+		if errors.Is(err, engram.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // PruneCandidates returns up to limit non-pinned memories whose last_accessed predates
