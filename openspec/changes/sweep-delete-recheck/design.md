@@ -370,6 +370,9 @@ back; it loses nothing by itself.
 
 ## Open Questions
 
+Closed on 2026-11-21: Franco reviewed the visual plan and said to go ahead, without changing an
+answer. The recommended option stands for each question below.
+
 1. Should `forget` with mode pin say more than "memory not found" when the memory was pruned?
    Recommended: leave the message as it is in this change.
 2. Lock-first is documented by Neo4j, measured on 5.26 only and guarded by a test CI does not
