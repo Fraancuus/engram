@@ -1,0 +1,362 @@
+---
+title: "Sweep on Start: the first decay pass one minute after start"
+kind: plan
+localOnly: true
+---
+
+### Summary
+
+`Sweeper.Run` waits one full tick before its first pass, and `cmd/engramd` sets the tick to one hour. An agent host starts `engramd` for one session and stops it when the session ends, usually inside the hour, so the hard-prune that M4 shipped rarely runs in real use.
+
+After this change, `Run(ctx, firstDelay)` runs one pass when `firstDelay` has elapsed, then one pass per interval. `engramd` passes one minute, so the first pass runs one minute after start and then hourly. This is not a new milestone. It corrects the scheduled sweep of M4 (PRD section 9) as post-M6 cleanup.
+
+**The eval does not move.** The eval calls `sweep.New` and `SweepOnce` with virtual time and never calls `Run` (`eval/arm.go:215-217`). `New` keeps its signature, and `SweepOnce` returns the same count and error for every input.
+
+Franco answered the open questions on 2026-11-15. The Decisions section at the bottom records them.
+
+<Diagram id="schedule-before-after" frame="hide" caption="The sweep schedule over the first two hours of an engramd process, roughly to scale. The dashed line marks one session that ends inside the hour; it is illustrative, not a measured length.">
+
+```html
+<div class="diagram-panel" data-rough style="padding:16px">
+  <div class="sched">
+    <div class="lane"><span class="diagram-pill">Today</span><span class="diagram-muted">first pass one hour after start</span></div>
+    <div class="track">
+      <span class="rail"></span>
+      <span class="sess" style="left:25%"></span>
+      <span class="start" style="left:0%"></span>
+      <span class="lbl below" style="left:0%">start</span>
+      <span class="pass" style="left:42.9%"></span>
+      <span class="lbl above" style="left:42.9%">60 min</span>
+      <span class="pass" style="left:85.7%"></span>
+      <span class="lbl above" style="left:85.7%">120 min</span>
+    </div>
+    <div class="lane"><span class="diagram-pill">After</span><span class="diagram-muted">first pass one minute after start, then hourly</span></div>
+    <div class="track">
+      <span class="rail"></span>
+      <span class="sess" style="left:25%"></span>
+      <span class="start" style="left:0%"></span>
+      <span class="lbl below" style="left:0%">start</span>
+      <span class="pass" style="left:0.7%"></span>
+      <span class="lbl above left" style="left:0.7%">1 min</span>
+      <span class="pass" style="left:43.6%"></span>
+      <span class="lbl above" style="left:43.6%">+1 h</span>
+      <span class="pass" style="left:86.4%"></span>
+      <span class="lbl above" style="left:86.4%">+1 h</span>
+    </div>
+    <div class="sess-row"><span class="sess-lbl" style="left:25%">a typical session ends here</span></div>
+  </div>
+  <div class="legend diagram-muted">Bar: engramd starts. Dot: a sweep pass. Dashed line: the session ends.</div>
+</div>
+```
+
+```css
+.sched { display: grid; gap: 4px; }
+.lane { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.track { position: relative; height: 68px; margin: 0 12px; }
+.rail { position: absolute; left: 0; right: 0; top: 36px; border-top: 2px solid var(--wf-line); }
+.start { position: absolute; top: 26px; width: 0; height: 22px; border-left: 2px solid var(--wf-ink); }
+.pass { position: absolute; top: 30px; width: 14px; height: 14px; margin-left: -7px; box-sizing: border-box; border-radius: 50%; background: var(--wf-accent); border: 2px solid var(--wf-accent); }
+.sess { position: absolute; top: 4px; bottom: 4px; width: 0; border-left: 2px dashed var(--wf-warn); }
+.lbl { position: absolute; font-size: 12px; line-height: 1.2; white-space: nowrap; color: var(--wf-ink); }
+.above { top: 8px; transform: translateX(-50%); }
+.above.left { transform: none; }
+.below { top: 52px; }
+.sess-row { position: relative; height: 20px; margin: 0 12px; }
+.sess-lbl { position: absolute; transform: translateX(-50%); font-size: 12px; white-space: nowrap; color: var(--wf-warn); }
+.legend { font-size: 12px; margin-top: 10px; }
+```
+
+</Diagram>
+
+<Callout id="backlog-warning" tone="warning">
+
+**This change makes hard-prune real for the first time, and the first pass deletes the backlog permanently.** A pass hard-deletes every unpinned memory idle more than 30 days whose retrievability is below 0.02, in every namespace, up to 500 candidates per pass. A read-only count on the dev store on 2026-11-15 found 164 candidates. A pass would delete 163 of them (118 semantic, 45 episodic) and keep 1 semantic row still above the floor. All 164 sit in the `m1-*` to `m4-*` namespaces the `mcp` integration tests create. No row outside a test namespace is a candidate today. Every integration run before the fixture edits adds more rows of the same kind.
+
+The pass runs one minute into the first session started with a rebuilt `engramd`, not at merge. Soft-forgotten and superseded rows go by the same rule, and once a pass deletes them, `include_forgotten` cannot bring them back. Reverting the PR restores no row. Franco agreed on 2026-11-15 that this pass may run on the dev store.
+
+</Callout>
+
+### When the first pass runs
+
+Three schedules were weighed. The table shows what each one does for the kinds of process that exist.
+
+<Table
+  id="schedule-comparison"
+  columns={["Process", "At start (delay 0)", "One minute, then hourly (chosen)", "Every ten minutes, no code change"]}
+  rows={[
+    ["Tool-listing probe, lives under a second", "Starts a pass and abandons it", "Nothing", "Nothing"],
+    ["One-shot claude -p run, seconds to a minute", "Prunes", "Usually nothing", "Nothing"],
+    ["Integration suite's engramd (5.4 s measured)", "Sweeps the shared store mid-suite", "Nothing", "Nothing"],
+    ["Working session, ten minutes or more", "Prunes", "Prunes", "Prunes"],
+    ["Session of several hours", "1 pass, then hourly", "1 pass, then hourly", "A pass every ten minutes"],
+    ["New code", "1 line", "A parameter and its tests", "None"],
+  ]}
+  density="compact"
+/>
+
+**Decided: one minute, then hourly.** `cmd/engramd/main.go` gains `sweepFirstDelay = time.Minute` next to `sweepInterval`, passes it to `Run`, and adds it to the startup log line as `sweep_first_delay`. There is no flag and no environment variable.
+
+**Why not zero.** A host that starts the server only to list its tools would start a pass and abandon it, and a pass cut off by a cancelled context logs an error for each remaining candidate. `TestStdioAllTools` starts two real `engramd` processes while other packages' integration tests use the same Neo4j. With a pass at start, the suite itself would delete any future fixture that is old and decayed, at random. A pass at start also competes with the session's first tool calls.
+
+**Why not ten minutes.** It is the cheapest fix, and it works for long sessions. It moves the first pass by changing the cadence, so the two cannot be set apart. Ten minutes still misses sessions under ten minutes, and a first pass at one minute would mean a store scan every minute for the life of every process.
+
+**What the delay costs.** A session shorter than a minute never prunes. A row becomes prunable only after 30 idle days, so the next longer session is soon enough. One minute is a judgement, not a measured optimum: it is long against the integration suite's 5.4 seconds and short against a working session.
+
+**The cadence stays hourly in this change.** Franco also wants at most one pass a day for the whole store. That needs state shared between processes, kept in Neo4j, so it is the next change, `sweep-daily-claim`. It keeps the hourly tick as the moment each process tries.
+
+### How `Run` changes
+
+The delay is an argument to `Run`, not a field set by `New`. The delay matters only to `Run`, which has one caller (`cmd/engramd/main.go:81`). `New` already takes eight positional arguments and has three callers, and one of them is the eval, which this change must not touch.
+
+<AnnotatedCode
+  id="run-first-delay"
+  filename="sweep/sweep.go"
+  language="go"
+  code={"// Run drives SweepOnce until ctx is cancelled: one pass once firstDelay has elapsed, then one\n// per interval. A firstDelay of zero runs the first pass immediately. Each pass recovers from\n// a panic so one bad sweep cannot take the process down.\nfunc (s *Sweeper) Run(ctx context.Context, firstDelay time.Duration) {\n\tfirst := time.NewTimer(firstDelay)\n\tdefer first.Stop()\n\tselect {\n\tcase <-ctx.Done():\n\t\treturn\n\tcase <-first.C:\n\t\ts.tick(ctx)\n\t}\n\n\tt := time.NewTicker(s.interval)\n\tdefer t.Stop()\n\tfor {\n\t\tselect {\n\t\tcase <-ctx.Done():\n\t\t\treturn\n\t\tcase <-t.C:\n\t\t\ts.tick(ctx)\n\t\t}\n\t}\n}\n"}
+  annotations={[
+    {
+      lines: "5-12",
+      label: "First delay",
+      note: "One pass once `firstDelay` elapses. Cancelling `ctx` here returns with no pass. A delay of zero fires at once.",
+    },
+    {
+      lines: "11",
+      label: "Decay time",
+      note: "`tick` still reads `now` from `s.clock.Now()`, the injected clock. The timer decides only when a pass starts.",
+    },
+    {
+      lines: "14",
+      label: "Interval",
+      note: "The ticker starts after the first pass, so the second pass is one interval after the first pass ends.",
+    },
+  ]}
+/>
+
+Two kinds of time are involved, and they stay separate.
+
+<Table
+  id="two-kinds-of-time"
+  columns={["Kind", "What it is", "Where it comes from", "How tests control it"]}
+  rows={[
+    ["Decay time", "The now passed to SweepOnce", "tick reads s.clock.Now(), the injected engram.Clock. Unchanged", "The test's own engram.Clock"],
+    ["Schedule time", "When the goroutine wakes", "A time.Timer for the first delay, then a time.Ticker", "testing/synctest virtual time"],
+  ]}
+  density="compact"
+/>
+
+The schedule stays off `engram.Clock`. Moving it there would add a timer method to a domain port that the decay math and the eval use only for `Now()`, to serve one goroutine. `sweep/sweep.go` contains no `time.Now` call before or after the change.
+
+Inside `synctest.Test`, timers use a fake clock that advances only when every goroutine in the bubble is blocked. A test can then assert no pass one nanosecond before the delay and one pass at the delay without waiting in real time. `testing/synctest` has been in the standard library since Go 1.25, and `go.mod` says 1.26. The schedule tests were dry-run in a scratch copy of `main`: the first one fails on the old behaviour with `at the first delay: 0 passes, want 1`, all of them pass after the change, and three consecutive `-race` runs are green.
+
+Running passes in ordinary sessions brings three existing behaviours into play. The next three sections cover them.
+
+### A row that is already gone
+
+A pass reads its candidates, then deletes them one by one. A row can vanish in between, because another process's pass got to it first or the agent hard-forgot it. `Delete` then returns `engram.ErrNotFound`, and today each such row writes `sweep: delete failed` at error level to the host's MCP log. Before this change, two processes sweep the same rows only if both live past the hour. After it, any two sessions that start close together do. `SweepOnce` now skips the row quietly.
+
+<Code
+  id="errnotfound-branch"
+  filename="sweep/sweep.go (SweepOnce, the delete branch)"
+  language="go"
+  code={"if err := s.pruner.Delete(ctx, m.ID); err != nil {\n\tif errors.Is(err, engram.ErrNotFound) {\n\t\tcontinue // deleted since the candidate read\n\t}\n\ts.log.Error(\"sweep: delete failed\", \"id\", m.ID, \"err\", err)\n\tcontinue\n}\npruned++\n"}
+/>
+
+<Callout id="delete-probe" tone="info">
+
+**Probed against the live Neo4j.** In 200 rounds of two exactly overlapping deletes of one row through one driver, and 200 through two drivers, both callers got success, no call returned an error, and no row was left behind. Overlapping passes are safe. `ErrNotFound` is the outcome only for a pass that arrives after the other one has committed, or after a hard forget.
+
+</Callout>
+
+`SweepOnce` returns the same count and the same error as before for every input. A failed delete was already skipped and not counted; the one difference is that this error is no longer logged. Two consequences are accepted. The skipped row is not counted, and `LastPruned` and `TotalPruned` stay per process. When two deletes overlap exactly, both processes count the row, so across processes the counts can add up to more than the rows removed.
+
+### Integration fixtures a real pass cannot delete
+
+A real pass is store-wide, and the integration suite shares its Neo4j with whatever else is attached to it. Two groups of tests write rows a real pass deletes, and then read them back.
+
+<Table
+  id="fixture-groups"
+  columns={["Tests", "Rows they write", "Under a real pass"]}
+  rows={[
+    ["neo4j/decay_integration_test.go:98, 133, 178", "Episodic, last_accessed 100 days ago", "Retrievability about e^-50. Deleted"],
+    ["Every mcp integration test using liveHandlers (mcp/m1_integration_test.go:50)", "Written with a clock fixed at 2023-11-14", "Semantic rows at about e^-18, episodic lower. Deleted"],
+  ]}
+  density="compact"
+/>
+
+Today nothing sweeps, so these tests pass. After this change a developer's own session sweeps a minute after it starts, and a test that loses a row mid-run fails in a way that reads as a recall regression. `sweep/sweep_integration_test.go` is not affected: its year-2000 rows are a pinned row and a live procedural row, which a real pass keeps, and an episodic row the test itself expects gone. The fix is five test-only lines in three files.
+
+<Code
+  id="fixture-diff"
+  language="diff"
+  code={"neo4j/decay_integration_test.go (lines 98, 133, 178)\n-\told := time.Now().UTC().Add(-100 * 24 * time.Hour)\n+\told := time.Now().UTC().Add(-48 * time.Hour)\n\nmcp/m1_integration_test.go:50\n-\t\tclock:            fixedClock{},\n+\t\tclock:            clockAt(time.Now().UTC()), // real \"now\": a 2023 clock makes rows sweep-eligible\n\nmcp/m4_integration_test.go:26\n-\tt0 := (fixedClock{}).Now()\n+\tt0 := h.clock.Now()\n"}
+/>
+
+`clockAt` already exists in `mcp/m4_integration_test.go`. Each test still proves what it did. `TestStorePruneCandidates` uses its own 24-hour cutoff, so a 48-hour row is still a candidate for the test. The two propagation tests need only an `old` well before now, and the `mcp` tests need only one shared instant.
+
+<Callout id="fixture-probe" tone="success">
+
+**Probed against the live stack in a scratch copy.** `./mcp` passes 117 tests before and after the edit. `./neo4j` gives the same results before and after: 27 pass, and `TestStoreSearch` fails both times for a reason unrelated to the sweep (see Risks). Of the rows the edited tests wrote, none is a sweep candidate. Of the rows the unedited tests wrote, 32 are.
+
+</Callout>
+
+`CONTRIBUTING.md` gains one line so new fixtures keep to the rule: integration fixtures are pinned, live procedural, or younger than 30 days.
+
+### The stdio test and the tool description
+
+`TestStdioAllTools` asserts `sweep.last_run_at` is null on the real binary. With a one-minute delay it would still pass, by a margin of timing and nothing else. It becomes a shape check:
+
+- `last_run_at` is null or a string that parses as RFC 3339.
+- `last_pruned` and `total_pruned` are numbers, zero or more.
+- If `last_run_at` is null, both counts are 0.
+
+It also asserts that the startup log of process `a` contains `sweep_first_delay=1m0s` and `sweep_interval=1h0m0s`. The exact null-and-zero wire shape stays pinned in `mcp/stats_test.go`, which injects the stats function and asserts the JSON. Every other test that expects empty stats either never starts `Run` or injects a stats function, so none of them changes.
+
+The stats contract does not change: `sweep.last_run_at` is null until a pass completes, and the counts are 0. The `memory_stats` description changes one sentence.
+
+<Diff
+  id="description-diff"
+  filename="mcp/server.go:149 (memory_stats description)"
+  language="text"
+  mode="unified"
+  before={"Sweep stats are store-wide since process start, and read null and 0 until the first hourly sweep.\n"}
+  after={"Sweep stats span all namespaces but only this server process's passes; null and 0 say nothing about the store.\n"}
+/>
+
+The stats are per process, so every new session starts at null even if another process swept a minute earlier. The new sentence says so. It names no duration, because the delay belongs to `cmd/engramd`, not to `mcp`. It stays true when the next change lets only one process a day sweep.
+
+### What a pass does to each kind of row
+
+No branch of the sweep changes. The table matters because this change makes these branches run in real use.
+
+<Table
+  id="row-kinds"
+  columns={["Row", "What a pass does"]}
+  rows={[
+    ["Pinned", "Never a candidate. Kept"],
+    ["Accessed in the last 30 days", "Not a candidate. Kept"],
+    ["Idle more than 30 days, retrievability at or above 0.02", "Examined, kept"],
+    ["Idle more than 30 days, retrievability below 0.02", "Hard-deleted with its relationships. Not recoverable"],
+    ["Procedural and not superseded, under type-aware decay", "Retrievability stays 1. Kept"],
+    ["Soft-forgotten", "No special handling: deleted or kept by the rules above. Once deleted, include_forgotten cannot bring it back"],
+    ["Superseded", "Decays on the fast curve (stability 2 days), so it is deleted soon after the grace period"],
+    ["In another namespace", "Same rules. A pass is store-wide"],
+    ["Gone by the time the pass reaches it", "Skipped, not counted"],
+  ]}
+  density="compact"
+/>
+
+### Files touched
+
+<FileTree
+  id="files-production"
+  title="Production"
+  entries={[
+    { path: "sweep/sweep.go", change: "modified", note: "Run gains firstDelay; SweepOnce skips ErrNotFound; package and doc comments" },
+    { path: "cmd/engramd/main.go", change: "modified", note: "sweepFirstDelay = time.Minute, the Run call, sweep_first_delay in the startup log line" },
+    { path: "mcp/server.go", change: "modified", note: "One sentence of the memory_stats description. No field, schema or handler change" },
+  ]}
+/>
+
+<FileTree
+  id="files-tests"
+  title="Tests"
+  entries={[
+    { path: "sweep/sweep_test.go", change: "modified", note: "Schedule tests on testing/synctest; the two delete-error tests" },
+    { path: "mcp/stats_test.go", change: "modified", note: "statsOverTransport asserts the new description" },
+    { path: "cmd/engramd/stdio_integration_test.go", change: "modified", note: "Shape check of the sweep block; startup-log assertion" },
+    { path: "neo4j/decay_integration_test.go", change: "modified", note: "Three old values become 48 hours" },
+    { path: "mcp/m1_integration_test.go", change: "modified", note: "liveHandlers uses a clock fixed at the real start time" },
+    { path: "mcp/m4_integration_test.go", change: "modified", note: "t0 comes from the handler's clock" },
+  ]}
+/>
+
+<FileTree
+  id="files-docs"
+  title="Docs"
+  entries={[
+    { path: "docs/demo.md", change: "modified", note: "Lines 87-90: the sweep section fills in after a minute, per process, store-wide" },
+    { path: "docs/engram-prd-v1.md", change: "modified", note: "Line 158 adds the first pass; line 173 corrects 'the first sweep an hour in'" },
+    { path: "README.md", change: "modified", note: "Line 177: the sweep figures read empty until the first sweep, one minute after start" },
+    { path: "CONTRIBUTING.md", change: "modified", note: "One line on integration fixtures" },
+  ]}
+/>
+
+The spec deltas are one new capability and two modified ones:
+
+- `sweep-schedule` (new): when passes run, where each pass gets its time, and what a pass does with a row that is already gone.
+- `memory-stats`: the description wording, a scenario for the real binary where a pass may or may not have completed, and "`SweepOnce` unchanged" reworded to the count and error `SweepOnce` returns.
+- `agent-acceptance`: `docs/demo.md` must say when sweep stats are populated, instead of saying they read empty in a short session.
+
+The change adds no package, no interface and no method to a port. Nothing changes in the root package, `mock/`, the `neo4j` adapter code, `inference/`, the schema, `eval/`, `cmd/eval/` or the dependencies. `plans/m6-stats-demo/`, `docs/engram-m4-plan.md` and archived OpenSpec changes are records and stay as they are.
+
+### Tasks
+
+<Table
+  id="tasks"
+  columns={["#", "Task", "What proves it"]}
+  rows={[
+    ["1", "Run takes a first delay (sweep/)", "TestRunFirstPassAfterFirstDelay fails on the stub with 'at the first delay: 0 passes, want 1' and passes after. TestRunZeroFirstDelaySweepsAtStart, TestRunCancelledDuringFirstDelay, TestRunCancelledBetweenPasses, TestRunPassTimeFromInjectedClock, TestRunFirstPassFloorBoundary"],
+    ["2", "A row that is already gone (sweep/)", "TestSweepOnceAlreadyDeletedIsNotAnError and its guard TestSweepOnceOtherDeleteErrorStillLogged. Then go run ./cmd/eval --ci: the A/B/C table equals the baseline and the diff under eval/ and cmd/eval/ is empty. Any difference stops the work"],
+    ["3", "Tool description (mcp/)", "TestMemoryStatsOverTransport: the description contains 'this server process's passes' and not 'hourly'"],
+    ["4", "Integration fixtures (neo4j/, mcp/)", "The same pass and fail set before and after under -tags integration, with no skip naming unavailable. A read-only count finds no row from that run unpinned and idle more than 30 days"],
+    ["5", "engramd waits one minute (cmd/engramd/)", "TestStdioAllTools: the startup log contains sweep_first_delay=1m0s and sweep_interval=1h0m0s, and the sweep block passes the shape check"],
+    ["6", "Docs", "grep for 'hour after start', 'an hour in', 'first hourly' and 'read empty in a short session' over README.md, docs/demo.md, docs/engram-prd-v1.md, mcp/, cmd/ and sweep/ prints nothing"],
+    ["7", "Verify", "CI gates, integration on every package except the body of ./eval, the eval gate on the final tree, and a real engramd run longer than a minute"],
+  ]}
+  density="compact"
+/>
+
+Every Go task runs under `go test -race`. Verify runs `go build ./...`, `go test -race -coverprofile=cover.out ./...` and `golangci-lint run ./...`, then the integration suite with the stack up and the schema applied, where no skip may name `unavailable`. It runs `go run ./cmd/eval --ci` once more and reports the A/B/C table. The end-to-end check connects an MCP client to a built `engramd` for at least 70 seconds, calls `memory_stats`, and records in `verify.md` that `sweep.last_run_at` is an RFC 3339 timestamp, with the pruned counts. That run is the first real pass on the dev store, and Franco agreed to it on 2026-11-15. The `reviewer` agent reads the Go diff and `scoping-ux` reads the new tool description.
+
+### Risks
+
+<Table
+  id="risks"
+  columns={["Risk", "Mitigation"]}
+  rows={[
+    ["The first real pass deletes the backlog (the warning at the top)", "Franco agreed on 2026-11-15: the rows are test leftovers. The PR body states the numbers"],
+    ["A session under a minute never prunes", "Accepted. Pruning is housekeeping with no deadline"],
+    ["No automated test sees a populated sweep block through the real binary. The one untested link is WithSweepStats(sweeper.Stats) in main.go", "Verify runs engramd for more than a minute once, calls memory_stats, and records the output in verify.md"],
+    ["A future integration fixture is old and decayed, and a developer's own session deletes it mid-test", "This change fixes today's fixtures, and CONTRIBUTING.md states the rule for new ones"],
+    ["The candidate cap can starve the sweep. PruneCandidates returns at most 500 rows in no set order, so with more than 500 idle rows above the floor, rows below it may never be examined. This predates the change; on 2026-11-15, 164 rows are candidates", "Out of scope. Listed for Franco as a follow-up"],
+    ["testing/synctest needs Go 1.25 or newer", "go.mod says 1.26, and CI reads the Go version from it"],
+  ]}
+  density="compact"
+/>
+
+<Callout id="store-search-risk" tone="info">
+
+**`TestStoreSearch` broke on the dev volume, and that blocked a green integration run. It is cleared.** The cause is unrelated to this change. The `neo4j` and `sweep` integration tests write rows with the same one-hot embedding on every run and never remove them. `Search` asks the vector index for the 50 nearest rows store-wide and filters by namespace afterwards. With 512 identical vectors in the store, the test's new row was rarely among the 50, and the filter left nothing.
+
+On 2026-11-15, with Franco's agreement, the 684 rows in `itest-*` and `sweep-*` namespaces were deleted, and the test passes again. It will come back after enough runs. Making those tests clean up after themselves, and the store-wide-then-filter search behind the failure, are listed for Franco as follow-ups.
+
+</Callout>
+
+### Out of scope
+
+- A flag or environment variable for the first delay or the interval.
+- Persisting the time of the last sweep, or coordinating passes between processes. That is the next change, `sweep-daily-claim`.
+- Per-namespace sweep behaviour, which is v2.
+- Ordering or paging `PruneCandidates`, the candidate cap listed in Risks.
+- Stopping a pass early when its context is cancelled.
+- Changing the grace period, the floor, the batch size or the decay model.
+- A sweep at shutdown.
+- Making `TestStoreSearch` robust against leftover rows, listed in Risks.
+
+### Decisions
+
+Franco answered these on 2026-11-15. No question is open.
+
+<Table
+  id="decisions"
+  columns={["Question", "Decision"]}
+  rows={[
+    ["When does the first sweep pass run?", "One minute after the server starts"],
+    ["Is the ErrNotFound branch in SweepOnce part of this change?", "Yes"],
+    ["Are the integration fixture edits part of this change?", "Yes"],
+    ["May the first real pass run on the dev store?", "Yes. The rows are test leftovers"],
+    ["One sweep a day for the whole store, with the last-sweep time kept in Neo4j?", "Yes, as its own change: sweep-daily-claim. This change leaves the hourly interval alone"],
+    ["May the leftover rows in itest-* and sweep-* namespaces be deleted?", "Yes. Done the same day: 684 rows"],
+  ]}
+  density="compact"
+/>

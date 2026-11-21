@@ -1,12 +1,16 @@
 package sweep
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Fraancuus/engram"
@@ -266,5 +270,172 @@ func TestStatsConcurrentWithTick(t *testing.T) {
 	wg.Wait()
 	if s.Stats().LastRunAt.IsZero() {
 		t.Error("LastRunAt zero after 100 ticks")
+	}
+}
+
+// runSweeper builds a Sweeper whose every pass prunes one candidate at retrievability r, so
+// Stats().TotalPruned counts completed passes and the test never touches the fake store from
+// a second goroutine.
+func runSweeper(c engram.Clock, r float64) *Sweeper {
+	p := &mock.FakeStore{PruneCands: []engram.Memory{{ID: "a"}}}
+	return New(p, mock.FakeDecay{R: r}, c, time.Hour, 30*24*time.Hour, 0.02, 100,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+// startRun runs s.Run inside the current synctest bubble. stop cancels it and waits for it to
+// return, which the bubble requires before it can end.
+func startRun(s *Sweeper, firstDelay time.Duration) (stop func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.Run(ctx, firstDelay)
+	}()
+	return func() { cancel(); <-done }
+}
+
+func TestRunFirstPassAfterFirstDelay(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := runSweeper(fixedClock{}, 0)
+		stop := startRun(s, time.Minute)
+		defer stop()
+
+		time.Sleep(time.Minute - time.Nanosecond)
+		synctest.Wait()
+		if got := s.Stats().TotalPruned; got != 0 {
+			t.Fatalf("one nanosecond before the first delay: %d passes, want 0", got)
+		}
+		time.Sleep(time.Nanosecond)
+		synctest.Wait()
+		if got := s.Stats().TotalPruned; got != 1 {
+			t.Fatalf("at the first delay: %d passes, want 1", got)
+		}
+		time.Sleep(time.Hour - time.Nanosecond)
+		synctest.Wait()
+		if got := s.Stats().TotalPruned; got != 1 {
+			t.Fatalf("one nanosecond before the second pass is due: %d passes, want 1", got)
+		}
+		time.Sleep(time.Nanosecond)
+		synctest.Wait()
+		if got := s.Stats().TotalPruned; got != 2 {
+			t.Fatalf("one interval after the first pass: %d passes, want 2", got)
+		}
+	})
+}
+
+func TestRunZeroFirstDelaySweepsAtStart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := runSweeper(fixedClock{}, 0)
+		stop := startRun(s, 0)
+		defer stop()
+		synctest.Wait() // no time.Sleep: the pass must not need schedule time to elapse
+		if got := s.Stats().TotalPruned; got != 1 {
+			t.Fatalf("zero first delay: %d passes before any time elapsed, want 1", got)
+		}
+	})
+}
+
+func TestRunCancelledDuringFirstDelay(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := runSweeper(fixedClock{}, 0)
+		stop := startRun(s, time.Minute)
+		time.Sleep(30 * time.Second)
+		stop() // returns only when Run has returned
+		if got := s.Stats(); got != (engram.SweepStats{}) {
+			t.Fatalf("Stats() = %+v after cancelling inside the first delay, want zero", got)
+		}
+	})
+}
+
+func TestRunCancelledBetweenPasses(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := runSweeper(fixedClock{}, 0)
+		stop := startRun(s, time.Minute)
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		time.Sleep(30 * time.Minute)
+		stop()
+		if got := s.Stats().TotalPruned; got != 1 {
+			t.Fatalf("%d passes after cancelling between passes, want 1", got)
+		}
+	})
+}
+
+func TestRunPassTimeFromInjectedClock(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := runSweeper(&stepClock{t: statsT0}, 0)
+		stop := startRun(s, time.Minute)
+		defer stop()
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		if got := s.Stats().LastRunAt; !got.Equal(statsT0) {
+			t.Fatalf("LastRunAt = %v, want the injected clock's %v", got, statsT0)
+		}
+	})
+}
+
+func TestRunFirstPassFloorBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		r    float64
+		want int
+	}{{"at floor", 0.02, 0}, {"just below", 0.0199, 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s := runSweeper(&stepClock{t: statsT0}, tc.r)
+				stop := startRun(s, time.Minute)
+				defer stop()
+				time.Sleep(time.Minute)
+				synctest.Wait()
+				want := engram.SweepStats{LastRunAt: statsT0, LastPruned: tc.want, TotalPruned: tc.want}
+				if got := s.Stats(); got != want {
+					t.Fatalf("Stats() = %+v, want %+v", got, want)
+				}
+			})
+		})
+	}
+}
+
+func TestSweepOnceAlreadyDeletedIsNotAnError(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	p := &mock.FakeStore{
+		PruneCands: []engram.Memory{{ID: "a"}, {ID: "b"}},
+		DeleteErr:  fmt.Errorf("delete: %w", engram.ErrNotFound), // wrapped, as neo4j.Store returns it
+	}
+	s := New(p, mock.FakeDecay{R: 0}, &stepClock{t: statsT0}, time.Hour, 30*24*time.Hour, 0.02, 100,
+		slog.New(slog.NewTextHandler(&logs, nil)))
+
+	n, err := s.SweepOnce(context.Background(), statsT0)
+	if n != 0 || err != nil {
+		t.Fatalf("SweepOnce = (%d, %v), want (0, nil)", n, err)
+	}
+	if len(p.Deleted) != 2 {
+		t.Errorf("attempted %d deletes, want 2: the pass must continue past a missing row", len(p.Deleted))
+	}
+	if logs.Len() != 0 {
+		t.Errorf("logged %q, want nothing for rows that were already gone", logs.String())
+	}
+
+	s.tick(context.Background())
+	want := engram.SweepStats{LastRunAt: statsT0, LastPruned: 0, TotalPruned: 0}
+	if got := s.Stats(); got != want {
+		t.Errorf("Stats() = %+v, want %+v", got, want)
+	}
+}
+
+func TestSweepOnceOtherDeleteErrorStillLogged(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	p := &mock.FakeStore{PruneCands: []engram.Memory{{ID: "a"}}, DeleteErr: errors.New("boom")}
+	s := New(p, mock.FakeDecay{R: 0}, &stepClock{t: statsT0}, time.Hour, 30*24*time.Hour, 0.02, 100,
+		slog.New(slog.NewTextHandler(&logs, nil)))
+
+	n, err := s.SweepOnce(context.Background(), statsT0)
+	if n != 0 || err != nil {
+		t.Fatalf("SweepOnce = (%d, %v), want (0, nil)", n, err)
+	}
+	if got := strings.Count(logs.String(), "level=ERROR"); got != 1 {
+		t.Errorf("%d error-level records, want 1; log: %q", got, logs.String())
 	}
 }

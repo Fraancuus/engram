@@ -47,7 +47,7 @@ func liveHandlers(t *testing.T) *Tools {
 		forget:           store,
 		stats:            store,
 		statsRowCap:      defaultStatsRowCap,
-		clock:            fixedClock{},
+		clock:            clockAt(time.Now().UTC()), // real "now": a 2023 clock makes rows sweep-eligible
 		dedupThreshold:   defaultDedupThreshold,
 		seedN:            defaultSeedN,
 		rerankCandidates: defaultRerankCandidates,

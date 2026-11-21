@@ -424,6 +424,14 @@ func statsOverTransport(t *testing.T, ms *mock.MemStore, opts []Option, args map
 		if tl.Name == "memory_stats" && (tl.Annotations == nil || !tl.Annotations.ReadOnlyHint) {
 			t.Error("memory_stats lacks ReadOnlyHint")
 		}
+		if tl.Name == "memory_stats" {
+			if !strings.Contains(tl.Description, "this server process's passes") {
+				t.Errorf("memory_stats description does not say whose passes the sweep stats cover: %q", tl.Description)
+			}
+			if strings.Contains(tl.Description, "hourly") {
+				t.Errorf("memory_stats description still names the hourly wait: %q", tl.Description)
+			}
+		}
 	}
 	sort.Strings(names)
 	if want := []string{"forget", "memory_stats", "recall", "remember"}; !reflect.DeepEqual(names, want) {
