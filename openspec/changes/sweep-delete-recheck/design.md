@@ -251,7 +251,9 @@ as today. The hit stays in the reply: recall read it before it was deleted.
 
 With D3, `Reinforce` reports this case reliably, so without D5 a benign race would write an
 error line into the host's MCP log. Debug and not silence, so that a store that starts
-returning not-found for live rows can still be seen with the log level turned down.
+returning not-found for live rows can be seen by a host that lowers the `slog` level. `engramd`
+logs at Info and has no switch for that today; adding one is not part of this change.
+`remember` logs its fall-through (D4) at debug level for the same reason.
 
 ### D6. The fakes
 
@@ -268,7 +270,9 @@ returning not-found for live rows can still be seen with the log level turned do
   `DeleteIfStale` reports kept), `ReinforceErrs map[engram.MemoryID]error` (checked before the
   store-wide `ReinforceErr`), and `Propagated []engram.MemoryID` (every id given to
   `PropagateReinforce`, beside the existing `LastPropagateID`). A nil map reads as empty, so the
-  zero value is unchanged. The scripting lives in `mock/`, not in wrappers local to each test
+  zero value is unchanged. `FakeStore` is test scaffolding: the `memory-store-fake` spec states
+  requirements for `MemStore` only, and this is where `FakeStore`'s behaviour is written down.
+  The scripting lives in `mock/`, not in wrappers local to each test
   file.
 
 ### D7. Tests
@@ -286,8 +290,10 @@ returning not-found for live rows can still be seen with the log level turned do
   `DeleteIfStale`, 100 rounds each, released together with a head start of 0 to 2 ms that
   alternates. Every round must end in one of two states: writer nil, delete false, row present
   with the write applied; or writer `ErrNotFound`, delete true, row gone. Anything else fails
-  the test, and so does a run in which one of the two states never occurred, so a run that never
-  overlapped does not pass by accident. The test asserts no wall time: a deadlock retry costs 2 s
+  the test, and so does a run in which one of the two states never occurred. That second check
+  shows that both orders happened, not that the calls overlapped: rounds that alternate without
+  overlapping also give both states. Overlap is shown only by the failing runs below. Each call
+  has its own 30 s context as a hang guard. The test asserts no wall time: a deadlock retry costs 2 s
   and is correct, so a time limit would only make it flaky. Its context deadline is a hang
   guard. Measured in the plan's dry run under `-race`: six runs, every round in one of the two
   states, the writer first in 42 to 52 rounds of 100 and the delete first in the rest. The three
