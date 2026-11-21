@@ -64,7 +64,15 @@ type FakeStore struct {
 	LastPropagateID  engram.MemoryID
 	LastPropagateThr float64
 
-	CountsRes     engram.StoreCounts
+	// Per-id scripts and the sweep's cutoffs. A nil map reads as empty, so the zero value
+	// behaves as it did before these fields existed.
+	KeptIDs       map[engram.MemoryID]bool  // ids DeleteIfStale reports kept, as for a row changed since the read
+	ReinforceErrs map[engram.MemoryID]error // per-id Reinforce errors, checked before ReinforceErr
+	Propagated    []engram.MemoryID         // every id given to PropagateReinforce, in call order
+	StaleBefore   []time.Time               // the cutoff of every DeleteIfStale call
+	PruneBefore   time.Time                 // the cutoff of the last PruneCandidates call
+
+	CountsRes    engram.StoreCounts
 	CountsErr     error
 	LiveRes       []engram.Memory
 	LiveErr       error
@@ -85,9 +93,13 @@ func (f *FakeStore) Search(_ context.Context, namespaces []engram.Namespace, vec
 	return f.SearchResults, f.SearchErr
 }
 
-// Reinforce records the id and returns the configured ReinforceErr.
+// Reinforce records the id and returns ReinforceErrs[id] when that id has one, otherwise
+// the configured ReinforceErr.
 func (f *FakeStore) Reinforce(_ context.Context, id engram.MemoryID, _ time.Time) error {
 	f.Reinforced = append(f.Reinforced, id)
+	if err, ok := f.ReinforceErrs[id]; ok {
+		return err
+	}
 	return f.ReinforceErr
 }
 
@@ -139,14 +151,25 @@ func (f *FakeStore) Delete(_ context.Context, id engram.MemoryID) error {
 	return f.DeleteErr
 }
 
-// PropagateReinforce records the id and threshold and returns the configured error.
+// DeleteIfStale records the id in Deleted and the cutoff in StaleBefore. It reports a delete
+// unless the id is in KeptIDs or DeleteErr is set, so the zero value deletes as Delete does.
+func (f *FakeStore) DeleteIfStale(_ context.Context, id engram.MemoryID, before time.Time) (bool, error) {
+	f.Deleted = append(f.Deleted, id)
+	f.StaleBefore = append(f.StaleBefore, before)
+	return !f.KeptIDs[id] && f.DeleteErr == nil, f.DeleteErr
+}
+
+// PropagateReinforce records the id in Propagated, records the id and threshold of the last
+// call, and returns the configured error.
 func (f *FakeStore) PropagateReinforce(_ context.Context, id engram.MemoryID, threshold float64, _ time.Time) error {
 	f.LastPropagateID, f.LastPropagateThr = id, threshold
+	f.Propagated = append(f.Propagated, id)
 	return f.PropagateErr
 }
 
-// PruneCandidates returns the configured candidates/error.
-func (f *FakeStore) PruneCandidates(_ context.Context, _ time.Time, _ int) ([]engram.Memory, error) {
+// PruneCandidates records the cutoff in PruneBefore and returns the configured candidates/error.
+func (f *FakeStore) PruneCandidates(_ context.Context, before time.Time, _ int) ([]engram.Memory, error) {
+	f.PruneBefore = before
 	return f.PruneCands, f.PruneErr
 }
 
