@@ -1,0 +1,614 @@
+---
+title: "Sweep Delete Recheck: the sweep deletes only rows that are still stale"
+kind: plan
+localOnly: true
+---
+
+### Summary
+
+<Callout id="summary" tone="warning">
+
+**The defect.** A sweep pass reads its candidates, then deletes each one by id without looking at the row again. So a memory that another session pins or reinforces during the pass can still be deleted, while `Reinforce` and `Pin` tell their caller OK. A `remember` that dedups onto such a row answers `deduped: true`, and its content is stored nowhere.
+
+**The fix.** The sweep deletes through a new `DeleteIfStale`, which takes the row's write lock first and only then re-checks that the row is unpinned and still last accessed before the cutoff. `Reinforce`, `Pin` and `SetForgotten` match the row again after their write and return `engram.ErrNotFound` when it is gone. `remember` then stores the content as a new memory. `recall` still returns the vanished hit, skips its reinforcement and propagation, and logs it at debug level.
+
+</Callout>
+
+This is not a new milestone. It corrects M4 (PRD section 9: scheduled sweep, reinforcement, `forget` and pin) and restores PRD section 6.3, "Pinned memories are exempt". It is post-M6 cleanup, after `sweep-on-start`. The race is as old as M4's sweep. Since PR #38 a pass runs one minute into every session, so ordinary sessions now reach it. It is rare, silent and permanent.
+
+**The eval does not move.** Inside the eval one goroutine drives the store, so the re-check is always true. The gate runs right after the sweep task, and any difference stops the work.
+
+### The defect
+
+<Diagram id="race-timeline" frame="hide" caption="The race today, on one row X. The writer can also wait for X's lock while the delete holds it. Its SET then lands on nothing, and it still returns success.">
+
+```html
+<div class="diagram-panel" data-rough style="padding:16px">
+  <div class="tl">
+    <div></div>
+    <div class="hd diagram-muted">1</div>
+    <div class="hd diagram-muted">2</div>
+    <div class="hd diagram-muted">3</div>
+    <div class="hd diagram-muted">4</div>
+    <div class="lane"><span class="diagram-pill">Sweep pass</span></div>
+    <div class="diagram-node">PruneCandidates reads X. X is unpinned, idle more than 30 days, and below the floor.</div>
+    <div></div>
+    <div class="diagram-node bad">Delete(X) by id. It does not look at X again. X is gone, with its relationships.</div>
+    <div></div>
+    <div class="lane"><span class="diagram-pill">Another session</span></div>
+    <div></div>
+    <div class="diagram-node">Pins X, reinforces X, or a remember dedups onto X.</div>
+    <div></div>
+    <div class="diagram-node bad">The writer was told OK. remember answered deduped: true. Its content is stored nowhere.</div>
+  </div>
+  <div class="axis diagram-muted">time</div>
+</div>
+```
+
+```css
+.tl { display: grid; grid-template-columns: 112px repeat(4, minmax(0, 1fr)); gap: 10px; align-items: stretch; }
+.hd { font-size: 12px; text-align: center; }
+.lane { display: flex; align-items: center; }
+.tl .diagram-node { font-size: 12px; line-height: 1.35; padding: 8px; }
+.tl .bad { border-color: var(--wf-warn); color: var(--wf-warn); }
+.axis { margin: 10px 0 0 122px; border-top: 2px solid var(--wf-line); padding-top: 4px; font-size: 12px; }
+```
+
+</Diagram>
+
+The defect has two halves.
+
+**The delete does not look again.** The candidates are a snapshot. `Delete` (`neo4j/store.go:412`) is `MATCH (m:Memory {id: $id}) WITH m, count(m) AS c DETACH DELETE m RETURN c`. It does not look at the row, so a row pinned or reinforced after the read is deleted all the same.
+
+**The writers report success on a row that is gone.** `Reinforce` (`neo4j/store.go:180`) and `Pin` (`:384`) are `MATCH ... SET ... RETURN count(m)`. When the row is deleted while they wait for its lock, the `SET` is a silent no-op and the count is still 1. They return nil for a row that is gone. `remember` then answers `deduped: true` while the content is stored nowhere.
+
+### Why a WHERE on the delete is not enough
+
+The obvious fix is to add the stale predicate to the delete, as `MATCH ... WHERE ... DETACH DELETE`. It does not work. Neo4j evaluates `MATCH` and `WHERE` before it takes the row's write lock, so the `WHERE` reads the row as it was before a concurrent writer committed.
+
+<Callout id="where-probe" tone="info">
+
+**Measured on the live Neo4j 5.26.** A conditional delete written as `MATCH ... WHERE ... DETACH DELETE` still deleted the row in about 95% of overlapping rounds, after the writer had been told it succeeded.
+
+</Callout>
+
+The Neo4j Operations Manual documents this problem and its fix: "Concurrent data access", "Lost updates", example "Dummy property to acquire a write lock" (`https://neo4j.com/docs/operations-manual/current/database-internals/concurrent-data-access/`). Neo4j takes a node's write lock when a statement first writes to it, not when it matches it. A statement that writes a dummy property first waits for any writer that got there earlier, and what it reads after that write is committed. D1 uses this form.
+
+### The fix
+
+design.md has eight decisions. D1 to D6 are below; D7 (the tests) is under "The evidence" and "Tasks", and D8 (the eval) is under "The eval". No new package and no new interface. `sweep.Pruner` swaps one method, so it stays at two.
+
+#### D1. A sweep-only delete that locks, then re-checks
+
+<Code
+  id="d1-signature"
+  filename="neo4j/store.go"
+  language="go"
+  code={"// DeleteIfStale deletes the memory and its relationships only if it is still stale: unpinned,\n// with last_accessed before `before`, the predicate PruneCandidates(before) uses. It reports\n// whether it deleted. A row that changed since the sweep read it, or that is already gone, is\n// (false, nil). The re-check is complete only while every write that raises retrievability\n// sets last_accessed or pinned.\nfunc (s *Store) DeleteIfStale(ctx context.Context, id engram.MemoryID, before time.Time) (bool, error)\n"}
+/>
+
+<AnnotatedCode
+  id="d1-cypher"
+  filename="neo4j/store.go (the DeleteIfStale statement)"
+  language="cypher"
+  code={"MATCH (m:Memory {id: $id})\nSET m.sweep_check = true\nREMOVE m.sweep_check\nWITH m\nWHERE m.last_accessed < $before AND coalesce(m.pinned, false) = false\nDETACH DELETE m\nRETURN count(*) AS deleted\n"}
+  annotations={[
+    {
+      lines: "1",
+      label: "Match",
+      note: "Matching a node does not take its write lock.",
+    },
+    {
+      lines: "2-3",
+      label: "Dummy write",
+      note: "The SET is there for its lock: the statement waits for any writer that got there earlier. The REMOVE takes the property off in the same statement, so no row ever carries it.",
+    },
+    {
+      lines: "4-5",
+      label: "Re-check",
+      note: "The WHERE after the write reads committed values. It is the predicate PruneCandidates(before) uses. Both parameters are bound; before is passed as UTC.",
+    },
+    {
+      lines: "6-7",
+      label: "Delete or keep",
+      note: "A kept row and a missing id both return 0, which the Go code reports as (false, nil).",
+    },
+  ]}
+/>
+
+A code comment explains the `SET` and `REMOVE` pair and cites the manual section. Without it the pair reads as dead code, and the next cleanup removes it.
+
+Two other forms were tried:
+
+- **The predicate between the `SET` and the `REMOVE`.** An earlier draft. Both forms gave the same result in every probe cell: stale deleted, fresh kept, pinned kept, missing id 0, no property left behind, no lost write. The shorter one is the documented one, so it is kept.
+- **`SET m.id = m.id`.** It also took the lock in the probe. It is rejected: it writes the property the uniqueness constraint covers, and a no-op `SET` taking the lock is observed behaviour, not documented.
+
+**Cost.** 7 to 9 ms median per call in the probe, against 9 ms for the unconditional `Delete`. No measurable difference.
+
+**Why this re-check is complete.** Only three writers can turn "delete" into "keep": `Pin` (retrievability becomes 1), and `Reinforce` and `PropagateReinforce` (`last_accessed` becomes now). `Supersede` only lowers stability, and `SetForgotten` does not feed decay, so neither can. No handler overwrites a row with `Put`. So "unpinned and `last_accessed` before the cutoff" is a complete re-check.
+
+#### D2. sweep.Pruner swaps Delete for DeleteIfStale
+
+<Diff
+  id="d2-sweep"
+  filename="sweep/sweep.go (Pruner and SweepOnce, doc comments left out)"
+  language="go"
+  mode="unified"
+  before={"type Pruner interface {\n\tPruneCandidates(ctx context.Context, before time.Time, limit int) ([]engram.Memory, error)\n\tDelete(ctx context.Context, id engram.MemoryID) error\n}\n\nfunc (s *Sweeper) SweepOnce(ctx context.Context, now time.Time) (pruned int, err error) {\n\tcands, err := s.pruner.PruneCandidates(ctx, now.Add(-s.grace), s.batch)\n\tif err != nil {\n\t\treturn 0, fmt.Errorf(\"sweep candidates: %w\", err)\n\t}\n\tfor _, m := range cands {\n\t\tif m.Pinned {\n\t\t\tcontinue\n\t\t}\n\t\tif s.decay.Retrievability(m, now) < s.hardFloor {\n\t\t\tif err := s.pruner.Delete(ctx, m.ID); err != nil {\n\t\t\t\tif errors.Is(err, engram.ErrNotFound) {\n\t\t\t\t\tcontinue // deleted since the candidate read\n\t\t\t\t}\n\t\t\t\ts.log.Error(\"sweep: delete failed\", \"id\", m.ID, \"err\", err)\n\t\t\t\tcontinue\n\t\t\t}\n\t\t\tpruned++\n\t\t}\n\t}\n\treturn pruned, nil\n}\n"}
+  after={"type Pruner interface {\n\tPruneCandidates(ctx context.Context, before time.Time, limit int) ([]engram.Memory, error)\n\tDeleteIfStale(ctx context.Context, id engram.MemoryID, before time.Time) (deleted bool, err error)\n}\n\nfunc (s *Sweeper) SweepOnce(ctx context.Context, now time.Time) (pruned int, err error) {\n\tbefore := now.Add(-s.grace)\n\tcands, err := s.pruner.PruneCandidates(ctx, before, s.batch)\n\tif err != nil {\n\t\treturn 0, fmt.Errorf(\"sweep candidates: %w\", err)\n\t}\n\tfor _, m := range cands {\n\t\tif m.Pinned {\n\t\t\tcontinue\n\t\t}\n\t\tif s.decay.Retrievability(m, now) < s.hardFloor {\n\t\t\tdeleted, err := s.pruner.DeleteIfStale(ctx, m.ID, before)\n\t\t\tif err != nil {\n\t\t\t\ts.log.Error(\"sweep: delete failed\", \"id\", m.ID, \"err\", err)\n\t\t\t\tcontinue\n\t\t\t}\n\t\t\tif deleted {\n\t\t\t\tpruned++\n\t\t\t}\n\t\t}\n\t}\n\treturn pruned, nil\n}\n"}
+  annotations={[
+    {
+      side: "after",
+      lines: "3",
+      label: "Swapped, not added",
+      note: "The sweep has no use for an unconditional delete, and a third method would be dead surface on every implementation.",
+    },
+    {
+      side: "after",
+      lines: "7-8",
+      label: "One cutoff",
+      note: "One before feeds the candidate read and every delete of the pass.",
+    },
+    {
+      side: "after",
+      lines: "17-24",
+      label: "Count only real deletes",
+      note: "The ErrNotFound branch goes away: a missing row is now (false, nil). A real error is still logged and not counted.",
+    },
+  ]}
+/>
+
+`Delete` itself does not become conditional, because `forget` with mode hard reaches the same method and must delete whatever the agent names. The `mcp` interfaces `ServerStore` and `forgetStore` keep the unconditional `Delete`.
+
+`(false, nil)` covers both "kept because it changed" and "already gone". The sweep does the same thing for both: no count, no error-level log, next candidate. Nothing consumes the difference, so there is no third state and no counter of kept rows.
+
+#### D3. Writers match the row again after their write
+
+<Diff
+  id="d3-pin"
+  filename="neo4j/store.go (Pin; SetForgotten is the same with m.forgotten)"
+  language="cypher"
+  mode="unified"
+  before={"MATCH (m:Memory {id: $id}) SET m.pinned = true RETURN count(m) AS c\n"}
+  after={"MATCH (m:Memory {id: $id})\nSET m.pinned = true\nWITH m\nMATCH (x:Memory {id: $id})\nRETURN count(x) AS c\n"}
+  annotations={[
+    {
+      side: "after",
+      lines: "4-5",
+      label: "Re-match",
+      note: "Runs once the SET holds the row's lock. A row deleted while the SET waited counts 0, which flagOne already maps to engram.ErrNotFound.",
+    },
+  ]}
+/>
+
+<Diff
+  id="d3-reinforce"
+  filename="neo4j/store.go (Reinforce)"
+  language="cypher"
+  mode="unified"
+  before={"MATCH (m:Memory {id: $id})\nSET m.access_count = m.access_count + 1, m.last_accessed = $now\nRETURN count(m) AS c\n"}
+  after={"MATCH (m:Memory {id: $id})\nSET m.last_accessed = $now\nWITH m\nMATCH (x:Memory {id: $id})\nSET x.access_count = x.access_count + 1\nRETURN count(x) AS c\n"}
+  annotations={[
+    {
+      side: "after",
+      lines: "2",
+      label: "Write first",
+      note: "Takes the row's lock without reading a property first.",
+    },
+    {
+      side: "after",
+      lines: "5",
+      label: "Increment on the re-matched row",
+      note: "access_count is read only once the lock is held. A comment on the query says why the increment is on this line.",
+    },
+    {
+      side: "after",
+      lines: "6",
+      label: "Gone is 0",
+      note: "A row deleted while this call waited is gone at the second MATCH. The existing code maps 0 to engram.ErrNotFound.",
+    },
+  ]}
+/>
+
+These are three literal queries, with no shared Cypher fragment.
+
+**Why `Reinforce` writes before it reads.** The obvious form keeps today's `SET m.access_count = m.access_count + 1, m.last_accessed = $now` and adds the re-match after it. That statement reads a property before it takes the lock, and against the lock-first delete it deadlocks:
+
+<Table
+  id="d3-deadlock"
+  columns={["Reinforce statement", "Against DeleteIfStale", "Lost writes", "Call time"]}
+  rows={[
+    ["First draft: today's SET, then the re-match (reads before it writes)", "Neo.TransientError.Transaction.DeadlockDetected on 6 to 12 of 60 overlapping calls. The driver retried, so no call failed", "0", "About 2.1 s per retried call, instead of about 8 ms"],
+    ["Chosen: write last_accessed, re-match, then increment (writes before it reads)", "0 deadlocks and 0 retries in 120 overlapping rounds, 60 against each of the two delete forms of D1", "0", "Slowest call 46 ms"],
+  ]}
+  density="compact"
+/>
+
+The increment now reads `access_count` after the lock is held. That is the form the manual gives against a lost update between two concurrent `Reinforce` calls. That pairing was not probed, and the plan does not claim it.
+
+**Left alone.** `PropagateReinforce` and `Supersede` never tell a caller that one given row was written. The first is best effort over neighbours, and the second returns nil for absent ids.
+
+**`SetForgotten` goes beyond the defect.** A soft forget of a deleted row harms no one. It is included because it shares `flagOne` with `Pin`, and `mcp/forget.go` promises a legible not-found for soft, hard and pin alike. So `forget` with mode pin or soft now answers "memory not found" for a row deleted under it.
+
+#### D4. remember stores the content when its dedup target is gone
+
+<Diff
+  id="d4-remember"
+  filename="mcp/remember.go (the dedup block in doRemember, one indent level removed)"
+  language="go"
+  mode="unified"
+  before={"if target, ok := t.dedupTarget(candidates, replaces, mt, in.Content); ok {\n\tif err := t.store.Reinforce(ctx, target.ID, t.clock.Now()); err != nil {\n\t\tt.log.Error(\"remember: reinforce failed\", \"err\", err)\n\t\treturn RememberOutput{}, errors.New(\"remember: store unavailable\")\n\t}\n\t// Merge any supplied entities onto the existing memory so a retry after a prior\n\t// LinkEntities failure (or genuinely new mentions) still records them.\n\tif len(in.Entities) > 0 {\n\t\tif err := t.store.LinkEntities(ctx, target.ID, in.Entities); err != nil {\n\t\t\tt.log.Error(\"remember: link entities on dedup failed\", \"err\", err)\n\t\t\treturn RememberOutput{}, errors.New(\"remember: store unavailable\")\n\t\t}\n\t}\n\treturn RememberOutput{MemoryID: string(target.ID), Deduped: true, Superseded: t.applySupersedes(ctx, replaces)}, nil\n}\n"}
+  after={"if target, ok := t.dedupTarget(candidates, replaces, mt, in.Content); ok {\n\terr := t.store.Reinforce(ctx, target.ID, t.clock.Now())\n\tswitch {\n\tcase err == nil:\n\t\t// Reinforce has committed last_accessed = now, so the sweep's DeleteIfStale keeps\n\t\t// the row while the entities are linked. Merge any supplied entities onto the\n\t\t// existing memory so a retry after a prior LinkEntities failure (or genuinely new\n\t\t// mentions) still records them.\n\t\tif len(in.Entities) > 0 {\n\t\t\tif err := t.store.LinkEntities(ctx, target.ID, in.Entities); err != nil {\n\t\t\t\tt.log.Error(\"remember: link entities on dedup failed\", \"err\", err)\n\t\t\t\treturn RememberOutput{}, errors.New(\"remember: store unavailable\")\n\t\t\t}\n\t\t}\n\t\treturn RememberOutput{MemoryID: string(target.ID), Deduped: true, Superseded: t.applySupersedes(ctx, replaces)}, nil\n\tcase errors.Is(err, engram.ErrNotFound):\n\t\t// The target was deleted since the search. Fall through and store the content as a\n\t\t// new memory: failing here would lose it.\n\tdefault:\n\t\tt.log.Error(\"remember: reinforce failed\", \"err\", err)\n\t\treturn RememberOutput{}, errors.New(\"remember: store unavailable\")\n\t}\n}\n"}
+  annotations={[
+    {
+      side: "after",
+      lines: "5-6",
+      label: "Safe from the sweep",
+      note: "After a successful Reinforce, DeleteIfStale keeps the row, so LinkEntities does not race the sweep.",
+    },
+    {
+      side: "after",
+      lines: "16-18",
+      label: "Fall through",
+      note: "Into the insert path that is already there, not a second insert block. The reply is the ordinary insert reply: deduped false with the new id.",
+    },
+    {
+      side: "after",
+      lines: "19-21",
+      label: "Other errors unchanged",
+      note: "Any other Reinforce error still answers remember: store unavailable, and the content is not stored.",
+    },
+  ]}
+/>
+
+The gone target stays in `candidates`. Its delete committed before `Reinforce` returned, so the `Link` that follows starts after it and skips it. Auto-linking needs no change. `applySupersedes` runs once, on the insert path, as it does for any insert.
+
+The handler does not walk on to the next candidate. Walking on would be a loop of store writes inside `remember`, and it is the first step of consolidation, which is v2. The cost is a near-duplicate in a rare case; see open question 4. Every branch of the dedup step is in the table under "What remember does in every branch". No tool description changes.
+
+#### D5. recall skips a vanished hit quietly
+
+<Diff
+  id="d5-recall"
+  filename="mcp/recall.go (reinforce, doc comment left out)"
+  language="go"
+  mode="unified"
+  before={"func (t *Tools) reinforce(ctx context.Context, results []engram.RecallResult, now time.Time) {\n\tfor _, r := range results {\n\t\tif err := t.store.Reinforce(ctx, r.ID, now); err != nil {\n\t\t\tt.log.Error(\"recall: reinforce failed\", \"id\", r.ID, \"err\", err)\n\t\t\tcontinue\n\t\t}\n\t\tif err := t.store.PropagateReinforce(ctx, r.ID, propagateThreshold, now); err != nil {\n\t\t\tt.log.Error(\"recall: propagate failed\", \"id\", r.ID, \"err\", err)\n\t\t}\n\t}\n}\n"}
+  after={"func (t *Tools) reinforce(ctx context.Context, results []engram.RecallResult, now time.Time) {\n\tfor _, r := range results {\n\t\tif err := t.store.Reinforce(ctx, r.ID, now); err != nil {\n\t\t\tif errors.Is(err, engram.ErrNotFound) {\n\t\t\t\t// The sweep or a hard forget removed the row after the search: a benign race.\n\t\t\t\t// Debug and not silence, so a store that starts returning not-found for live\n\t\t\t\t// rows still shows when the log level allows debug.\n\t\t\t\tt.log.Debug(\"recall: hit deleted before its reinforce\", \"id\", r.ID)\n\t\t\t\tcontinue\n\t\t\t}\n\t\t\tt.log.Error(\"recall: reinforce failed\", \"id\", r.ID, \"err\", err)\n\t\t\tcontinue\n\t\t}\n\t\tif err := t.store.PropagateReinforce(ctx, r.ID, propagateThreshold, now); err != nil {\n\t\t\tt.log.Error(\"recall: propagate failed\", \"id\", r.ID, \"err\", err)\n\t\t}\n\t}\n}\n"}
+  annotations={[
+    {
+      side: "after",
+      lines: "4-10",
+      label: "Vanished hit",
+      note: "Logged at debug level, with no neighbour propagation. The hit stays in the reply: recall read it before it was deleted.",
+    },
+  ]}
+/>
+
+With D3, `Reinforce` reports this case reliably. Without D5, a benign race would write an error line into the host's MCP log. Any other error is still logged at error level, as today. Result order does not change.
+
+#### D6. The fakes
+
+`mock.MemStore.DeleteIfStale` checks and deletes under the store's mutex. It shares one unexported cascade, `deleteLocked`, with `Delete`, so the edge and entity bookkeeping cannot drift between the two.
+
+<Code
+  id="d6-memstore"
+  filename="mock/memstore.go"
+  language="go"
+  code={"// DeleteIfStale deletes the memory exactly as Delete does, but only while PruneCandidates(before)\n// would still return it: unpinned, with LastAccessed before `before`. The check and the delete\n// hold one write lock. It reports whether it deleted; an unknown id is (false, nil).\nfunc (s *MemStore) DeleteIfStale(_ context.Context, id engram.MemoryID, before time.Time) (bool, error) {\n\ts.mu.Lock()\n\tdefer s.mu.Unlock()\n\tm, ok := s.mems[id]\n\tif !ok || m.Pinned || !m.LastAccessed.Before(before) {\n\t\treturn false, nil\n\t}\n\ts.deleteLocked(id)\n\treturn true, nil\n}\n"}
+/>
+
+<Code
+  id="d6-fakestore"
+  filename="mock/fakes.go"
+  language="go"
+  code={"// DeleteIfStale records the id in Deleted and the cutoff in StaleBefore. It reports a delete\n// unless the id is in KeptIDs or DeleteErr is set, so the zero value deletes as Delete does.\nfunc (f *FakeStore) DeleteIfStale(_ context.Context, id engram.MemoryID, before time.Time) (bool, error) {\n\tf.Deleted = append(f.Deleted, id)\n\tf.StaleBefore = append(f.StaleBefore, before)\n\treturn !f.KeptIDs[id] && f.DeleteErr == nil, f.DeleteErr\n}\n"}
+/>
+
+`mock.FakeStore` scripts per id, because the new scenarios need one row kept beside one deleted, and one hit gone beside two live. A nil map reads as empty, so the zero value is unchanged and every existing sweep test keeps its meaning. The scripting lives in `mock/`, not in wrappers local to each test file.
+
+<Table
+  id="d6-fields"
+  columns={["New FakeStore field", "What it holds", "Used by"]}
+  rows={[
+    ["KeptIDs map[engram.MemoryID]bool", "Ids DeleteIfStale reports kept, as for a row changed since the read", "Sweep tests"],
+    ["ReinforceErrs map[engram.MemoryID]error", "Per-id Reinforce errors, checked before the store-wide ReinforceErr", "remember and recall tests"],
+    ["Propagated []engram.MemoryID", "Every id given to PropagateReinforce, in call order, beside the existing LastPropagateID", "recall test"],
+    ["StaleBefore []time.Time", "The cutoff of every DeleteIfStale call", "TestSweepOnceUsesOneCutoff"],
+    ["PruneBefore time.Time", "The cutoff of the last PruneCandidates call", "TestSweepOnceUsesOneCutoff"],
+  ]}
+  density="compact"
+/>
+
+### The evidence
+
+Every figure below is a probe that design.md cites, run against the live Neo4j 5.26.
+
+<Table
+  id="evidence"
+  columns={["Probe", "Result", "What it decided"]}
+  rows={[
+    ["Conditional delete, MATCH ... WHERE ... DETACH DELETE, against a writer", "The row was deleted in about 95% of overlapping rounds, after the writer had been told it succeeded", "D1 locks before it re-checks"],
+    ["Lock-first delete, predicate after the REMOVE or between the SET and the REMOVE", "Same result in every cell: stale deleted, fresh kept, pinned kept, missing id 0, no property left behind, no lost write", "D1 keeps the shorter, documented form"],
+    ["SET m.id = m.id as the lock", "Also took the lock", "Rejected: it writes the constrained property, and the behaviour is not documented"],
+    ["Cost of DeleteIfStale", "7 to 9 ms median per call, against 9 ms for the unconditional Delete", "No measurable difference"],
+    ["First-draft Reinforce (reads before it writes) against the lock-first delete", "DeadlockDetected on 6 to 12 of 60 overlapping calls. No call failed and no write was lost; each retried call took about 2.1 s instead of about 8 ms", "D3: Reinforce writes first"],
+    ["Final Reinforce (writes before it reads) against the lock-first delete", "0 deadlocks, 0 retries and 0 lost writes in 120 overlapping rounds, 60 against each of the two delete forms; slowest call 46 ms", "D3"],
+    ["Final Reinforce and final Pin, each against the final delete", "No deadlock and no retry in 60 probe rounds each. The three timed dry runs of the test took about 2 s for 200 rounds, too short to hold a 2.1 s retry", "Kept as a risk: it does not prove none can happen"],
+    ["The planned race test, dry run of the plan under -race, final statements", "Six runs, 100 rounds per pairing each. Every round ended in one of the two allowed states. The writer came first in 42 to 52 rounds of 100, the delete in the rest. The three timed runs took about 2 s", "The test passes on the fix, and both orders occur"],
+    ["The same race test against the old writers", "It failed, with rounds in which the writer returned nil and the row was gone", "The rounds do overlap, so the test can see the defect"],
+    ["The same race test against a broken delete: the dummy write removed, or the predicate computed before it", "It failed in three runs of three for each form, with 51 to 60 bad rounds of 100 per pairing. The sequential test passed on the same broken delete", "The race test is what guards the lock. Apply repeats this check once"],
+    ["Link against a delete of its target, 100 overlapping rounds, twice per delete", "Link returned Neo.ClientError.Statement.EntityNotFound in 65 and 66 rounds against the unconditional Delete on main, and in 62 and 58 against the lock-first delete (81 in an earlier probe with other timing). In the other rounds the target was deleted and no edge was made", "A gap that is on main today and that this change neither adds nor removes; open question 3"],
+  ]}
+  density="compact"
+/>
+
+What was not probed:
+
+- **Two concurrent `Reinforce` calls.** The new form is the manual's form against that lost update, but the pairing was not probed and is not claimed.
+- **Any Neo4j version other than 5.26.** Lock-first is documented by Neo4j and measured on 5.26 only.
+- **`PropagateReinforce` against `DeleteIfStale`.** design.md cites no probe. It lists the deadlock as a risk and relies on Neo4j's deadlock detection and the driver's retry.
+- **More than two concurrent callers on one row,** and head starts other than 0 to 2 ms.
+
+### What remember does in every branch
+
+The three rows marked new turn a lost write into a stored one, or keep an honest error.
+
+<Table
+  id="remember-branches"
+  columns={["Branch", "Incoming content", "Dedup target", "Rows named in supersedes"]}
+  rows={[
+    ["No candidate qualifies: none at or above 0.95, or each one is skipped (superseded, soft-forgotten, named in supersedes, or of another type or content on a correcting write)", "Stored as a new memory", "None", "Superseded"],
+    ["Target reinforced", "Merged: not stored again, and the target carries it", "access_count + 1, last_accessed = now; supplied entities linked", "Superseded"],
+    ["Target reinforced, then LinkEntities fails", "Not stored again; the reply is remember: store unavailable; the target already carries the content", "Reinforced; entities not linked", "Not applied; a retry applies them"],
+    ["New: target gone (ErrNotFound)", "Stored as a new memory; reply deduped: false", "Already deleted; nothing to do", "Superseded"],
+    ["New: target gone, and a second live candidate is also at or above 0.95", "Stored as a new memory, a near-duplicate of that candidate and auto-linked to it", "Second candidate is not reinforced", "Superseded"],
+    ["New: target gone, then Put fails", "Not stored; the reply is remember: store unavailable", "Already deleted", "Not applied"],
+    ["Stored, then LinkEntities or Link fails (any insert)", "Stored; the reply is still remember: store unavailable; a retry dedups onto the stored memory", "None", "Not applied by this call; the retry applies them"],
+    ["Reinforce fails for another reason", "Not stored; the reply is remember: store unavailable", "Unknown", "Not applied"],
+    ["Target is in another namespace", "Unchanged: the search is scoped to the write's namespace", "Left alone", "Superseded"],
+    ["Target is pinned", "Merged, as for any target. The sweep never deletes a pinned row; a hard forget from another session can, and then this is target gone", "Reinforced", "Superseded"],
+  ]}
+  density="compact"
+/>
+
+### What this change does not fix
+
+- Coordinating passes between processes. That is `sweep-daily-claim`, the once-a-day gate, which follows this change.
+- Which rows are candidates, the grace period, the floor and the batch size.
+- Consolidation: trying another dedup candidate, or merging, when the first is gone. The PRD defers it to v2.
+- A counter of rows the sweep kept, and a retry loop on `Reinforce`.
+- The message of `forget` for a pruned memory (open question 1).
+- `PropagateReinforce` and `Supersede`: neither tells a caller that one given row was written.
+- A hard `forget` deletes whatever it names, including a row another session has just reinforced or pinned, because the agent asked for exactly that.
+- Ordering or paging `PruneCandidates`, and stopping a pass when its context is cancelled. Both are listed follow-ups from `sweep-on-start`.
+
+Two gaps are disclosed and stay open:
+
+- **An auto-link whose target is deleted mid-statement.** `Link` skips a target deleted before its statement starts, in both stores (`neo4j/store.go:249`, `mock/memstore.go:146`). A target deleted while the statement runs is different: `Link` returns `Neo.ClientError.Statement.EntityNotFound`. The content is stored before `Link` runs, so the agent sees `remember: store unavailable` after a successful insert, and `supersedes` is not applied by that call. A retry dedups onto the stored memory and applies it. This is not new. Over 100 overlapping rounds, run twice, `Link` failed in 65 and 66 rounds against the unconditional delete on `main`, and in 62 and 58 against the lock-first delete. This change neither adds nor removes it (open question 3).
+- **A near-duplicate.** When the target is gone and a second live candidate also scores at or above 0.95, the content is stored as a new memory, auto-linked to that candidate. This needs the race and two candidates above the dedup point at once (open question 4).
+
+<Callout id="unrecoverable" tone="warning">
+
+**Rows lost to this race before the fix cannot be found.** `DETACH DELETE` leaves no tombstone, and the sweep logs no id on a successful delete, so the affected memories cannot be listed. Nothing suggests it has happened: the precondition is a write to a row that is past the 30-day grace and below the floor, inside the length of one pass. The proposal and the PR body disclose it. Reverting the PR brings the race back; it loses nothing by itself.
+
+</Callout>
+
+### Files touched
+
+<FileTree
+  id="files-production"
+  title="Production"
+  entries={[
+    { path: "sweep/sweep.go", change: "modified", note: "Pruner swaps Delete for DeleteIfStale; SweepOnce uses one cutoff and counts only real deletes; the ErrNotFound branch and the errors import go" },
+    { path: "neo4j/store.go", change: "modified", note: "DeleteIfStale, lock-first, with the comment that cites the manual; Reinforce, Pin and SetForgotten match the row again after their write. Task 2 adds a stub so cmd/engramd builds; Task 3 replaces it" },
+    { path: "mock/memstore.go", change: "modified", note: "DeleteIfStale; Delete's cascade moves into deleteLocked, shared by both" },
+    { path: "mock/fakes.go", change: "modified", note: "Scripted DeleteIfStale; KeptIDs, ReinforceErrs, Propagated, StaleBefore, PruneBefore" },
+    { path: "mcp/remember.go", change: "modified", note: "The dedup block falls through to the insert path on ErrNotFound; doRemember doc comment" },
+    { path: "mcp/recall.go", change: "modified", note: "reinforce logs a vanished hit at debug level and skips its propagation" },
+  ]}
+/>
+
+<FileTree
+  id="files-tests"
+  title="Tests"
+  entries={[
+    { path: "mock/memstore_test.go", change: "modified", note: "TestMemStoreDeleteIfStale; TestMemStoreConcurrentSearchDelete also runs Reinforce and DeleteIfStale" },
+    { path: "mock/fakes_test.go", change: "added", note: "TestFakeStoreDeleteIfStale, TestFakeStorePerIDScripts" },
+    { path: "sweep/sweep_test.go", change: "modified", note: "TestSweepOnceKeptRowIsNotCounted, TestSweepOnceUsesOneCutoff, the rewritten already-deleted test, the panicPruner double" },
+    { path: "neo4j/stale_integration_test.go", change: "added", note: "TestStoreDeleteIfStale, TestStoreWriterNeverAcknowledgesADeletedRow, TestStoreWritersNotFound (integration tag)" },
+    { path: "mcp/remember_test.go", change: "modified", note: "Target gone, target gone beside a second candidate, other Reinforce error, and a recall of the stored content on a real MemStore" },
+    { path: "mcp/recall_test.go", change: "modified", note: "TestRecallToleratesDeletedHit" },
+  ]}
+/>
+
+<FileTree
+  id="files-docs"
+  title="Docs"
+  entries={[
+    { path: "CONTRIBUTING.md", change: "modified", note: "One paragraph: the concurrent store test is the only guard of the lock-first delete and the re-match, and is rerun whenever the Neo4j image changes" },
+  ]}
+/>
+
+No change to the domain package, `cmd/`, `inference/`, the schema or the dependencies. No file under `eval/` or `cmd/eval/` changes.
+
+The spec deltas are one new capability and two modified ones:
+
+- `write-race-safety` (new): a writer reports a row that is gone; `remember` keeps the content when its dedup target is gone; `recall` tolerates a hit that was deleted.
+- `sweep-schedule`: a pass deletes only rows that are still stale; the stale delete re-checks under the row lock; "A row already deleted is not an error" is restated for `DeleteIfStale`; "The eval does not move" no longer forbids the change to the delete call.
+- `memory-store-fake`: "Lifecycle and prune semantics" gains `DeleteIfStale`, and the concurrency scenario races it.
+
+### Tasks
+
+The order is `mock/`, then the adapters (`sweep`, `neo4j`, `mcp`), then docs. `mock/` goes first because `sweep.Pruner` cannot swap its method until both fakes have the new one. Every Go task runs under `go test -race`, and each one starts red against the old behaviour.
+
+<Table
+  id="tasks"
+  columns={["#", "Task", "What proves it"]}
+  rows={[
+    ["1", "Fakes (mock/): MemStore.DeleteIfStale over the shared cascade; FakeStore scripts", "TestMemStoreDeleteIfStale: stale row deleted with its link and mention, LastAccessed equal to before kept, pinned kept, reinforced kept, unknown id false and nil. TestMemStoreDeleteCascades still passes. The race test also runs Reinforce and DeleteIfStale. TestFakeStoreDeleteIfStale, TestFakeStorePerIDScripts"],
+    ["2", "Sweep (sweep/): the Pruner swap, one cutoff, count only real deletes", "2.1: TestSweepOnceKeptRowIsNotCounted (1 pruned, nothing at error level), TestSweepOnceUsesOneCutoff (both cutoffs equal now minus the grace), the rewritten TestSweepOnceAlreadyDeletedIsNotAnError, TestSweepOnceOtherDeleteErrorStillLogged. 2.2: the eval check, a stop rule"],
+    ["3", "Store (neo4j/): lock-first DeleteIfStale; the writers re-match", "TestStoreDeleteIfStale: stale deleted with no relationship left, fresh kept with no sweep_check property, pinned kept, equal to the cutoff kept and one millisecond earlier deleted, unknown id false and nil. TestStoreWriterNeverAcknowledgesADeletedRow: 100 rounds per pairing, every round in one of the two allowed states, both states occur; with the dummy write taken out of the delete, the same test fails. TestStoreWritersNotFound: Reinforce, Pin and SetForgotten on an unknown id. SetForgotten is not raced: a soft forget does not keep a row from the sweep, so the two outcomes cannot be told apart. Existing Delete, Reinforce and not-found tests still pass"],
+    ["4", "Handlers (mcp/): remember falls through; recall skips quietly", "TestDoRememberStoresContentWhenDedupTargetIsGone, TestDoRememberTargetGoneBesideSecondCandidate (a second candidate at 0.96 is not reinforced), TestDoRememberReinforceFailureStillFails (no Put). TestRecallToleratesDeletedHit: three hits returned in order, no error-level record, no propagation for the gone hit"],
+    ["5", "Docs", "grep -n DeleteIfStale CONTRIBUTING.md prints the new line. A grep for store unavailable or unconditional over README.md, docs/demo.md and docs/engram-prd-v1.md prints nothing that says a vanished dedup target is an error"],
+    ["6", "Verify", "Build, race tests, lint and graphify update. Integration on every package except the body of ./eval, with no skip naming unavailable. The eval check on the final tree, with the A/B/C table. reviewer, security-auditor and a skeptic review of the whole branch"],
+  ]}
+  density="compact"
+/>
+
+<Callout id="stop-rules" tone="decision">
+
+**Task 2.2 is a stop rule, not a formality.** Right after the sweep task, `go run ./cmd/eval --ci` runs on the branch and on `main`. The two full outputs are compared with the p50 and p95 columns removed, and `git diff origin/main -- eval/ cmd/eval/` must print nothing. If anything differs, the work stops before Task 3, and both tables and the diff go to the maintainer.
+
+**The race test has two stop rules.** Run against the old writers, it must report at least one failing round. Run against the new writers and a delete with its dummy write removed, it must fail again. If either run passes, the test guards nothing, and the work stops.
+
+</Callout>
+
+The race test asserts no wall time. A deadlock retry costs about 2 s and is correct, so a time limit would only make it flaky; its context deadline is a hang guard. It passes its own cutoff of one hour, on rows two hours old, so they are stale for the test and never for a real sweep, as `CONTRIBUTING.md` requires. It removes its rows in `t.Cleanup`.
+
+### The eval
+
+`SweepOnce` will call `DeleteIfStale` on `mock.MemStore`. Inside an eval arm the re-check is true for every candidate:
+
+- one goroutine drives the store;
+- `PruneCandidates` returns unique ids in insertion order;
+- nothing under `eval/` pins a row between the two calls;
+- one `before` feeds both.
+
+So the same rows are deleted, and the same count is returned. The real risk is the cascade. If `DeleteIfStale` deleted a row differently from `Delete`, the edge and bridge counts in the table would move. D6 removes that risk, because both methods share `deleteLocked`.
+
+No eval constant, mix, weight, threshold or dataset size is touched, so there is nothing to preregister. The prediction: `go run ./cmd/eval --ci` passes, the type-aware precision and nDCG are the 0.179 and 0.875 of `eval/baseline.json`, and every figure of every arm equals `main`'s output once the two wall-clock columns (p50, p95) are removed. No code under `eval/` or `cmd/eval/` calls `Run`. The check runs in Task 2.2 and again in Verify on the final tree.
+
+One spec sentence about the eval is reworded, and nothing about the eval itself changes. The scenario "Gate with zero drift" said "every A/B/C figure equals the baseline exactly". `eval/baseline.json` holds only the type-aware precision (0.1788) and nDCG (0.8747), so that sentence could not be checked as written. It now says what the check does: the two type-aware figures equal the baseline at the three decimals the report prints, and every figure of every arm equals `main`'s output.
+
+### Risks
+
+<Table
+  id="risks"
+  columns={["Risk", "Mitigation"]}
+  rows={[
+    ["Lock-first depends on the query plan. If Neo4j read last_accessed or pinned before the SET, the comparison would use values from before the lock and the bug would return. The writers' second MATCH rests on the same thing. The manual documents the pattern; it is measured on 5.26 only", "The concurrent integration test guards both. CI does not run integration tests, so the test is rerun whenever the Neo4j image changes; CONTRIBUTING.md says so"],
+    ["A writer that reads before it writes deadlocks with the delete. Measured for the first draft of Reinforce. The final Reinforce and Pin showed none in the probe (60 rounds each against the final delete), and the three timed dry runs, at about 2 s for 200 rounds, are too short to hold a 2.1 s retry. That does not prove none can happen", "A deadlock is a transient error. ExecuteQuery retries it; the call takes about 2 s and stays correct. A future writer on :Memory must write before it reads; the comment on Reinforce says so"],
+    ["The re-check rests on an invariant: every write that raises retrievability must set last_accessed or pinned. That holds today. A future writer that changed only importance or stability would slip past", "Stated in the DeleteIfStale doc comment"],
+    ["Deadlock. DeleteIfStale holds the row's lock while DETACH DELETE locks its neighbours, and PropagateReinforce locks several rows. Neo4j detects a deadlock and fails one transaction with a transient error", "ExecuteQuery retries transient errors. If the sweep's statement still fails, it is logged and the row is tried again next pass"],
+    ["Rows lost before the fix cannot be found", "Disclosed in the proposal and the PR body"],
+    ["remember now inserts where it used to fail. An agent that retried on the old error would have stored the content anyway; one that did not retry lost it", "The new reply is the ordinary insert reply. No description change is needed"],
+    ["An auto-link whose target is deleted mid-statement fails: EntityNotFound in 58 to 66 of 100 overlapping rounds in the two-run probe (81 in an earlier one), with the old delete and the new one alike. The agent sees remember: store unavailable after a successful insert", "Reported, not fixed here (open question 3)"],
+    ["A near-duplicate when the target is gone and a second candidate is also at or above 0.95", "Stated in the spec (open question 4)"],
+  ]}
+  density="compact"
+/>
+
+No data migration and no schema change. Rollback is reverting the PR.
+
+### Open Questions
+
+<QuestionForm
+  id="open-questions"
+  questions={[
+    {
+      id: "forget-pin-message",
+      title: "Should forget with mode pin say more than \"memory not found\" when the memory was pruned?",
+      subtitle: "Open question 1 of design.md.",
+      mode: "single",
+      options: [
+        {
+          id: "keep-message",
+          label: "Leave the message as it is (Recommended)",
+          detail: "A pin on a pruned memory answers memory not found, as for any missing id. forget does not change.",
+          recommended: true,
+        },
+        {
+          id: "say-pruned",
+          label: "Say that the memory was pruned",
+          detail: "Out of scope in the proposal. DETACH DELETE leaves no tombstone, so a pruned id looks like one that never existed.",
+        },
+      ],
+      required: true,
+    },
+    {
+      id: "lock-first-evidence",
+      title: "Lock-first is documented by Neo4j, measured on 5.26 only, and guarded by a test CI does not run. Accept it?",
+      subtitle: "Open question 2 of design.md.",
+      mode: "single",
+      options: [
+        {
+          id: "accept-rerun",
+          label: "Accept, and rerun the test when the Neo4j image changes (Recommended)",
+          detail: "CONTRIBUTING.md names the test and says when to rerun it. CI does not change.",
+          recommended: true,
+        },
+        {
+          id: "wait-for-ci",
+          label: "Do not accept until CI runs the guard",
+          detail: "CI does not run integration tests today, so the change waits on CI work outside its scope.",
+        },
+      ],
+      required: true,
+    },
+    {
+      id: "auto-link-race",
+      title: "A remember whose auto-link target is deleted mid-statement answers store unavailable although the content is stored. Fix it here?",
+      subtitle: "Open question 3 of design.md. It predates this change: the probe gave the same rate with the old delete and the new one.",
+      mode: "single",
+      options: [
+        {
+          id: "follow-up",
+          label: "Leave it out and open a follow-up (Recommended)",
+          detail: "The gap stays as it is on main today. A retry dedups onto the stored memory and applies supersedes.",
+          recommended: true,
+        },
+        {
+          id: "fix-now",
+          label: "Fix it in this change",
+          detail: "Needs a lock-first Link or a best-effort link step, and either is a behaviour change of its own.",
+        },
+      ],
+      required: true,
+    },
+    {
+      id: "second-candidate",
+      title: "Target gone and a second live candidate at or above 0.95: what should remember do?",
+      subtitle: "Open question 4 of design.md.",
+      mode: "single",
+      options: [
+        {
+          id: "store-near-duplicate",
+          label: "Store a near-duplicate, as designed (Recommended)",
+          detail: "Rare, loses nothing, and keeps remember to one reinforce attempt. The new memory is auto-linked to the second candidate.",
+          recommended: true,
+        },
+        {
+          id: "walk-on",
+          label: "Walk on and dedup into the second candidate",
+          detail: "A loop of store writes inside remember, and the first step of consolidation, which the PRD defers to v2.",
+        },
+      ],
+      required: true,
+    },
+    {
+      id: "apply-plan",
+      title: "Apply this plan?",
+      mode: "single",
+      options: [
+        {
+          id: "apply",
+          label: "Apply as planned (Recommended)",
+          detail: "Work starts with Task 1, the fakes.",
+          recommended: true,
+        },
+        {
+          id: "apply-after-answers",
+          label: "Apply after my answers above are folded in",
+          detail: "The answers go into design.md and plan.md first, then work starts.",
+        },
+        {
+          id: "hold",
+          label: "Hold: I have comments",
+          detail: "No work starts until the comments are resolved.",
+        },
+      ],
+      required: true,
+    },
+  ]}
+  submitLabel="Send answers"
+/>

@@ -363,9 +363,12 @@ func TestMemStoreConcurrentSearchDelete(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		mustPut(t, s, mem(fmt.Sprintf("m%d", i), "a", 0.9))
 	}
+	// Every row was last accessed at t0 and Reinforce below keeps it there, so DeleteIfStale
+	// with this cutoff may delete any row the Delete goroutines have not reached yet.
+	stale := t0.Add(time.Hour)
 	var wg sync.WaitGroup
 	for g := 0; g < 4; g++ {
-		wg.Add(2)
+		wg.Add(4)
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 100; i++ {
@@ -382,10 +385,108 @@ func TestMemStoreConcurrentSearchDelete(t *testing.T) {
 				_ = s.Delete(ctx, id)
 			}
 		}(g)
+		// Recall's reinforce and the sweep's stale delete, each from its own goroutine.
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				_ = s.Reinforce(ctx, engram.MemoryID(fmt.Sprintf("m%d", i)), t0)
+			}
+		}()
+		go func(g int) {
+			defer wg.Done()
+			for i := (g + 2) % 4; i < 50; i += 4 {
+				_, _ = s.DeleteIfStale(ctx, engram.MemoryID(fmt.Sprintf("m%d", i)), stale)
+			}
+		}(g)
 	}
 	wg.Wait()
 	if s.Len() != 0 {
 		t.Fatalf("len %d", s.Len())
+	}
+}
+
+// staleStore returns a store holding x and y, both last accessed at t0, with one link from x
+// to y and one entity that both mention.
+func staleStore(t *testing.T) *MemStore {
+	t.Helper()
+	s := NewMemStore()
+	mustPut(t, s, mem("x", "a", 0.9), mem("y", "a", 0.9))
+	if err := s.Link(ctx, "x", []engram.Link{{To: "y", Weight: 0.9}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []engram.MemoryID{"x", "y"} {
+		if err := s.LinkEntities(ctx, id, []string{"e"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return s
+}
+
+// neighborRows counts the rows Neighbors(from) returns for the memory id.
+func neighborRows(t *testing.T, s *MemStore, from, id engram.MemoryID) int {
+	t.Helper()
+	nbs, err := s.Neighbors(ctx, []engram.MemoryID{from}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, nb := range nbs {
+		if nb.Memory.ID == id {
+			n++
+		}
+	}
+	return n
+}
+
+func TestMemStoreDeleteIfStale(t *testing.T) {
+	t.Parallel()
+	before := t0.Add(time.Hour) // x and y were last accessed at t0, so both are stale here
+	for _, tc := range []struct {
+		name        string
+		write       func(t *testing.T, s *MemStore) // a write that lands after the candidate read
+		id          engram.MemoryID
+		before      time.Time
+		wantDeleted bool
+	}{
+		{name: "stale row deleted with its link and mention", id: "x", before: before, wantDeleted: true},
+		{name: "LastAccessed equal to before kept", id: "x", before: t0},
+		{name: "pinned kept", id: "x", before: before, write: func(t *testing.T, s *MemStore) {
+			if err := s.Pin(ctx, "x"); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "reinforced kept", id: "x", before: before, write: func(t *testing.T, s *MemStore) {
+			if err := s.Reinforce(ctx, "x", before); err != nil { // LastAccessed becomes before: not before it
+				t.Fatal(err)
+			}
+		}},
+		{name: "unknown id", id: "nope", before: before},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := staleStore(t)
+			if tc.write != nil {
+				tc.write(t, s)
+			}
+
+			deleted, err := s.DeleteIfStale(ctx, tc.id, tc.before)
+			if deleted != tc.wantDeleted || err != nil {
+				t.Fatalf("DeleteIfStale(%s) = (%v, %v), want (%v, nil)", tc.id, deleted, err, tc.wantDeleted)
+			}
+
+			// While x lives, y sees it twice (one link, one entity bridge) and the store holds
+			// one edge and one bridge. A delete must remove all of it, as Delete does.
+			_, xKept := s.Snapshot("x")
+			xRows := neighborRows(t, s, "y", "x")
+			wantKept, wantEdges, wantBridges, wantRows := true, 1, 1, 2
+			if tc.wantDeleted {
+				wantKept, wantEdges, wantBridges, wantRows = false, 0, 0, 0
+			}
+			if xKept != wantKept || s.EdgeCount() != wantEdges || s.BridgeCount() != wantBridges || xRows != wantRows {
+				t.Errorf("x kept=%v edges=%d bridges=%d y-to-x rows=%d, want %v %d %d %d",
+					xKept, s.EdgeCount(), s.BridgeCount(), xRows, wantKept, wantEdges, wantBridges, wantRows)
+			}
+		})
 	}
 }
 

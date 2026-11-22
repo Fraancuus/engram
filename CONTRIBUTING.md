@@ -72,6 +72,14 @@ Integration fixtures must be pinned, last accessed within 30 days, or procedural
 superseded (kept only while `engramd` runs the default type-aware decay): a running
 `engramd` sweeps the same store and hard-deletes anything older that has decayed.
 
+`TestStoreWriterNeverAcknowledgesADeletedRow` in `neo4j/` is the only guard of the lock-first
+`DeleteIfStale` and of the re-match in `Reinforce` and `Pin` (`SetForgotten` has the same
+statement shape as `Pin` and is not raced: a soft forget does not keep a row from the sweep). CI
+does not run integration tests, so rerun it whenever the Neo4j image in `docker-compose.yml`
+changes. A passing run shows that both orders happened, not that the calls overlapped. So on an
+image change also check once that the test fails with the `SET m.sweep_check = true` and
+`REMOVE m.sweep_check` lines taken out of `DeleteIfStale`, then restore them.
+
 ## Before you push
 
 ```bash

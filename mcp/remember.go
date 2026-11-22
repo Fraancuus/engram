@@ -92,8 +92,10 @@ type RememberOutput struct {
 
 // doRemember validates the input, deduplicates within the namespace (reinforcing an
 // existing near-identical memory instead of inserting), and otherwise stores a new
-// memory with its entity links. Internal failures are logged and returned as a generic
-// error so nothing internal leaks to the caller.
+// memory with its entity links. A dedup target deleted between the search and its
+// reinforce does not fail the write: the content is stored as a new memory. Internal
+// failures are logged and returned as a generic error so nothing internal leaks to the
+// caller.
 func (t *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberOutput, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -102,49 +104,18 @@ func (t *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberO
 		}
 	}()
 
-	mt := engram.MemoryType(in.Type)
-	if !mt.Valid() {
-		return RememberOutput{}, fmt.Errorf("invalid type %q: want episodic, semantic, or procedural", in.Type)
+	mt, importance, err := validateRememberScalars(in)
+	if err != nil {
+		return RememberOutput{}, err
 	}
-	if strings.TrimSpace(in.Content) == "" || len(in.Content) > maxContentBytes {
-		return RememberOutput{}, fmt.Errorf("content must be 1..%d bytes and not blank", maxContentBytes)
+	if err := validateIDList(in.Entities, "entities", "entity names"); err != nil {
+		return RememberOutput{}, err
 	}
-	if strings.TrimSpace(in.Namespace) == "" || len(in.Namespace) > maxNamespaceBytes {
-		return RememberOutput{}, fmt.Errorf("namespace must be 1..%d bytes and not blank", maxNamespaceBytes)
+	if err := validateIDList(in.Links, "links", "link ids"); err != nil {
+		return RememberOutput{}, err
 	}
-	importance := defaultImportance
-	if in.Importance != nil {
-		importance = *in.Importance
-		if math.IsNaN(importance) || math.IsInf(importance, 0) || importance < 0 || importance > 1 {
-			return RememberOutput{}, errors.New("importance must be a number between 0 and 1")
-		}
-	}
-	if len(in.Source) > maxSourceBytes {
-		return RememberOutput{}, fmt.Errorf("source must be at most %d bytes", maxSourceBytes)
-	}
-	if len(in.Entities) > maxEntities {
-		return RememberOutput{}, fmt.Errorf("at most %d entities allowed", maxEntities)
-	}
-	for _, e := range in.Entities {
-		if strings.TrimSpace(e) == "" || len(e) > maxEntityBytes {
-			return RememberOutput{}, fmt.Errorf("entity names must be 1..%d bytes and not blank", maxEntityBytes)
-		}
-	}
-	if len(in.Links) > maxEntities {
-		return RememberOutput{}, fmt.Errorf("at most %d links allowed", maxEntities)
-	}
-	for _, l := range in.Links {
-		if strings.TrimSpace(l) == "" || len(l) > maxEntityBytes {
-			return RememberOutput{}, fmt.Errorf("link ids must be 1..%d bytes and not blank", maxEntityBytes)
-		}
-	}
-	if len(in.Supersedes) > maxEntities {
-		return RememberOutput{}, fmt.Errorf("at most %d supersedes allowed", maxEntities)
-	}
-	for _, sid := range in.Supersedes {
-		if strings.TrimSpace(sid) == "" || len(sid) > maxEntityBytes {
-			return RememberOutput{}, fmt.Errorf("supersedes ids must be 1..%d bytes and not blank", maxEntityBytes)
-		}
+	if err := validateIDList(in.Supersedes, "supersedes", "supersedes ids"); err != nil {
+		return RememberOutput{}, err
 	}
 
 	// Only procedural and semantic writes replace; one value drives both dedup and supersession.
@@ -167,21 +138,102 @@ func (t *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberO
 		return RememberOutput{}, errors.New("remember: store unavailable")
 	}
 	if target, ok := t.dedupTarget(candidates, replaces, mt, in.Content); ok {
-		if err := t.store.Reinforce(ctx, target.ID, t.clock.Now()); err != nil {
-			t.log.Error("remember: reinforce failed", "err", err)
-			return RememberOutput{}, errors.New("remember: store unavailable")
+		out, merged, err := t.mergeDuplicate(ctx, target.ID, in.Entities, replaces)
+		if err != nil || merged {
+			return out, err
 		}
-		// Merge any supplied entities onto the existing memory so a retry after a prior
-		// LinkEntities failure (or genuinely new mentions) still records them.
-		if len(in.Entities) > 0 {
-			if err := t.store.LinkEntities(ctx, target.ID, in.Entities); err != nil {
+	}
+	return t.insertMemory(ctx, in, mt, importance, vec, candidates, replaces)
+}
+
+// validateRememberScalars checks the type, content, namespace, importance and source of a
+// remember call, in that order, and returns the parsed memory type and the importance
+// (defaultImportance when the caller gave none). The error text is safe to show the caller.
+func validateRememberScalars(in RememberInput) (engram.MemoryType, float64, error) {
+	mt := engram.MemoryType(in.Type)
+	if !mt.Valid() {
+		return "", 0, fmt.Errorf("invalid type %q: want episodic, semantic, or procedural", in.Type)
+	}
+	if strings.TrimSpace(in.Content) == "" || len(in.Content) > maxContentBytes {
+		return "", 0, fmt.Errorf("content must be 1..%d bytes and not blank", maxContentBytes)
+	}
+	if strings.TrimSpace(in.Namespace) == "" || len(in.Namespace) > maxNamespaceBytes {
+		return "", 0, fmt.Errorf("namespace must be 1..%d bytes and not blank", maxNamespaceBytes)
+	}
+	importance, err := validateImportance(in.Importance)
+	if err != nil {
+		return "", 0, err
+	}
+	if len(in.Source) > maxSourceBytes {
+		return "", 0, fmt.Errorf("source must be at most %d bytes", maxSourceBytes)
+	}
+	return mt, importance, nil
+}
+
+// validateImportance returns the importance to store: defaultImportance when imp is nil,
+// otherwise *imp, which must be a finite number between 0 and 1.
+func validateImportance(imp *float64) (float64, error) {
+	if imp == nil {
+		return defaultImportance, nil
+	}
+	importance := *imp
+	if math.IsNaN(importance) || math.IsInf(importance, 0) || importance < 0 || importance > 1 {
+		return 0, errors.New("importance must be a number between 0 and 1")
+	}
+	return importance, nil
+}
+
+// validateIDList checks one of the entities, links or supersedes lists: at most maxEntities
+// items, each 1..maxEntityBytes bytes and not blank. plural names the field in the count
+// error and what names the items in the item error.
+func validateIDList(items []string, plural, what string) error {
+	if len(items) > maxEntities {
+		return fmt.Errorf("at most %d %s allowed", maxEntities, plural)
+	}
+	for _, s := range items {
+		if strings.TrimSpace(s) == "" || len(s) > maxEntityBytes {
+			return fmt.Errorf("%s must be 1..%d bytes and not blank", what, maxEntityBytes)
+		}
+	}
+	return nil
+}
+
+// mergeDuplicate reinforces the dedup target and links the supplied entities onto it. On
+// success it also applies the supersession of replaces, best effort, as applySupersedes
+// does. It returns the deduped reply and true when the write merged. It returns false and no error
+// when the target was deleted since the search, so the caller stores the content as a new
+// memory. Other failures are logged here and returned as the generic store error.
+func (t *Tools) mergeDuplicate(ctx context.Context, id engram.MemoryID, entities, replaces []string) (RememberOutput, bool, error) {
+	err := t.store.Reinforce(ctx, id, t.clock.Now())
+	switch {
+	case err == nil:
+		// Reinforce has committed last_accessed = now, so the sweep's DeleteIfStale keeps
+		// the row while the entities are linked. Merge any supplied entities onto the
+		// existing memory so a retry after a prior LinkEntities failure (or genuinely new
+		// mentions) still records them.
+		if len(entities) > 0 {
+			if err := t.store.LinkEntities(ctx, id, entities); err != nil {
 				t.log.Error("remember: link entities on dedup failed", "err", err)
-				return RememberOutput{}, errors.New("remember: store unavailable")
+				return RememberOutput{}, false, errors.New("remember: store unavailable")
 			}
 		}
-		return RememberOutput{MemoryID: string(target.ID), Deduped: true, Superseded: t.applySupersedes(ctx, replaces)}, nil
+		return RememberOutput{MemoryID: string(id), Deduped: true, Superseded: t.applySupersedes(ctx, replaces)}, true, nil
+	case errors.Is(err, engram.ErrNotFound):
+		t.log.Debug("remember: dedup target deleted before its reinforce", "id", id)
+		// The target was deleted since the search. Report not merged so the caller stores the
+		// content as a new memory: failing here would lose it.
+		return RememberOutput{}, false, nil
+	default:
+		t.log.Error("remember: reinforce failed", "err", err)
+		return RememberOutput{}, false, errors.New("remember: store unavailable")
 	}
+}
 
+// insertMemory stores in as a new memory, links its entities, auto-links it to the similar
+// candidates plus any explicit links, and returns the reply with the superseded ids. Failures
+// are logged here and returned as a generic error: internal error for id generation, store
+// unavailable for the store.
+func (t *Tools) insertMemory(ctx context.Context, in RememberInput, mt engram.MemoryType, importance float64, vec engram.Vector, candidates []engram.RecallResult, replaces []string) (RememberOutput, error) {
 	id, err := t.newID()
 	if err != nil {
 		t.log.Error("remember: id generation failed", "err", err)
@@ -190,7 +242,7 @@ func (t *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberO
 	now := t.clock.Now()
 	m := engram.Memory{
 		ID:           id,
-		Namespace:    ns,
+		Namespace:    engram.Namespace(in.Namespace),
 		Type:         mt,
 		Content:      in.Content,
 		Embedding:    vec,

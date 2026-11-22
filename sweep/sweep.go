@@ -5,7 +5,6 @@ package sweep
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -14,11 +13,13 @@ import (
 	"github.com/Fraancuus/engram"
 )
 
-// Pruner is the narrow store capability the sweep consumes — defined here at the consumer
-// and satisfied by the one concrete *neo4j.Store.
+// Pruner is the narrow store capability the sweep consumes, defined here at the consumer and
+// satisfied by *neo4j.Store and the fakes in mock. DeleteIfStale deletes a candidate only while
+// it is still unpinned and last accessed before `before`, and reports whether it did. A row
+// that is already gone is (false, nil), not an error.
 type Pruner interface {
 	PruneCandidates(ctx context.Context, before time.Time, limit int) ([]engram.Memory, error)
-	Delete(ctx context.Context, id engram.MemoryID) error
+	DeleteIfStale(ctx context.Context, id engram.MemoryID, before time.Time) (deleted bool, err error)
 }
 
 // Sweeper periodically hard-prunes decayed memories. Construct it with New and drive it
@@ -62,12 +63,15 @@ func New(p Pruner, d engram.DecayModel, c engram.Clock, interval, grace time.Dur
 	}
 }
 
-// SweepOnce runs one prune pass as of now: it fetches candidates older than the grace
-// period and deletes those whose retrievability is below the hard floor (pinned memories
-// are skipped defensively). A candidate that is already gone is skipped and not logged.
+// SweepOnce runs one prune pass as of now: it fetches candidates last accessed before now minus
+// the grace period and deletes those whose retrievability is below the hard floor (pinned
+// memories are skipped defensively). Each delete re-checks the same cutoff in the store, so a
+// candidate pinned or reinforced since the read is kept, and one already deleted is skipped;
+// neither is counted or logged.
 // now is passed explicitly so the eval can virtualize time.
 func (s *Sweeper) SweepOnce(ctx context.Context, now time.Time) (pruned int, err error) {
-	cands, err := s.pruner.PruneCandidates(ctx, now.Add(-s.grace), s.batch)
+	before := now.Add(-s.grace)
+	cands, err := s.pruner.PruneCandidates(ctx, before, s.batch)
 	if err != nil {
 		return 0, fmt.Errorf("sweep candidates: %w", err)
 	}
@@ -76,14 +80,14 @@ func (s *Sweeper) SweepOnce(ctx context.Context, now time.Time) (pruned int, err
 			continue
 		}
 		if s.decay.Retrievability(m, now) < s.hardFloor {
-			if err := s.pruner.Delete(ctx, m.ID); err != nil {
-				if errors.Is(err, engram.ErrNotFound) {
-					continue // deleted since the candidate read
-				}
+			deleted, err := s.pruner.DeleteIfStale(ctx, m.ID, before)
+			if err != nil {
 				s.log.Error("sweep: delete failed", "id", m.ID, "err", err)
 				continue
 			}
-			pruned++
+			if deleted {
+				pruned++
+			}
 		}
 	}
 	return pruned, nil

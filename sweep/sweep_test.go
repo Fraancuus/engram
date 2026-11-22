@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -169,7 +168,9 @@ type panicPruner struct{}
 func (panicPruner) PruneCandidates(context.Context, time.Time, int) ([]engram.Memory, error) {
 	panic("boom")
 }
-func (panicPruner) Delete(context.Context, engram.MemoryID) error { return nil }
+func (panicPruner) DeleteIfStale(context.Context, engram.MemoryID, time.Time) (bool, error) {
+	return false, nil
+}
 
 var statsT0 = time.Unix(1_700_000_000, 0).UTC()
 
@@ -399,9 +400,10 @@ func TestRunFirstPassFloorBoundary(t *testing.T) {
 func TestSweepOnceAlreadyDeletedIsNotAnError(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
+	// DeleteIfStale reports (false, nil) for a row that is already gone, as for one it kept.
 	p := &mock.FakeStore{
 		PruneCands: []engram.Memory{{ID: "a"}, {ID: "b"}},
-		DeleteErr:  fmt.Errorf("delete: %w", engram.ErrNotFound), // wrapped, as neo4j.Store returns it
+		KeptIDs:    map[engram.MemoryID]bool{"a": true, "b": true},
 	}
 	s := New(p, mock.FakeDecay{R: 0}, &stepClock{t: statsT0}, time.Hour, 30*24*time.Hour, 0.02, 100,
 		slog.New(slog.NewTextHandler(&logs, nil)))
@@ -437,5 +439,49 @@ func TestSweepOnceOtherDeleteErrorStillLogged(t *testing.T) {
 	}
 	if got := strings.Count(logs.String(), "level=ERROR"); got != 1 {
 		t.Errorf("%d error-level records, want 1; log: %q", got, logs.String())
+	}
+}
+
+func TestSweepOnceKeptRowIsNotCounted(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	// b was pinned or reinforced after the candidate read, so the store keeps it.
+	p := &mock.FakeStore{
+		PruneCands: []engram.Memory{{ID: "a"}, {ID: "b"}},
+		KeptIDs:    map[engram.MemoryID]bool{"b": true},
+	}
+	s := New(p, mock.FakeDecay{R: 0}, &stepClock{t: statsT0}, time.Hour, 30*24*time.Hour, 0.02, 100,
+		slog.New(slog.NewTextHandler(&logs, nil)))
+
+	n, err := s.SweepOnce(context.Background(), statsT0)
+	if n != 1 || err != nil {
+		t.Fatalf("SweepOnce = (%d, %v), want (1, nil): a kept row is not counted", n, err)
+	}
+	if len(p.Deleted) != 2 {
+		t.Errorf("attempted %d deletes, want 2", len(p.Deleted))
+	}
+	if got := strings.Count(logs.String(), "level=ERROR"); got != 0 {
+		t.Errorf("%d error-level records, want 0 for a kept row; log: %q", got, logs.String())
+	}
+}
+
+func TestSweepOnceUsesOneCutoff(t *testing.T) {
+	t.Parallel()
+	p := &mock.FakeStore{PruneCands: []engram.Memory{{ID: "a"}, {ID: "b"}}}
+	s := statsSweeper(p, mock.FakeDecay{R: 0}, &stepClock{t: statsT0}) // grace 30 days
+	if _, err := s.SweepOnce(context.Background(), statsT0); err != nil {
+		t.Fatalf("SweepOnce: %v", err)
+	}
+	want := statsT0.Add(-30 * 24 * time.Hour)
+	if !p.PruneBefore.Equal(want) {
+		t.Errorf("PruneCandidates cutoff = %v, want %v", p.PruneBefore, want)
+	}
+	if len(p.StaleBefore) != 2 {
+		t.Fatalf("DeleteIfStale called %d times, want 2", len(p.StaleBefore))
+	}
+	for i, b := range p.StaleBefore {
+		if !b.Equal(want) {
+			t.Errorf("DeleteIfStale %d cutoff = %v, want %v", i, b, want)
+		}
 	}
 }

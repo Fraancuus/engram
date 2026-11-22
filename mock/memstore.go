@@ -302,6 +302,28 @@ func (s *MemStore) Delete(_ context.Context, id engram.MemoryID) error {
 	if _, ok := s.mems[id]; !ok {
 		return fmt.Errorf("delete %q: %w", id, engram.ErrNotFound)
 	}
+	s.deleteLocked(id)
+	return nil
+}
+
+// DeleteIfStale deletes the memory exactly as Delete does, but only while PruneCandidates(before)
+// would still return it: unpinned, with LastAccessed before `before`. The check and the delete
+// hold one write lock. It reports whether it deleted; an unknown id is (false, nil).
+func (s *MemStore) DeleteIfStale(_ context.Context, id engram.MemoryID, before time.Time) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, ok := s.mems[id]
+	if !ok || m.Pinned || !m.LastAccessed.Before(before) {
+		return false, nil
+	}
+	s.deleteLocked(id)
+	return true, nil
+}
+
+// deleteLocked removes the memory with every link edge and entity mention. The caller holds
+// the write lock and has checked that id exists. Delete and DeleteIfStale share it so their
+// cascades cannot drift apart, which would move the eval's edge and bridge counts.
+func (s *MemStore) deleteLocked(id engram.MemoryID) {
 	delete(s.mems, id)
 	s.order = slices.DeleteFunc(s.order, func(o engram.MemoryID) bool { return o == id })
 	for nb := range s.links[id] {
@@ -315,7 +337,6 @@ func (s *MemStore) Delete(_ context.Context, id engram.MemoryID) error {
 		}
 	}
 	delete(s.mentions, id)
-	return nil
 }
 
 // PruneCandidates returns up to limit non-pinned memories with last_accessed strictly

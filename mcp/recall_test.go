@@ -1,10 +1,13 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -584,5 +587,63 @@ func TestNewToolsShippedWeights(t *testing.T) {
 	want := 0.5 + 0.3*imp + 0.01*r
 	if got := rec.Results[0].Score; math.Abs(got-want) > 1e-9 {
 		t.Errorf("score = %v, want %v", got, want)
+	}
+}
+
+func TestRecallToleratesDeletedHit(t *testing.T) {
+	t.Parallel()
+	gone := func(id string) error { return fmt.Errorf("reinforce %q: %w", id, engram.ErrNotFound) }
+	for _, tc := range []struct {
+		name           string
+		errs           map[engram.MemoryID]error
+		wantErrRecords int
+		wantGone       []string // ids that get one debug record each
+		wantPropagated []engram.MemoryID
+	}{
+		{"second hit gone", map[engram.MemoryID]error{"s2": gone("s2")}, 0, []string{"s2"}, []engram.MemoryID{"s1", "s3"}},
+		{"every hit gone", map[engram.MemoryID]error{"s1": gone("s1"), "s2": gone("s2"), "s3": gone("s3")}, 0, []string{"s1", "s2", "s3"}, nil},
+		{"another error is still logged", map[engram.MemoryID]error{"s2": errors.New("db-down")}, 1, nil, []engram.MemoryID{"s1", "s3"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var logs bytes.Buffer
+			st := &mock.FakeStore{
+				SearchResults: []engram.RecallResult{
+					{Memory: engram.Memory{ID: "s1", Content: "a"}, Score: 0.9},
+					{Memory: engram.Memory{ID: "s2", Content: "b"}, Score: 0.8},
+					{Memory: engram.Memory{ID: "s3", Content: "c"}, Score: 0.7},
+				},
+				ReinforceErrs: tc.errs,
+			}
+			h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, st)
+			h.reranker = nil // a FakeReranker without scores logs an error of its own
+			h.log = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+			out, err := h.doRecall(context.Background(), RecallInput{Query: "q"})
+			if err != nil {
+				t.Fatalf("doRecall: %v", err)
+			}
+			var got []string
+			for _, r := range out.Results {
+				got = append(got, r.ID)
+			}
+			if !slices.Equal(got, []string{"s1", "s2", "s3"}) {
+				t.Errorf("results = %v, want [s1 s2 s3] in that order", got)
+			}
+			if n := strings.Count(logs.String(), "level=ERROR"); n != tc.wantErrRecords {
+				t.Errorf("%d error-level records, want %d; log: %q", n, tc.wantErrRecords, logs.String())
+			}
+			if n := strings.Count(logs.String(), "level=DEBUG"); n != len(tc.wantGone) {
+				t.Errorf("%d debug records, want %d; log: %q", n, len(tc.wantGone), logs.String())
+			}
+			for _, id := range tc.wantGone {
+				if !strings.Contains(logs.String(), "id="+id) {
+					t.Errorf("log does not name the gone id %s: %q", id, logs.String())
+				}
+			}
+			if !slices.Equal(st.Propagated, tc.wantPropagated) {
+				t.Errorf("PropagateReinforce ids = %v, want %v", st.Propagated, tc.wantPropagated)
+			}
+		})
 	}
 }
