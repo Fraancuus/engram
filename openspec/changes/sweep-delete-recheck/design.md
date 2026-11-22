@@ -292,8 +292,8 @@ logs at Info and has no switch for that today; adding one is not part of this ch
   with the write applied; or writer `ErrNotFound`, delete true, row gone. Anything else fails
   the test, and so does a run in which one of the two states never occurred. That second check
   shows that both orders happened, not that the calls overlapped: rounds that alternate without
-  overlapping also give both states. Overlap is shown only by the failing runs below. Each call
-  has its own 30 s context as a hang guard. The test asserts no wall time: a deadlock retry costs 2 s
+  overlapping also give both states. Overlap is shown only by the failing runs below. Each round
+  has its own 30 s context, shared by its two calls, as a hang guard. The test asserts no wall time: a deadlock retry costs 2 s
   and is correct, so a time limit would only make it flaky. Its context deadline is a hang
   guard. Measured in the plan's dry run under `-race`: six runs, every round in one of the two
   states, the writer first in 42 to 52 rounds of 100 and the delete first in the rest. The three
