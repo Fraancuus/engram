@@ -97,7 +97,7 @@ Not blocking: the sync happens at `/opsx:archive`, which runs on this branch rig
 
 ## Scenario to proof
 
-Subtest names are given as `go test -run` spells them.
+Subtest names are given as `go test -run` spells them. Line numbers are those of `5d80a7f`. A later commit on this branch, `2fbe39d`, moved the fixture and the row count of `TestMemStoreDeleteIfStale` into two helpers after DeepSource flagged the test's complexity. It asserts the same things; in `mock/memstore_test.go` the test now starts at line 441 and the tests after it sit 15 lines lower.
 
 **`write-race-safety`** (9)
 
