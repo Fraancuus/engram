@@ -581,6 +581,14 @@ type putPanicStore struct{ *mock.FakeStore }
 
 func (putPanicStore) Put(context.Context, engram.Memory) error { panic("boom") }
 
+// notRun fails the test when a store call that must not follow the failure was recorded.
+func notRun(t *testing.T, call string, forbidden bool, n int) {
+	t.Helper()
+	if forbidden && n != 0 {
+		t.Errorf("%s ran %d time(s) after the failure", call, n)
+	}
+}
+
 func TestDoRememberFailurePaths(t *testing.T) {
 	t.Parallel()
 	const storeErr, internalErr = "remember: store unavailable", "remember: internal error"
@@ -658,21 +666,11 @@ func TestDoRememberFailurePaths(t *testing.T) {
 				t.Fatalf("err = %v, want %q", err, tt.want)
 			}
 			st := tt.st
-			if tt.noReinforce && len(st.Reinforced) != 0 {
-				t.Errorf("Reinforce ran: %v", st.Reinforced)
-			}
-			if tt.noPut && len(st.Puts) != 0 {
-				t.Errorf("Put ran: %d", len(st.Puts))
-			}
-			if tt.noLinkEntities && len(st.Linked) != 0 {
-				t.Errorf("LinkEntities ran: %v", st.Linked)
-			}
-			if tt.noLink && len(st.LinkedEdges) != 0 {
-				t.Errorf("Link ran: %v", st.LinkedEdges)
-			}
-			if tt.noSupersede && len(st.Superseded) != 0 {
-				t.Errorf("Supersede ran: %v", st.Superseded)
-			}
+			notRun(t, "Reinforce", tt.noReinforce, len(st.Reinforced))
+			notRun(t, "Put", tt.noPut, len(st.Puts))
+			notRun(t, "LinkEntities", tt.noLinkEntities, len(st.Linked))
+			notRun(t, "Link", tt.noLink, len(st.LinkedEdges))
+			notRun(t, "Supersede", tt.noSupersede, len(st.Superseded))
 		})
 	}
 }
