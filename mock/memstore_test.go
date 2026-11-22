@@ -405,6 +405,39 @@ func TestMemStoreConcurrentSearchDelete(t *testing.T) {
 	}
 }
 
+// staleStore returns a store holding x and y, both last accessed at t0, with one link from x
+// to y and one entity that both mention.
+func staleStore(t *testing.T) *MemStore {
+	t.Helper()
+	s := NewMemStore()
+	mustPut(t, s, mem("x", "a", 0.9), mem("y", "a", 0.9))
+	if err := s.Link(ctx, "x", []engram.Link{{To: "y", Weight: 0.9}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []engram.MemoryID{"x", "y"} {
+		if err := s.LinkEntities(ctx, id, []string{"e"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return s
+}
+
+// neighborRows counts the rows Neighbors(from) returns for the memory id.
+func neighborRows(t *testing.T, s *MemStore, from, id engram.MemoryID) int {
+	t.Helper()
+	nbs, err := s.Neighbors(ctx, []engram.MemoryID{from}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, nb := range nbs {
+		if nb.Memory.ID == id {
+			n++
+		}
+	}
+	return n
+}
+
 func TestMemStoreDeleteIfStale(t *testing.T) {
 	t.Parallel()
 	before := t0.Add(time.Hour) // x and y were last accessed at t0, so both are stale here
@@ -431,16 +464,7 @@ func TestMemStoreDeleteIfStale(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s := NewMemStore()
-			mustPut(t, s, mem("x", "a", 0.9), mem("y", "a", 0.9))
-			if err := s.Link(ctx, "x", []engram.Link{{To: "y", Weight: 0.9}}); err != nil {
-				t.Fatal(err)
-			}
-			for _, id := range []engram.MemoryID{"x", "y"} {
-				if err := s.LinkEntities(ctx, id, []string{"e"}); err != nil {
-					t.Fatal(err)
-				}
-			}
+			s := staleStore(t)
 			if tc.write != nil {
 				tc.write(t, s)
 			}
@@ -453,16 +477,7 @@ func TestMemStoreDeleteIfStale(t *testing.T) {
 			// While x lives, y sees it twice (one link, one entity bridge) and the store holds
 			// one edge and one bridge. A delete must remove all of it, as Delete does.
 			_, xKept := s.Snapshot("x")
-			nbs, err := s.Neighbors(ctx, []engram.MemoryID{"y"}, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			xRows := 0
-			for _, n := range nbs {
-				if n.Memory.ID == "x" {
-					xRows++
-				}
-			}
+			xRows := neighborRows(t, s, "y", "x")
 			wantKept, wantEdges, wantBridges, wantRows := true, 1, 1, 2
 			if tc.wantDeleted {
 				wantKept, wantEdges, wantBridges, wantRows = false, 0, 0, 0
