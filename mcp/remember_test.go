@@ -523,19 +523,39 @@ func TestDoRememberBelowThresholdInserts(t *testing.T) {
 func TestDoRememberValidation(t *testing.T) {
 	t.Parallel()
 	imp := func(f float64) *float64 { return &f }
+	many := func() []string { return make([]string, maxEntities+1) }
+	long := func() []string { return []string{strings.Repeat("x", maxEntityBytes+1)} }
+	countMsg := func(field string) string { return fmt.Sprintf("at most %d %s allowed", maxEntities, field) }
+	itemMsg := func(what string) string {
+		return fmt.Sprintf("%s must be 1..%d bytes and not blank", what, maxEntityBytes)
+	}
+	contentMsg := fmt.Sprintf("content must be 1..%d bytes and not blank", maxContentBytes)
+	nsMsg := fmt.Sprintf("namespace must be 1..%d bytes and not blank", maxNamespaceBytes)
+	typeMsg := `invalid type "reference": want episodic, semantic, or procedural`
 	tests := []struct {
 		name string
 		mut  func(*RememberInput)
+		want string
 	}{
-		{"invalid type", func(in *RememberInput) { in.Type = "reference" }},
-		{"empty content", func(in *RememberInput) { in.Content = "" }},
-		{"empty namespace", func(in *RememberInput) { in.Namespace = "" }},
-		{"importance too high", func(in *RememberInput) { in.Importance = imp(1.5) }},
-		{"importance negative", func(in *RememberInput) { in.Importance = imp(-0.1) }},
-		{"whitespace content", func(in *RememberInput) { in.Content = "   " }},
-		{"whitespace entity", func(in *RememberInput) { in.Entities = []string{"  "} }},
-		{"source too long", func(in *RememberInput) { in.Source = strings.Repeat("s", 257) }},
-		{"whitespace link", func(in *RememberInput) { in.Links = []string{"  "} }},
+		{"invalid type", func(in *RememberInput) { in.Type = "reference" }, typeMsg},
+		{"empty content", func(in *RememberInput) { in.Content = "" }, contentMsg},
+		{"empty namespace", func(in *RememberInput) { in.Namespace = "" }, nsMsg},
+		{"importance too high", func(in *RememberInput) { in.Importance = imp(1.5) }, "importance must be a number between 0 and 1"},
+		{"importance negative", func(in *RememberInput) { in.Importance = imp(-0.1) }, "importance must be a number between 0 and 1"},
+		{"whitespace content", func(in *RememberInput) { in.Content = "   " }, contentMsg},
+		{"whitespace entity", func(in *RememberInput) { in.Entities = []string{"  "} }, itemMsg("entity names")},
+		{"source too long", func(in *RememberInput) { in.Source = strings.Repeat("s", maxSourceBytes+1) }, fmt.Sprintf("source must be at most %d bytes", maxSourceBytes)},
+		{"whitespace link", func(in *RememberInput) { in.Links = []string{"  "} }, itemMsg("link ids")},
+		{"too many entities", func(in *RememberInput) { in.Entities = many() }, countMsg("entities")},
+		{"too many links", func(in *RememberInput) { in.Links = many() }, countMsg("links")},
+		{"too many supersedes", func(in *RememberInput) { in.Supersedes = many() }, countMsg("supersedes")},
+		{"entity too long", func(in *RememberInput) { in.Entities = long() }, itemMsg("entity names")},
+		{"link too long", func(in *RememberInput) { in.Links = long() }, itemMsg("link ids")},
+		{"supersedes too long", func(in *RememberInput) { in.Supersedes = long() }, itemMsg("supersedes ids")},
+		{"blank entity", func(in *RememberInput) { in.Entities = []string{""} }, itemMsg("entity names")},
+		{"blank link", func(in *RememberInput) { in.Links = []string{""} }, itemMsg("link ids")},
+		{"blank supersedes", func(in *RememberInput) { in.Supersedes = []string{""} }, itemMsg("supersedes ids")},
+		{"type is checked before content", func(in *RememberInput) { in.Type = "reference"; in.Content = " " }, typeMsg},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -545,11 +565,113 @@ func TestDoRememberValidation(t *testing.T) {
 			h := testHandlers(emb, st)
 			in := validRemember()
 			tt.mut(&in)
-			if _, err := h.doRemember(context.Background(), in); err == nil {
-				t.Fatal("want validation error, got nil")
+			_, err := h.doRemember(context.Background(), in)
+			if err == nil || err.Error() != tt.want {
+				t.Fatalf("err = %v, want %q", err, tt.want)
 			}
 			if len(st.Puts) != 0 || emb.Last != "" {
 				t.Errorf("validation failure still touched embedder/store (puts=%d, embedded=%q)", len(st.Puts), emb.Last)
+			}
+		})
+	}
+}
+
+// putPanicStore panics in Put, which FakeStore cannot do on demand.
+type putPanicStore struct{ *mock.FakeStore }
+
+func (putPanicStore) Put(context.Context, engram.Memory) error { panic("boom") }
+
+func TestDoRememberFailurePaths(t *testing.T) {
+	t.Parallel()
+	const storeErr, internalErr = "remember: store unavailable", "remember: internal error"
+	boom := errors.New("db-down")
+	tests := []struct {
+		name  string
+		st    *mock.FakeStore
+		wrap  func(*mock.FakeStore) Store // nil: use st itself
+		newID func() (engram.MemoryID, error)
+		in    func(*RememberInput)
+		want  string
+		// what must NOT have run after the failure
+		noReinforce, noPut, noLinkEntities, noLink, noSupersede bool
+	}{
+		{
+			name: "search fails", st: &mock.FakeStore{SearchErr: boom},
+			want: storeErr, noReinforce: true, noPut: true,
+		},
+		{
+			name: "put fails", st: &mock.FakeStore{PutErr: boom},
+			in: func(in *RememberInput) {
+				in.Entities = []string{"e"}
+				in.Links = []string{"l"}
+				in.Supersedes = []string{"old"}
+			},
+			want: storeErr, noLinkEntities: true, noLink: true, noSupersede: true,
+		},
+		{
+			name: "link entities fails after put", st: &mock.FakeStore{LinkErr: boom},
+			in: func(in *RememberInput) {
+				in.Entities = []string{"e"}
+				in.Links = []string{"l"}
+				in.Supersedes = []string{"old"}
+			},
+			want: storeErr, noLink: true, noSupersede: true,
+		},
+		{
+			name: "link fails after put", st: &mock.FakeStore{LinkEdgesErr: boom},
+			in:   func(in *RememberInput) { in.Links = []string{"l"}; in.Supersedes = []string{"old"} },
+			want: storeErr, noSupersede: true,
+		},
+		{
+			name: "link entities fails after reinforce",
+			st:   &mock.FakeStore{SearchResults: []engram.RecallResult{cand("existing", 0.97, false)}, LinkErr: boom},
+			in:   func(in *RememberInput) { in.Entities = []string{"e"}; in.Supersedes = []string{"old"} },
+			want: storeErr, noPut: true, noSupersede: true,
+		},
+		{
+			name: "id generation fails", st: &mock.FakeStore{},
+			newID: func() (engram.MemoryID, error) { return "", boom },
+			want:  internalErr, noPut: true,
+		},
+		{
+			name: "put panics", st: &mock.FakeStore{},
+			wrap: func(f *mock.FakeStore) Store { return putPanicStore{f} },
+			want: internalErr, noLinkEntities: true, noLink: true, noSupersede: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			h := testHandlers(&mock.FakeEmbedder{Vec: engram.Vector{1}}, tt.st)
+			if tt.wrap != nil {
+				h.store = tt.wrap(tt.st)
+			}
+			if tt.newID != nil {
+				h.newID = tt.newID
+			}
+			in := validRemember()
+			if tt.in != nil {
+				tt.in(&in)
+			}
+			_, err := h.doRemember(context.Background(), in)
+			if err == nil || err.Error() != tt.want {
+				t.Fatalf("err = %v, want %q", err, tt.want)
+			}
+			st := tt.st
+			if tt.noReinforce && len(st.Reinforced) != 0 {
+				t.Errorf("Reinforce ran: %v", st.Reinforced)
+			}
+			if tt.noPut && len(st.Puts) != 0 {
+				t.Errorf("Put ran: %d", len(st.Puts))
+			}
+			if tt.noLinkEntities && len(st.Linked) != 0 {
+				t.Errorf("LinkEntities ran: %v", st.Linked)
+			}
+			if tt.noLink && len(st.LinkedEdges) != 0 {
+				t.Errorf("Link ran: %v", st.LinkedEdges)
+			}
+			if tt.noSupersede && len(st.Superseded) != 0 {
+				t.Errorf("Supersede ran: %v", st.Superseded)
 			}
 		})
 	}

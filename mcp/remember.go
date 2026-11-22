@@ -138,7 +138,7 @@ func (t *Tools) doRemember(ctx context.Context, in RememberInput) (out RememberO
 		return RememberOutput{}, errors.New("remember: store unavailable")
 	}
 	if target, ok := t.dedupTarget(candidates, replaces, mt, in.Content); ok {
-		out, merged, err := t.mergeDuplicate(ctx, target, in.Entities, replaces)
+		out, merged, err := t.mergeDuplicate(ctx, target.ID, in.Entities, replaces)
 		if err != nil || merged {
 			return out, err
 		}
@@ -198,12 +198,13 @@ func validateIDList(items []string, plural, what string) error {
 	return nil
 }
 
-// mergeDuplicate reinforces the dedup target and links the supplied entities onto it. It
-// returns the deduped reply and true when the write merged. It returns false and no error
+// mergeDuplicate reinforces the dedup target and links the supplied entities onto it. On
+// success it also applies the supersession of replaces, best effort, as applySupersedes
+// does. It returns the deduped reply and true when the write merged. It returns false and no error
 // when the target was deleted since the search, so the caller stores the content as a new
 // memory. Other failures are logged here and returned as the generic store error.
-func (t *Tools) mergeDuplicate(ctx context.Context, target engram.RecallResult, entities, replaces []string) (RememberOutput, bool, error) {
-	err := t.store.Reinforce(ctx, target.ID, t.clock.Now())
+func (t *Tools) mergeDuplicate(ctx context.Context, id engram.MemoryID, entities, replaces []string) (RememberOutput, bool, error) {
+	err := t.store.Reinforce(ctx, id, t.clock.Now())
 	switch {
 	case err == nil:
 		// Reinforce has committed last_accessed = now, so the sweep's DeleteIfStale keeps
@@ -211,16 +212,16 @@ func (t *Tools) mergeDuplicate(ctx context.Context, target engram.RecallResult, 
 		// existing memory so a retry after a prior LinkEntities failure (or genuinely new
 		// mentions) still records them.
 		if len(entities) > 0 {
-			if err := t.store.LinkEntities(ctx, target.ID, entities); err != nil {
+			if err := t.store.LinkEntities(ctx, id, entities); err != nil {
 				t.log.Error("remember: link entities on dedup failed", "err", err)
 				return RememberOutput{}, false, errors.New("remember: store unavailable")
 			}
 		}
-		return RememberOutput{MemoryID: string(target.ID), Deduped: true, Superseded: t.applySupersedes(ctx, replaces)}, true, nil
+		return RememberOutput{MemoryID: string(id), Deduped: true, Superseded: t.applySupersedes(ctx, replaces)}, true, nil
 	case errors.Is(err, engram.ErrNotFound):
-		t.log.Debug("remember: dedup target deleted before its reinforce", "id", target.ID)
-		// The target was deleted since the search. Fall through and store the content as a
-		// new memory: failing here would lose it.
+		t.log.Debug("remember: dedup target deleted before its reinforce", "id", id)
+		// The target was deleted since the search. Report not merged so the caller stores the
+		// content as a new memory: failing here would lose it.
 		return RememberOutput{}, false, nil
 	default:
 		t.log.Error("remember: reinforce failed", "err", err)
@@ -229,8 +230,9 @@ func (t *Tools) mergeDuplicate(ctx context.Context, target engram.RecallResult, 
 }
 
 // insertMemory stores in as a new memory, links its entities, auto-links it to the similar
-// candidates plus any explicit links, and returns the reply with the superseded ids. Store
-// failures are logged here and returned as the generic error.
+// candidates plus any explicit links, and returns the reply with the superseded ids. Failures
+// are logged here and returned as a generic error: internal error for id generation, store
+// unavailable for the store.
 func (t *Tools) insertMemory(ctx context.Context, in RememberInput, mt engram.MemoryType, importance float64, vec engram.Vector, candidates []engram.RecallResult, replaces []string) (RememberOutput, error) {
 	id, err := t.newID()
 	if err != nil {
