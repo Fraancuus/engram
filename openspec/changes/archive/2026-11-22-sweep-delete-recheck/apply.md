@@ -77,6 +77,42 @@ Code state at `5d80a7f`; the commits after it touch only `openspec/`.
 
 ---
 
+## After the PR opened
+
+DeepSource failed its Go check on PR #39. Three commits followed on this branch. None changes
+behaviour.
+
+- `2fbe39d`: `TestMemStoreDeleteIfStale` was over the complexity threshold. Its fixture and its
+  row count moved into two helpers. It asserts the same things.
+- `666cdd9`: `doRemember` had a cyclomatic complexity of 44, up from the value on `main` because
+  this change adds one `switch` to it. Franco pointed at the failed check on 2026-11-22, so the
+  function was split into `validateRememberScalars`, `validateImportance`, `validateIDList`,
+  `mergeDuplicate` and `insertMemory`. `gocyclo` now gives 12 for `doRemember` and at most 11 for
+  the others; the analyzer's threshold is 15. Only `mcp/remember.go` changed, no test was edited,
+  and the same 112 tests passed before and after. `reviewer` (Opus) and `security-auditor`
+  (Fable) both found the behaviour preserved; the auditor compared the old and the new handler
+  over 36,204 inputs and store states and found no difference.
+- `bf075b5`: tests that pin what the split made easier to break: the exact validation messages,
+  which are now built from parameters, and the failure paths through the new functions (search,
+  `Put`, `LinkEntities`, `Link`, id generation, a panic). Each new test was shown to fail when the
+  thing it pins is broken. `mergeDuplicate` now takes the target's id only, and three comments
+  were corrected.
+
+Checked again on `bf075b5`: `gofmt`, build, `go vet` and `golangci-lint` with and without the
+integration tag (0 issues), `gitleaks` (no leaks); `go test -race -count=1 ./...` (9 packages ok,
+`mcp` coverage 94.6%); integration on every package except `./eval` against the live stack (8
+packages ok, 389 passes, 0 failed, 0 skipped; the 77 rows existing tests left were deleted by
+exact id and the store is back to its 384 rows); `go run ./cmd/eval --ci` passed and its full
+output equals `main`'s with the p50 and p95 columns removed.
+
+Two DeepSource dispositions are on record in the PR: 38 findings of `VET-V0010` are false
+positives at `go 1.26` and are ignored with file-level rules, as two other test files already
+were. The security auditor also noted, as older than this change, that `remember` echoes an
+invalid `type` in its error with no length cap; capping it changes a message and is left for a
+follow-up.
+
+---
+
 ## Next step
 
 Run `/opsx:verify`, then `/opsx:continue` to push and open the PR, then `/opsx:archive` on this branch.
